@@ -36,6 +36,9 @@ sort_commits = "oldest"
 
 commit_parsers = [
   { message = "^first commit", skip = true },
+  { message = "^docs: update generated changelog", skip = true },
+  { message = "^docs\\(changelog\\):", skip = true },
+  { message = "^chore\\(release\\):", skip = true },
   { message = "^feat", group = "Added" },
   { message = "^fix", group = "Fixed" },
   { message = "^perf", group = "Performance" },
