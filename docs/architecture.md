@@ -22,6 +22,7 @@ Redpanda topic: telemetry.raw
         +------> Rust engine
         |          - grid rules
         |          - digital twin state
+        |          - ontology actions
         |          - fast control decisions
         |
         +------> TimescaleDB / PostgreSQL
@@ -46,6 +47,29 @@ Rust is the control engine. It is the right place for low-latency rules, graph t
 PostgreSQL with TimescaleDB stores operational data and high-frequency metrics. Normal relational tables hold sites, households, devices, and users. Hypertables should hold voltage, current, power, frequency, and battery readings.
 
 TypeScript and React power the control room. The frontend is where operators see live state, alerts, maps, and battery health.
+
+## Ontology Layer
+
+AmbaGrid should treat telemetry, payments, meter commands, alerts, and customer state as one operational model.
+
+The ontology defines the objects operators actually manage:
+
+- sites
+- assets
+- smart meters
+- households
+- customers
+- tariff plans
+- payments
+- energy credits
+- credit balances
+- meter commands
+- alerts
+- outages
+
+It also defines the links and actions between them. For example, a payment should not only create a database row. It should apply credit, update the customer's balance, and possibly create a reconnect command for the smart meter.
+
+Read the ontology design in [ontology.md](ontology.md).
 
 ## Scaling Model
 
@@ -80,3 +104,9 @@ AmbaGrid Cloud can offer a hosted version for operators that do not want to run 
 Enterprise modules can add paid capabilities around forecasting, billing reconciliation, telecom wallet integrations, and advanced fleet analytics.
 
 Integration work can help ministries, utilities, and large operators deploy AmbaGrid inside existing national or regional systems.
+
+## Roadmap
+
+The roadmap is phased around revenue-aware grid operations first, then edge reliability, hardware interoperability, advanced operations, and investor reporting.
+
+Read the full roadmap in [roadmap.md](roadmap.md).

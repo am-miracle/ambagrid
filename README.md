@@ -71,6 +71,12 @@ Postgres:  database:5432
 
 - [Architecture](docs/architecture.md)
 - [Hardware integration](docs/hardware-integration.md)
+- [Ontology](docs/ontology.md)
+- [Roadmap](docs/roadmap.md)
+- [Revenue protection](docs/revenue-protection.md)
+- [Edge reliability](docs/edge-reliability.md)
+- [Hardware adapters](docs/hardware-adapters.md)
+- [Investor reporting](docs/investor-reporting.md)
 - [Contributing](CONTRIBUTING.md)
 - [License](LICENSE)
 
