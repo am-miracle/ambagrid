@@ -1,0 +1,98 @@
+services:
+  # 1. MQTT Broker (The Hardware Ingestion Entryway)
+  mqtt-broker:
+    image: eclipse-mosquitto:2.0
+    container_name: ambagrid-mqtt
+    ports:
+      - "1883:1883"   # Standard unencrypted MQTT port
+      - "9001:9001"   # MQTT over WebSockets (optional for web clients)
+    volumes:
+      - mqtt_config:/mosquitto/config
+      - mqtt_data:/mosquitto/data
+      - mqtt_log:/mosquitto/log
+    # Command to allow anonymous connections locally for easy developer onboarding
+    entrypoint: >
+      sh -c "mkdir -p /mosquitto/config &&
+             echo 'listener 1883 0.0.0.0' > /mosquitto/config/mosquitto.conf &&
+             echo 'allow_anonymous true' >> /mosquitto/config/mosquitto.conf &&
+             echo 'listener 9001 0.0.0.0' >> /mosquitto/config/mosquitto.conf &&
+             echo 'protocol websockets' >> /mosquitto/config/mosquitto.conf &&
+             /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf"
+    networks:
+      - ambagrid-network
+
+  # 2. Redpanda (Ultra-fast, zero-dependency Kafka Streaming Core)
+  redpanda:
+    image: redpandadata/redpanda:v24.3.4
+    container_name: ambagrid-streaming
+    command:
+      - redpanda
+      - start
+      - --smp 1
+      - --memory 1G
+      - --reserve-memory 0M
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://redpanda:29092,OUTSIDE://localhost:9092
+    ports:
+      - "9092:9092"   # Accessible outside the container for your local Go/Rust services
+    networks:
+      - ambagrid-network
+
+  # 3. Redpanda Console (Web UI to view your live message streams)
+  redpanda-console:
+    image: redpandadata/console:v2.8.3
+    container_name: ambagrid-streaming-ui
+    entrypoint: >
+      /bin/sh -c "echo \"kafka: { brokers: ['redpanda:29092'] }\" > /tmp/config.yml &&
+                  /app/console --config.filepath=/tmp/config.yml"
+    ports:
+      - "8080:8080"   # Open http://localhost:8080 to watch hardware metrics live
+    depends_on:
+      - redpanda
+    networks:
+      - ambagrid-network
+
+  # 4. MQTT to Redpanda ingestion bridge
+  ingestion-go:
+    build:
+      context: ./services/ingestion-go
+    container_name: ambagrid-ingestion
+    restart: unless-stopped
+    environment:
+      MQTT_BROKER: tcp://mqtt-broker:1883
+      MQTT_TOPIC_FILTER: africa-west/+/smartmeter/+/telemetry
+      KAFKA_BROKERS: redpanda:29092
+      KAFKA_TOPIC: telemetry.raw
+      INGESTION_LOG_EVERY_N: 25
+    depends_on:
+      - mqtt-broker
+      - redpanda
+    networks:
+      - ambagrid-network
+
+  # 5. PostgreSQL + TimescaleDB (Relational & High-Density Metric Storage)
+  database:
+    image: timescale/timescaledb:2.17.2-pg15
+    container_name: ambagrid-db
+    environment:
+      POSTGRES_USER: ambagrid_admin
+      POSTGRES_PASSWORD: ambagrid_secure_pass
+      POSTGRES_DB: ambagrid_operational
+    ports:
+      - "5432:5432"   # Connect via your Go API or table managers (DBeaver/pgAdmin)
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - ambagrid-network
+
+volumes:
+  mqtt_config:
+  mqtt_data:
+  mqtt_log:
+  postgres_data:
+
+networks:
+  ambagrid-network:
+    driver: bridge
