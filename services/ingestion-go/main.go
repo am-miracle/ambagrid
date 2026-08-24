@@ -17,6 +17,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+// holds deploy-time wiring for the MQTT edge and the Redpanda stream.
 type Config struct {
 	MQTTBroker             string
 	MQTTTopicFilter        string
@@ -32,6 +33,7 @@ type Config struct {
 	LogEveryNRecords       int64
 }
 
+// the handoff object between the Paho callback and Kafka workers.
 type MQTTEnvelope struct {
 	Topic    string
 	Payload  []byte
@@ -52,6 +54,7 @@ func main() {
 	}
 }
 
+// keeps the container image portable across local Compose and future deployments.
 func ConfigFromEnv() (Config, error) {
 	mqttQOS, err := envByte("MQTT_QOS", 1)
 	if err != nil {
@@ -98,6 +101,7 @@ func ConfigFromEnv() (Config, error) {
 	return cfg, nil
 }
 
+// connects the MQTT subscription to a bounded worker pool that produces into Redpanda.
 func RunBridge(ctx context.Context, cfg Config) error {
 	kafkaOpts := []kgo.Opt{
 		kgo.SeedBrokers(cfg.KafkaBrokers...),
@@ -114,6 +118,8 @@ func RunBridge(ctx context.Context, cfg Config) error {
 	}
 	defer kafkaClient.Close()
 
+	// Keep MQTT callbacks non-blocking: Paho invokes handlers on its own delivery path,
+	// so slow Kafka writes are isolated behind this bounded queue.
 	queue := make(chan MQTTEnvelope, cfg.QueueSize)
 	var wg sync.WaitGroup
 	var stats IngestionStats
@@ -142,6 +148,7 @@ func RunBridge(ctx context.Context, cfg Config) error {
 	log.Printf("ingestion bridge running: mqtt=%s filter=%s kafka=%s topic=%s workers=%d", cfg.MQTTBroker, cfg.MQTTTopicFilter, strings.Join(cfg.KafkaBrokers, ","), cfg.KafkaTopic, cfg.WorkerCount)
 	<-ctx.Done()
 
+	// Stop accepting new MQTT deliveries first, then drain the queued messages to Kafka.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
 	done := make(chan struct{})
@@ -184,6 +191,8 @@ func mqttClientOptions(cfg Config, queue chan<- MQTTEnvelope, stats *IngestionSt
 				},
 			}
 			stats.AddReceived()
+			// Dropping under sustained backpressure is explicit for now; the raw hardware
+			// stream is high-volume, and blocking here would stall MQTT client delivery.
 			select {
 			case queue <- envelope:
 			default:
@@ -202,6 +211,7 @@ func runProducerWorker(workerID int, cfg Config, kafkaClient *kgo.Client, queue 
 			continue
 		}
 
+		// Use a fresh background timeout so shutdown can drain already accepted messages.
 		produceCtx, cancel := context.WithTimeout(context.Background(), cfg.ProduceTimeout)
 		err = kafkaClient.ProduceSync(produceCtx, record).FirstErr()
 		cancel()

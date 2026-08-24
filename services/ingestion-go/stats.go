@@ -2,6 +2,7 @@ package main
 
 import "sync/atomic"
 
+// safe to update from MQTT callbacks and producer workers.
 type IngestionStats struct {
 	received atomic.Int64
 	produced atomic.Int64

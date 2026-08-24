@@ -8,6 +8,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+// routing metadata encoded in the MQTT topic hierarchy.
 type TelemetryTopic struct {
 	Region     string
 	SiteID     string
@@ -15,6 +16,7 @@ type TelemetryTopic struct {
 	DeviceID   string
 }
 
+// carries broker-level delivery flags into Kafka headers.
 type MQTTMessageMetadata struct {
 	Duplicate bool
 	QOS       byte
@@ -22,6 +24,7 @@ type MQTTMessageMetadata struct {
 	MessageID uint16
 }
 
+// validates the ingestion boundary before trusting topic-derived metadata.
 func ParseTelemetryTopic(topic string) (TelemetryTopic, error) {
 	parts := strings.Split(topic, "/")
 	if len(parts) != 5 {
@@ -48,12 +51,14 @@ func ParseTelemetryTopic(topic string) (TelemetryTopic, error) {
 	}, nil
 }
 
+// preserves the hardware payload verbatim and attaches routing context as Kafka metadata.
 func BuildTelemetryRecord(kafkaTopic string, mqttTopic string, payload []byte, metadata MQTTMessageMetadata) (*kgo.Record, error) {
 	topicMeta, err := ParseTelemetryTopic(mqttTopic)
 	if err != nil {
 		return nil, err
 	}
 
+	// The device ID is the key so all readings from a meter stay ordered on the same partition.
 	return &kgo.Record{
 		Topic: kafkaTopic,
 		Key:   []byte(topicMeta.DeviceID),

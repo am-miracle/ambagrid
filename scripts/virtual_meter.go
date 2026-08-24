@@ -19,6 +19,7 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
+// MetricPayload intentionally mirrors proto/telemetry.proto while staying JSON-only for local inspection.
 type MetricPayload struct {
 	DeviceID            string            `json:"device_id"`
 	DeviceType          string            `json:"device_type"`
@@ -41,6 +42,7 @@ type ElectricalMetrics struct {
 }
 
 func randomFloat(min, max float64) float32 {
+	// crypto/rand avoids correlated meter behavior when many goroutines start together.
 	n, err := rand.Int(rand.Reader, big.NewInt(10000))
 	if err != nil {
 		return float32(min)
@@ -124,6 +126,7 @@ func runMeter(ctx context.Context, client mqtt.Client, region, sitePrefix string
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	// Publish once immediately so short smoke tests do not wait a full interval.
 	publishMeterReading(client, topic, siteID, deviceID, householdID, &baseKwh, qos, publishCount, logPublishes)
 
 	for {
@@ -170,6 +173,7 @@ func nextPayload(siteID, deviceID, householdID string, baseKwh *float64) MetricP
 	hour := time.Now().Hour()
 	var solarIrradiance float32
 	if hour > 6 && hour < 18 {
+		// Approximate a clear-day irradiance curve without pulling in weather data.
 		solarIrradiance = float32(math.Sin(float64(hour-6)/12.0*math.Pi) * 850.0)
 	}
 
