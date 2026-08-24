@@ -10,3 +10,9 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 
 - Add MQTT to Redpanda ingestion bridge
 - Add app and service scaffolding
+
+### Documentation
+
+- Add open source project foundations
+- Add ontology and roadmap docs
+
