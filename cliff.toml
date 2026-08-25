@@ -36,6 +36,7 @@ sort_commits = "oldest"
 
 commit_parsers = [
   { message = "^first commit", skip = true },
+  { message = "^Merge ", skip = true },
   { message = "^docs: update generated changelog", skip = true },
   { message = "^docs\\(changelog\\):", skip = true },
   { message = "^docs: add senior engineering practices", skip = true },
