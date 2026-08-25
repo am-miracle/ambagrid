@@ -38,6 +38,8 @@ commit_parsers = [
   { message = "^first commit", skip = true },
   { message = "^docs: update generated changelog", skip = true },
   { message = "^docs\\(changelog\\):", skip = true },
+  { message = "^docs: add senior engineering practices", skip = true },
+  { message = "^docs: stop tracking senior engineering guide", skip = true },
   { message = "^chore\\(release\\):", skip = true },
   { message = "^feat", group = "Added" },
   { message = "^fix", group = "Fixed" },
