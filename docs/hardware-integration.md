@@ -53,6 +53,87 @@ Core fields:
 
 The platform should move toward Protobuf on the wire once the ingestion and engine contracts stabilize.
 
+The simulator always emits `internal_temperature`, `relay_closed`,
+`battery_soc_pct`, and `solar_irradiance` in JSON, even when their value is
+zero or false. `household_id` is still omitted when empty.
+
+## Sample MQTT → Kafka Payloads
+
+The ingestion bridge validates each MQTT topic against `MQTT_TOPIC_FILTER`
+before producing to Kafka: each of the filter's four meaningful segments
+(region, site, device type, device) becomes an accepted value independently,
+and a `+`/`#` wildcard segment means "accept any value" for that position.
+The examples below show the same message under three filter configurations.
+
+### Default filter
+
+`MQTT_TOPIC_FILTER=africa-west/+/smartmeter/+/telemetry`
+
+MQTT publish:
+
+```text
+topic:   africa-west/ng-kaji-01/smartmeter/met-0101/telemetry
+payload: {"device_id":"met-0101","device_type":"DEVICE_TYPE_SMART_METER",
+          "timestamp_utc":1745500000,"site_id":"ng-kaji-01",
+          "household_id":"house-0101",
+          "metrics":{"voltage":231.4,"current":6.7,"active_power":1.55,
+                     "frequency":50.02,"total_kwh":1521.83},
+          "internal_temperature":0,"relay_closed":false,
+          "battery_soc_pct":0,"solar_irradiance":0}
+```
+
+Resulting Kafka record on `telemetry.raw`:
+
+```text
+Key:   met-0101
+Value: <payload above, verbatim>
+Headers:
+  mqtt_topic  = africa-west/ng-kaji-01/smartmeter/met-0101/telemetry
+  region      = africa-west
+  site_id     = ng-kaji-01
+  device_type = smartmeter
+  device_id   = met-0101
+  mqtt_qos = 1  mqtt_retained = false  mqtt_duplicate = false  mqtt_message_id = 0
+```
+
+### Non-default filter (widening which already-normalized topics are accepted)
+
+`MQTT_TOPIC_FILTER=africa-east/+/inverter/+/telemetry`
+
+MQTT publish:
+
+```text
+topic:   africa-east/lg-abuja-03/inverter/inv-0007/telemetry
+payload: <AmbaGrid telemetry JSON, shaped like the Payload Model above>
+```
+
+Result: accepted and produced, with headers `region=africa-east`,
+`device_type=inverter`, `site_id=lg-abuja-03`, `device_id=inv-0007`. The
+bridge derives its accepted region/device-type from whatever filter it was
+started with, so a config change is enough to widen *which topics* it will
+ingest from.
+
+This is **not** the same as onboarding a new vendor's hardware. The bridge
+only validates topic structure — it forwards `payload` verbatim and never
+inspects or reshapes it (see `BuildRecord` in
+`services/ingestion-go/internal/telemetry/telemetry.go`). A real inverter
+publishes in its vendor's own payload shape, not AmbaGrid telemetry JSON. Per
+the core rule above, that payload still needs an adapter to translate it into
+the AmbaGrid telemetry model *before* it reaches this topic — pointing this
+filter at a vendor's raw, un-normalized output would push it straight into
+`telemetry.raw`, bypassing the adapter contract entirely. The config change
+only helps once an adapter (see Adapter Targets below) already exists and is
+publishing normalized payloads under the new topic.
+
+### Fully wildcarded filter
+
+`MQTT_TOPIC_FILTER=+/+/+/+/telemetry`
+
+Both the region and device-type segments are wildcards, so any value is
+accepted at those positions; only the topic structure (5 segments, none
+empty, last segment `telemetry`) is enforced. Use this for a bridge instance
+meant to ingest telemetry across every region and device type at once.
+
 ## Adapter Targets
 
 Good adapter targets include:

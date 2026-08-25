@@ -2,13 +2,12 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"math"
-	"math/big"
+	"math/rand"
 	"os"
 	"os/signal"
 	"sync"
@@ -29,8 +28,8 @@ type MetricPayload struct {
 	Metrics             ElectricalMetrics `json:"metrics"`
 	InternalTemperature float32           `json:"internal_temperature"`
 	RelayClosed         bool              `json:"relay_closed"`
-	BatterySocPct       float32           `json:"battery_soc_pct,omitempty"`
-	SolarIrradiance     float32           `json:"solar_irradiance,omitempty"`
+	BatterySocPct       float32           `json:"battery_soc_pct"`
+	SolarIrradiance     float32           `json:"solar_irradiance"`
 }
 
 type ElectricalMetrics struct {
@@ -41,15 +40,39 @@ type ElectricalMetrics struct {
 	TotalKwh    float64 `json:"total_kwh"`
 }
 
-func randomFloat(min, max float64) float32 {
-	// crypto/rand avoids correlated meter behavior when many goroutines start together.
-	n, err := rand.Int(rand.Reader, big.NewInt(10000))
-	if err != nil {
-		return float32(min)
-	}
+func randomFloat(rng *rand.Rand, min, max float64) float32 {
+	return float32(rng.Float64()*(max-min) + min)
+}
 
-	scale := float64(n.Int64()) / 10000.0
-	return float32(min + scale*(max-min))
+// meterState is the identity and mutable readings state for one simulated meter.
+type meterState struct {
+	topic       string
+	siteID      string
+	deviceID    string
+	householdID string
+	baseKwh     float64
+	rng         *rand.Rand
+}
+
+func newMeterState(region, sitePrefix string, siteNumber, meterNumber int) *meterState {
+	siteID := fmt.Sprintf("%s-%02d", sitePrefix, siteNumber)
+	deviceID := fmt.Sprintf("met-%02d%02d", siteNumber, meterNumber)
+	return &meterState{
+		topic:       fmt.Sprintf("%s/%s/smartmeter/%s/telemetry", region, siteID, deviceID),
+		siteID:      siteID,
+		deviceID:    deviceID,
+		householdID: fmt.Sprintf("house-%02d%02d", siteNumber, meterNumber),
+		baseKwh:     1420.50 + float64(siteNumber*100) + float64(meterNumber),
+		rng:         rand.New(rand.NewSource(int64(siteNumber)*1000000 + int64(meterNumber)*1000 + time.Now().UnixNano()/1000)),
+	}
+}
+
+// publishConfig is simulator-wide MQTT/publish behavior, shared by every meter.
+type publishConfig struct {
+	qos          byte
+	interval     time.Duration
+	logPublishes bool
+	publishCount *atomic.Int64
 }
 
 func main() {
@@ -71,6 +94,9 @@ func main() {
 	}
 	if *qos > 2 {
 		log.Fatal("qos must be 0, 1, or 2")
+	}
+	if *interval <= 0 {
+		log.Fatal("interval must be greater than zero")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -99,13 +125,20 @@ func main() {
 	var publishCount atomic.Int64
 	log.Printf("virtual meter simulator online: broker=%s sites=%d meters=%d interval=%s duration=%s", *brokerURL, *siteCount, totalMeters, *interval, *duration)
 
+	cfg := publishConfig{
+		qos:          byte(*qos),
+		interval:     *interval,
+		logPublishes: *logPublishes,
+		publishCount: &publishCount,
+	}
+
 	var wg sync.WaitGroup
 	for siteNumber := 1; siteNumber <= *siteCount; siteNumber++ {
 		for meterNumber := 1; meterNumber <= *metersPerSite; meterNumber++ {
 			wg.Add(1)
 			go func(siteNumber, meterNumber int) {
 				defer wg.Done()
-				runMeter(ctx, client, *region, *sitePrefix, siteNumber, meterNumber, *interval, byte(*qos), &publishCount, *logPublishes)
+				runMeter(ctx, client, *region, *sitePrefix, siteNumber, meterNumber, cfg)
 			}(siteNumber, meterNumber)
 		}
 	}
@@ -116,61 +149,57 @@ func main() {
 	log.Printf("virtual meter simulator stopped: published=%d", publishCount.Load())
 }
 
-func runMeter(ctx context.Context, client mqtt.Client, region, sitePrefix string, siteNumber, meterNumber int, interval time.Duration, qos byte, publishCount *atomic.Int64, logPublishes bool) {
-	siteID := fmt.Sprintf("%s-%02d", sitePrefix, siteNumber)
-	deviceID := fmt.Sprintf("met-%02d%02d", siteNumber, meterNumber)
-	householdID := fmt.Sprintf("house-%02d%02d", siteNumber, meterNumber)
-	topic := fmt.Sprintf("%s/%s/smartmeter/%s/telemetry", region, siteID, deviceID)
-	baseKwh := 1420.50 + float64(siteNumber*100) + float64(meterNumber)
+func runMeter(ctx context.Context, client mqtt.Client, region, sitePrefix string, siteNumber, meterNumber int, cfg publishConfig) {
+	state := newMeterState(region, sitePrefix, siteNumber, meterNumber)
 
-	ticker := time.NewTicker(interval)
+	ticker := time.NewTicker(cfg.interval)
 	defer ticker.Stop()
 
 	// Publish once immediately so short smoke tests do not wait a full interval.
-	publishMeterReading(client, topic, siteID, deviceID, householdID, &baseKwh, qos, publishCount, logPublishes)
+	publishMeterReading(client, state, cfg)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			publishMeterReading(client, topic, siteID, deviceID, householdID, &baseKwh, qos, publishCount, logPublishes)
+			publishMeterReading(client, state, cfg)
 		}
 	}
 }
 
-func publishMeterReading(client mqtt.Client, topic, siteID, deviceID, householdID string, baseKwh *float64, qos byte, publishCount *atomic.Int64, logPublishes bool) {
-	payload := nextPayload(siteID, deviceID, householdID, baseKwh)
+func publishMeterReading(client mqtt.Client, state *meterState, cfg publishConfig) {
+	payload := nextPayload(state, cfg.interval)
 	jsonBytes, err := json.Marshal(payload)
 	if err != nil {
-		log.Printf("failed to marshal payload for %s: %v", deviceID, err)
+		log.Printf("failed to marshal payload for %s: %v", state.deviceID, err)
 		return
 	}
 
-	token := client.Publish(topic, qos, false, jsonBytes)
+	token := client.Publish(state.topic, cfg.qos, false, jsonBytes)
 	if !token.WaitTimeout(5 * time.Second) {
-		log.Printf("publish timeout: topic=%s", topic)
+		log.Printf("publish timeout: topic=%s", state.topic)
 		return
 	}
 	if err := token.Error(); err != nil {
-		log.Printf("publish failed: topic=%s err=%v", topic, err)
+		log.Printf("publish failed: topic=%s err=%v", state.topic, err)
 		return
 	}
 
-	count := publishCount.Add(1)
-	if logPublishes {
-		log.Printf("published telemetry: topic=%s count=%d", topic, count)
+	count := cfg.publishCount.Add(1)
+	if cfg.logPublishes {
+		log.Printf("published telemetry: topic=%s count=%d", state.topic, count)
 	}
 }
 
-func nextPayload(siteID, deviceID, householdID string, baseKwh *float64) MetricPayload {
-	voltage := randomFloat(215.0, 240.0)
-	current := randomFloat(0.5, 18.0)
+func nextPayload(state *meterState, interval time.Duration) MetricPayload {
+	voltage := randomFloat(state.rng, 215.0, 240.0)
+	current := randomFloat(state.rng, 0.5, 18.0)
 	activePower := (voltage * current) / 1000.0
-	frequency := randomFloat(49.8, 50.2)
-	*baseKwh += float64(activePower) / 360.0
+	frequency := randomFloat(state.rng, 49.8, 50.2)
+	state.baseKwh += float64(activePower) * interval.Hours()
 
-	hour := time.Now().Hour()
+	hour := time.Now().UTC().Hour()
 	var solarIrradiance float32
 	if hour > 6 && hour < 18 {
 		// Approximate a clear-day irradiance curve without pulling in weather data.
@@ -178,21 +207,21 @@ func nextPayload(siteID, deviceID, householdID string, baseKwh *float64) MetricP
 	}
 
 	return MetricPayload{
-		DeviceID:     deviceID,
+		DeviceID:     state.deviceID,
 		DeviceType:   "DEVICE_TYPE_SMART_METER",
 		TimestampUtc: time.Now().Unix(),
-		SiteID:       siteID,
-		HouseholdID:  householdID,
+		SiteID:       state.siteID,
+		HouseholdID:  state.householdID,
 		Metrics: ElectricalMetrics{
 			Voltage:     voltage,
 			Current:     current,
 			ActivePower: activePower,
 			Frequency:   frequency,
-			TotalKwh:    *baseKwh,
+			TotalKwh:    state.baseKwh,
 		},
-		InternalTemperature: randomFloat(28.0, 42.0),
+		InternalTemperature: randomFloat(state.rng, 28.0, 42.0),
 		RelayClosed:         true,
-		BatterySocPct:       randomFloat(45.0, 98.0),
+		BatterySocPct:       randomFloat(state.rng, 45.0, 98.0),
 		SolarIrradiance:     solarIrradiance,
 	}
 }
