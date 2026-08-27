@@ -33,6 +33,18 @@ For a short smoke test:
 go run scripts/virtual_meter.go -sites 1 -meters-per-site 2 -interval 1s -duration 5s -log-publishes
 ```
 
+Apply database migrations explicitly:
+
+```bash
+make db-migrate
+```
+
+Start the Rust engine without applying migrations:
+
+```bash
+make engine-serve
+```
+
 ## Architecture
 
 ```text
