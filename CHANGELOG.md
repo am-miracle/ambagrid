@@ -10,7 +10,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 
 - Add MQTT to Redpanda ingestion bridge
 - Add app and service scaffolding
-- **engine:** Add database migrations
+- **engine:** Add database migrations (#2)
 
 ### Documentation
 
@@ -19,7 +19,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 
 ### Maintenance
 
-- **github:** Add issue forms
+- **github:** Add issue forms (#3)
 
 ### Other
 
