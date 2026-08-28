@@ -5,6 +5,8 @@ edition = "2024"
 
 [dependencies]
 prost = "0.14.4"
+sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "uuid", "chrono", "migrate"] }
+tokio = { version = "1.53.1", features = [ "macros", "rt-multi-thread" ] }
 
 [build-dependencies]
 prost-build = "0.14.4"
