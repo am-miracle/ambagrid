@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Project documentation
+    url: https://github.com/am-miracle/ambagrid/tree/main/docs
+    about: Read the architecture, roadmap, and domain notes before opening broad design issues.

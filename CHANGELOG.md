@@ -16,6 +16,10 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - Add open source project foundations
 - Add ontology and roadmap docs
 
+### Maintenance
+
+- **github:** Add issue forms
+
 ### Other
 
 - Harden ingestion bridge package split

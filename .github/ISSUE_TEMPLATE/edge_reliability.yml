@@ -1,0 +1,69 @@
+name: Edge Reliability
+description: Track offline sync, buffering, replay, gateway identity, or fallback alert work.
+title: "edge: "
+labels: ["edge-reliability"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for Phase 2 reliability work: store-and-forward buffering, replay after network recovery, gateway health, idempotency, and critical fallback alerts.
+  - type: textarea
+    id: scenario
+    attributes:
+      label: Field Scenario
+      description: Describe the connectivity, device, broker, or gateway condition this issue covers.
+      placeholder: A site loses cellular connectivity for 2 hours while smart meters continue publishing...
+    validations:
+      required: true
+  - type: dropdown
+    id: reliability_area
+    attributes:
+      label: Reliability Area
+      options:
+        - Store-and-forward buffering
+        - Replay after recovery
+        - MQTT delivery semantics
+        - Gateway identity / heartbeat
+        - Queue health / observability
+        - SMS fallback
+        - OTA safety
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: data_contract
+    attributes:
+      label: Data Contract
+      description: Topics, payload fields, metadata, timestamps, sequence numbers, or acknowledgments involved.
+      placeholder: |
+        Topic:
+        Payload fields:
+        Required metadata:
+        Idempotency key:
+    validations:
+      required: false
+  - type: textarea
+    id: failure_modes
+    attributes:
+      label: Failure Modes
+      description: What outages, retries, duplicates, late arrivals, or data-loss risks must be handled?
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      description: Concrete behavior that proves the reliability work is complete.
+      placeholder: |
+        - Events are persisted before upload.
+        - Replayed records include original timestamps and replay metadata.
+        - Queue depth and oldest pending event age are observable.
+    validations:
+      required: true
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Link to docs/edge-reliability.md, architecture notes, or related issues.
+    validations:
+      required: false

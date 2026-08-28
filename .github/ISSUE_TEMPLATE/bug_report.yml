@@ -1,0 +1,79 @@
+name: Bug Report
+description: Report broken behavior, regressions, or failing workflows.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for reproducible defects in the simulator, ingestion bridge, Rust engine, API, frontend, docs, or local tooling.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is broken, and what impact does it have?
+      placeholder: The ingestion bridge drops/rejects... causing...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Simulator
+        - Ingestion bridge
+        - Rust engine
+        - API
+        - Frontend
+        - Database / migrations
+        - Docker Compose / local dev
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Include exact commands, configuration, payloads, or topics where possible.
+      placeholder: |
+        1. Run `docker compose up -d --build`
+        2. Run `go run scripts/virtual_meter.go ...`
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What should happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What happened instead? Include logs or screenshots if useful.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Docker, Go, Rust, Node, broker/database versions, and relevant env vars.
+      placeholder: |
+        OS:
+        Docker:
+        Go:
+        Rust:
+        Node:
+        Relevant env:
+    validations:
+      required: false
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional Context
+      description: Links, logs, suspected cause, or related issues.
+    validations:
+      required: false

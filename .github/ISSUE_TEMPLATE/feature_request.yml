@@ -1,0 +1,60 @@
+name: Feature Request
+description: Propose a product capability or engineering improvement.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What operator, developer, or system problem should this solve?
+      placeholder: Operators need to... because...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: Describe the smallest useful behavior or interface.
+    validations:
+      required: true
+  - type: dropdown
+    id: roadmap_area
+    attributes:
+      label: Roadmap Area
+      options:
+        - Operator core
+        - Edge reliability
+        - Revenue protection
+        - Hardware interoperability
+        - Investor reporting
+        - Advanced rural operations
+        - Developer experience
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      description: What must be true for this issue to be done?
+      placeholder: |
+        - ...
+        - ...
+        - ...
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Other approaches, tradeoffs, or reasons not to do this.
+    validations:
+      required: false
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Relevant docs, roadmap sections, payload examples, or external standards.
+    validations:
+      required: false
