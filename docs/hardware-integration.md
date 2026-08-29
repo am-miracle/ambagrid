@@ -24,15 +24,17 @@ The Go ingestion bridge subscribes to:
 africa-west/+/smartmeter/+/telemetry
 ```
 
-It writes raw payloads to Redpanda topic:
+The bridge encodes each JSON payload as `MetricPayload` protobuf and writes it to Redpanda topic:
 
 ```text
-telemetry.raw
+telemetry.ingested
 ```
+
+Payloads that fail to encode are parked on `telemetry.ingested.dlq` instead of being dropped.
 
 ## Payload Model
 
-The simulator currently sends JSON shaped like `proto/telemetry.proto` so developers can inspect messages easily.
+The simulator sends JSON shaped like `proto/telemetry.proto` over MQTT so developers can inspect messages easily. The ingestion bridge re-encodes it as protobuf before Kafka, so `telemetry.ingested` messages are binary.
 
 Core fields:
 
@@ -50,8 +52,6 @@ Core fields:
 - `relay_closed`
 - `battery_soc_pct`
 - `solar_irradiance`
-
-The platform should move toward Protobuf on the wire once the ingestion and engine contracts stabilize.
 
 The simulator always emits `internal_temperature`, `relay_closed`,
 `battery_soc_pct`, and `solar_irradiance` in JSON, even when their value is
@@ -82,11 +82,11 @@ payload: {"device_id":"met-0101","device_type":"DEVICE_TYPE_SMART_METER",
           "battery_soc_pct":0,"solar_irradiance":0}
 ```
 
-Resulting Kafka record on `telemetry.raw`:
+Resulting Kafka record on `telemetry.ingested`:
 
 ```text
 Key:   met-0101
-Value: <payload above, verbatim>
+Value: <the JSON above, encoded as MetricPayload protobuf>
 Headers:
   mqtt_topic  = africa-west/ng-kaji-01/smartmeter/met-0101/telemetry
   region      = africa-west
@@ -113,17 +113,7 @@ bridge derives its accepted region/device-type from whatever filter it was
 started with, so a config change is enough to widen *which topics* it will
 ingest from.
 
-This is **not** the same as onboarding a new vendor's hardware. The bridge
-only validates topic structure — it forwards `payload` verbatim and never
-inspects or reshapes it (see `BuildRecord` in
-`services/ingestion-go/internal/telemetry/telemetry.go`). A real inverter
-publishes in its vendor's own payload shape, not AmbaGrid telemetry JSON. Per
-the core rule above, that payload still needs an adapter to translate it into
-the AmbaGrid telemetry model *before* it reaches this topic — pointing this
-filter at a vendor's raw, un-normalized output would push it straight into
-`telemetry.raw`, bypassing the adapter contract entirely. The config change
-only helps once an adapter (see Adapter Targets below) already exists and is
-publishing normalized payloads under the new topic.
+This is **not** the same as onboarding a new vendor's hardware. The bridge only validates topic structure and encodes JSON into protobuf (see `BuildRecord` in `services/ingestion-go/internal/telemetry/telemetry.go`) — it does not translate vendor field names or units. A real inverter publishes in its vendor's own payload shape, not AmbaGrid telemetry JSON. Per the core rule above, that payload still needs an adapter to translate it into the AmbaGrid telemetry model *before* it reaches this topic — pointing this filter at a vendor's raw, un-normalized output would just get rejected into `telemetry.ingested.dlq`. The config change only helps once an adapter (see Adapter Targets below) already exists and is publishing AmbaGrid-shaped JSON under the new topic.
 
 ### Fully wildcarded filter
 

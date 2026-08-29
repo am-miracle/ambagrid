@@ -456,7 +456,7 @@ The delivery mechanism can vary.
 The ontology should be fed by stream events. Initial topic names:
 
 ```text
-telemetry.raw
+telemetry.ingested
 payment.confirmed
 payment.failed
 credit.issued

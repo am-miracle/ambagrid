@@ -24,7 +24,7 @@ http://localhost:8080
 You should see simulator records arrive in:
 
 ```text
-telemetry.raw
+telemetry.ingested
 ```
 
 For a short smoke test:

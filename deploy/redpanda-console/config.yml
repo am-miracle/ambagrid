@@ -1,0 +1,11 @@
+kafka:
+  brokers: ["redpanda:29092"]
+  protobuf:
+    enabled: true
+    fileSystem:
+      enabled: true
+      paths:
+        - /etc/console/proto
+    mappings:
+      - topicName: telemetry.ingested
+        valueProtoType: ambagrid.telemetry.MetricPayload

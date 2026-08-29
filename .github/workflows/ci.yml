@@ -59,10 +59,26 @@ jobs:
         with:
           components: clippy,rustfmt
 
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: services/engine-rust
+
+      - name: Install cargo-chef
+        run: cargo install cargo-chef --locked
+
+      - name: Prepare Rust dependency recipe
+        run: cargo chef prepare --recipe-path "$RUNNER_TEMP/engine-rust-recipe.json"
+
+      - name: Build Rust dependencies
+        run: |
+          mkdir -p "$RUNNER_TEMP/engine-rust-cargo-chef"
+          cp "$RUNNER_TEMP/engine-rust-recipe.json" "$RUNNER_TEMP/engine-rust-cargo-chef/recipe.json"
+          cd "$RUNNER_TEMP/engine-rust-cargo-chef"
+          cargo chef cook --recipe-path recipe.json
 
       - name: Check formatting
         run: cargo fmt --check

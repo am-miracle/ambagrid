@@ -14,11 +14,18 @@ Install the main toolchain:
 - Node.js 22 or newer
 - npm
 - Protobuf compiler (`protoc`)
+- Go protobuf plugin (`protoc-gen-go`): `go install google.golang.org/protobuf/cmd/protoc-gen-go@latest`
 
 On macOS, Docker Desktop may not put the CLI on your shell path. If `docker` is not found, add:
 
 ```bash
 export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
+```
+
+`go install` puts `protoc-gen-go` in `$(go env GOPATH)/bin`. If `protoc` reports it can't find the plugin, add that to your path:
+
+```bash
+export PATH="$PATH:$(go env GOPATH)/bin"
 ```
 
 Start the local infrastructure:
@@ -81,6 +88,12 @@ For the ingestion service:
 cd services/ingestion-go
 gofmt -w .
 go test ./...
+```
+
+If you change `proto/telemetry.proto`, regenerate its Go bindings and commit the result:
+
+```bash
+make proto-gen-go
 ```
 
 For the API service:

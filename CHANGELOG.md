@@ -11,6 +11,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - Add MQTT to Redpanda ingestion bridge
 - Add app and service scaffolding
 - **engine:** Add database migrations (#2)
+- **telemetry:** Ingest protobuf readings
 
 ### Documentation
 

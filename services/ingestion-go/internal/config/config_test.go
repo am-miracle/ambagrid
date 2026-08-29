@@ -14,6 +14,7 @@ var envKeys = []string{
 	"MQTT_QOS",
 	"KAFKA_BROKERS",
 	"KAFKA_TOPIC",
+	"KAFKA_DLQ_TOPIC",
 	"INGESTION_QUEUE_SIZE",
 	"INGESTION_WORKERS",
 	"KAFKA_PRODUCE_TIMEOUT",
@@ -52,8 +53,11 @@ func TestFromEnvDefaults(t *testing.T) {
 	if len(cfg.KafkaBrokers) != 1 || cfg.KafkaBrokers[0] != "localhost:9092" {
 		t.Errorf("KafkaBrokers = %v, want [localhost:9092]", cfg.KafkaBrokers)
 	}
-	if cfg.KafkaTopic != "telemetry.raw" {
-		t.Errorf("KafkaTopic = %q, want telemetry.raw", cfg.KafkaTopic)
+	if cfg.KafkaTopic != "telemetry.ingested" {
+		t.Errorf("KafkaTopic = %q, want telemetry.ingested", cfg.KafkaTopic)
+	}
+	if cfg.KafkaDLQTopic != "telemetry.ingested.dlq" {
+		t.Errorf("KafkaDLQTopic = %q, want telemetry.ingested.dlq", cfg.KafkaDLQTopic)
 	}
 	if cfg.QueueSize != 1000 {
 		t.Errorf("QueueSize = %d, want 1000", cfg.QueueSize)
@@ -83,6 +87,7 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("MQTT_QOS", "2")
 	t.Setenv("KAFKA_BROKERS", "broker-a:9092, broker-b:9092")
 	t.Setenv("KAFKA_TOPIC", "telemetry.custom")
+	t.Setenv("KAFKA_DLQ_TOPIC", "telemetry.custom.dlq")
 	t.Setenv("INGESTION_QUEUE_SIZE", "500")
 	t.Setenv("INGESTION_WORKERS", "8")
 	t.Setenv("KAFKA_PRODUCE_TIMEOUT", "2s")
@@ -109,6 +114,9 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.KafkaTopic != "telemetry.custom" {
 		t.Errorf("KafkaTopic = %q", cfg.KafkaTopic)
+	}
+	if cfg.KafkaDLQTopic != "telemetry.custom.dlq" {
+		t.Errorf("KafkaDLQTopic = %q", cfg.KafkaDLQTopic)
 	}
 	if cfg.QueueSize != 500 {
 		t.Errorf("QueueSize = %d", cfg.QueueSize)
