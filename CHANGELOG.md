@@ -12,11 +12,27 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - Add app and service scaffolding
 - **engine:** Add database migrations (#2)
 - **telemetry:** Ingest protobuf readings
+- **alerts:** Add resolve_alert action and resolution metadata
+- **alerts:** Publish alert.opened/alert.resolved events to kafka
+- **alerts:** Tune threshold policy per asset type with hysteresis and runtime config
+- **kafka:** Migrate consumer to rdkafka for real partition/consumer-group coverage
+
+### Changed
+
+- **engine:** Consolidate ingest writes into one transactional repository
+- **engine:** Tighten alert and asset domain types
 
 ### Documentation
 
 - Add open source project foundations
 - Add ontology and roadmap docs
+
+### Fixed
+
+- **telemetry:** Reject incomplete smart-meter metrics and preserve per-field presence
+- **alerts:** Prevent duplicate alerts from repeated abnormal readings
+- **alerts:** Scope alert open/resolve/duplicate-guard by kind, not just asset
+- **engine:** Avoid dynamic librdkafka dependency in CI
 
 ### Maintenance
 
