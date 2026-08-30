@@ -2,9 +2,10 @@ use std::{collections::BTreeMap, future::Future};
 
 use chrono::Utc;
 use prost::Message;
-use rskafka::client::{
-    ClientBuilder,
-    partition::{Compression, PartitionClient, UnknownTopicHandling},
+use rdkafka::{
+    ClientConfig,
+    message::{Header, OwnedHeaders},
+    producer::{FutureProducer, FutureRecord},
 };
 
 use super::proto;
@@ -23,117 +24,141 @@ pub struct ProducerConfig {
 // A single-record producer, kept as a trait so tests can substitute a fake
 // and assert on topic routing/payloads without a live broker.
 pub(crate) trait RecordSink: Send + Sync {
-    fn send(&self, payload: Vec<u8>) -> impl Future<Output = Result<(), PortError>> + Send;
+    fn send(&self, record: KafkaRecord) -> impl Future<Output = Result<(), PortError>> + Send;
 }
 
-impl RecordSink for PartitionClient {
-    async fn send(&self, payload: Vec<u8>) -> Result<(), PortError> {
-        let record = rskafka::record::Record {
-            key: None,
-            value: Some(payload),
-            headers: BTreeMap::new(),
-            timestamp: Utc::now(),
-        };
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KafkaRecord {
+    topic: String,
+    key: Option<Vec<u8>>,
+    payload: Vec<u8>,
+    headers: BTreeMap<String, Vec<u8>>,
+}
 
-        self.produce(vec![record], Compression::NoCompression)
+impl RecordSink for FutureProducer {
+    async fn send(&self, record: KafkaRecord) -> Result<(), PortError> {
+        let mut headers = OwnedHeaders::new_with_capacity(record.headers.len());
+        for (key, value) in &record.headers {
+            headers = headers.insert(Header {
+                key,
+                value: Some(value.as_slice()),
+            });
+        }
+
+        let mut future_record = FutureRecord::to(record.topic.as_str()).payload(&record.payload);
+        if let Some(key) = &record.key {
+            future_record = future_record.key(key);
+        }
+        if !record.headers.is_empty() {
+            future_record = future_record.headers(headers);
+        }
+
+        self.send(future_record, std::time::Duration::from_secs(5))
             .await
-            .map_err(PortError::storage)?;
+            .map_err(|(err, _message)| PortError::storage(err))?;
 
         Ok(())
     }
 }
 
 // Publishes the alert.opened/alert.resolved business events described in
-// docs/ontology.md. Single-partition, same assumption as the telemetry
-// consumer: fine for one engine replica.
-pub struct KafkaAlertEventPublisher<S: RecordSink = PartitionClient> {
-    alert_opened: S,
-    alert_resolved: S,
+// docs/ontology.md.
+pub struct KafkaAlertEventPublisher<S: RecordSink = FutureProducer> {
+    sink: S,
+    alert_opened_topic: String,
+    alert_resolved_topic: String,
 }
 
-pub struct KafkaDeadLetterPublisher<S: DeadLetterRecordSink = PartitionClient> {
+pub struct KafkaDeadLetterPublisher<S: RecordSink = FutureProducer> {
+    topic: String,
     sink: S,
 }
 
-impl KafkaAlertEventPublisher<PartitionClient> {
-    pub async fn connect(config: ProducerConfig) -> Result<Self, rskafka::client::error::Error> {
-        let client = ClientBuilder::new(config.brokers).build().await?;
-        let alert_opened = client
-            .partition_client(config.alert_opened_topic, 0, UnknownTopicHandling::Retry)
-            .await?;
-        let alert_resolved = client
-            .partition_client(config.alert_resolved_topic, 0, UnknownTopicHandling::Retry)
-            .await?;
+impl KafkaAlertEventPublisher<FutureProducer> {
+    pub fn connect(config: ProducerConfig) -> Result<Self, rdkafka::error::KafkaError> {
+        let sink = ClientConfig::new()
+            .set("bootstrap.servers", config.brokers.join(","))
+            .set("message.timeout.ms", "5000")
+            .create()?;
 
         Ok(Self {
-            alert_opened,
-            alert_resolved,
+            sink,
+            alert_opened_topic: config.alert_opened_topic,
+            alert_resolved_topic: config.alert_resolved_topic,
         })
     }
 }
 
-impl KafkaDeadLetterPublisher<PartitionClient> {
-    pub async fn connect(
+impl KafkaDeadLetterPublisher<FutureProducer> {
+    pub fn connect(
         brokers: Vec<String>,
         topic: String,
-    ) -> Result<Self, rskafka::client::error::Error> {
-        let client = ClientBuilder::new(brokers).build().await?;
-        let sink = client
-            .partition_client(topic.clone(), 0, UnknownTopicHandling::Retry)
-            .await?;
+    ) -> Result<Self, rdkafka::error::KafkaError> {
+        let sink = ClientConfig::new()
+            .set("bootstrap.servers", brokers.join(","))
+            .set("message.timeout.ms", "5000")
+            .create()?;
 
-        Ok(Self { sink })
-    }
-}
-
-pub(crate) trait DeadLetterRecordSink: Send + Sync {
-    fn send_record(
-        &self,
-        record: rskafka::record::Record,
-    ) -> impl Future<Output = Result<(), PortError>> + Send;
-}
-
-impl DeadLetterRecordSink for PartitionClient {
-    async fn send_record(&self, record: rskafka::record::Record) -> Result<(), PortError> {
-        self.produce(vec![record], Compression::NoCompression)
-            .await
-            .map_err(PortError::storage)?;
-
-        Ok(())
+        Ok(Self { topic, sink })
     }
 }
 
 impl<S: RecordSink> AlertEvents for KafkaAlertEventPublisher<S> {
     async fn alert_opened(&self, alert: &Alert) -> Result<(), PortError> {
-        self.alert_opened
-            .send(alert_opened_event(alert).encode_to_vec())
+        self.sink
+            .send(kafka_record(
+                &self.alert_opened_topic,
+                None,
+                alert_opened_event(alert).encode_to_vec(),
+                BTreeMap::new(),
+            ))
             .await
     }
 
     async fn alert_resolved(&self, alert: &Alert) -> Result<(), PortError> {
-        self.alert_resolved
-            .send(alert_resolved_event(alert).encode_to_vec())
+        self.sink
+            .send(kafka_record(
+                &self.alert_resolved_topic,
+                None,
+                alert_resolved_event(alert).encode_to_vec(),
+                BTreeMap::new(),
+            ))
             .await
     }
 }
 
-impl<S: DeadLetterRecordSink> DeadLetterSink for KafkaDeadLetterPublisher<S> {
+impl<S: RecordSink> DeadLetterSink for KafkaDeadLetterPublisher<S> {
     async fn park(&self, entry: &DeadLetter) -> Result<(), PortError> {
-        self.sink.send_record(dead_letter_record(entry)).await
+        self.sink.send(dead_letter_record(&self.topic, entry)).await
     }
 }
 
-fn dead_letter_record(entry: &DeadLetter) -> rskafka::record::Record {
-    rskafka::record::Record {
-        key: Some(
+fn kafka_record(
+    topic: &str,
+    key: Option<Vec<u8>>,
+    payload: Vec<u8>,
+    headers: BTreeMap<String, Vec<u8>>,
+) -> KafkaRecord {
+    KafkaRecord {
+        topic: topic.to_string(),
+        key,
+        payload,
+        headers,
+    }
+}
+
+fn dead_letter_record(topic: &str, entry: &DeadLetter) -> KafkaRecord {
+    kafka_record(
+        topic,
+        Some(
             format!(
                 "{}:{}:{}",
                 entry.kafka_topic, entry.kafka_partition, entry.kafka_offset
             )
             .into_bytes(),
         ),
-        value: Some(entry.payload.clone()),
-        headers: BTreeMap::from([
+        entry.payload.clone(),
+        BTreeMap::from([
             (
                 "source_topic".to_string(),
                 entry.kafka_topic.as_bytes().to_vec(),
@@ -152,8 +177,7 @@ fn dead_letter_record(entry: &DeadLetter) -> rskafka::record::Record {
             ),
             ("error".to_string(), entry.error.as_bytes().to_vec()),
         ]),
-        timestamp: Utc::now(),
-    }
+    )
 }
 
 fn to_proto_severity(severity: Severity) -> proto::Severity {
@@ -210,23 +234,11 @@ mod tests {
 
     #[derive(Default)]
     struct FakeSink {
-        sent: Mutex<Vec<Vec<u8>>>,
+        sent: Mutex<Vec<KafkaRecord>>,
     }
 
     impl RecordSink for FakeSink {
-        async fn send(&self, payload: Vec<u8>) -> Result<(), PortError> {
-            self.sent.lock().unwrap().push(payload);
-            Ok(())
-        }
-    }
-
-    #[derive(Default)]
-    struct FakeDeadLetterSink {
-        sent: Mutex<Vec<rskafka::record::Record>>,
-    }
-
-    impl DeadLetterRecordSink for FakeDeadLetterSink {
-        async fn send_record(&self, record: rskafka::record::Record) -> Result<(), PortError> {
+        async fn send(&self, record: KafkaRecord) -> Result<(), PortError> {
             self.sent.lock().unwrap().push(record);
             Ok(())
         }
@@ -252,18 +264,21 @@ mod tests {
     #[tokio::test]
     async fn alert_opened_publishes_only_to_the_opened_topic_sink() {
         let publisher = KafkaAlertEventPublisher {
-            alert_opened: FakeSink::default(),
-            alert_resolved: FakeSink::default(),
+            sink: FakeSink::default(),
+            alert_opened_topic: "alert.opened".to_string(),
+            alert_resolved_topic: "alert.resolved".to_string(),
         };
         let alert = open_alert();
 
         publisher.alert_opened(&alert).await.unwrap();
 
-        let opened_sent = publisher.alert_opened.sent.lock().unwrap();
-        assert_eq!(opened_sent.len(), 1);
-        assert!(publisher.alert_resolved.sent.lock().unwrap().is_empty());
+        let sent = publisher.sink.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].topic, "alert.opened");
+        assert!(sent[0].key.is_none());
+        assert!(sent[0].headers.is_empty());
 
-        let event = proto::AlertOpened::decode(opened_sent[0].as_slice()).unwrap();
+        let event = proto::AlertOpened::decode(sent[0].payload.as_slice()).unwrap();
         assert_eq!(event.alert_id, alert.alert_id.to_string());
         assert_eq!(event.asset_id, "met-0101");
         assert_eq!(event.site_id, "ng-kaji-01");
@@ -277,7 +292,8 @@ mod tests {
     #[tokio::test]
     async fn dead_letter_publisher_preserves_payload_and_source_metadata() {
         let publisher = KafkaDeadLetterPublisher {
-            sink: FakeDeadLetterSink::default(),
+            topic: "telemetry.ingested.dlq".to_string(),
+            sink: FakeSink::default(),
         };
         let payload = b"malformed metric payload".to_vec();
         let entry = DeadLetter {
@@ -294,11 +310,12 @@ mod tests {
         let sent = publisher.sink.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
         let record = &sent[0];
+        assert_eq!(record.topic, "telemetry.ingested.dlq");
         assert_eq!(
             record.key.as_deref(),
             Some("telemetry.ingested:2:42".as_bytes())
         );
-        assert_eq!(record.value.as_deref(), Some(payload.as_slice()));
+        assert_eq!(record.payload, payload);
         assert_eq!(
             record.headers.get("source_topic").map(Vec::as_slice),
             Some("telemetry.ingested".as_bytes())
@@ -324,8 +341,9 @@ mod tests {
     #[tokio::test]
     async fn alert_resolved_publishes_only_to_the_resolved_topic_sink() {
         let publisher = KafkaAlertEventPublisher {
-            alert_opened: FakeSink::default(),
-            alert_resolved: FakeSink::default(),
+            sink: FakeSink::default(),
+            alert_opened_topic: "alert.opened".to_string(),
+            alert_resolved_topic: "alert.resolved".to_string(),
         };
         let mut alert = open_alert();
         alert.status = AlertStatus::Resolved;
@@ -336,11 +354,13 @@ mod tests {
 
         publisher.alert_resolved(&alert).await.unwrap();
 
-        let resolved_sent = publisher.alert_resolved.sent.lock().unwrap();
-        assert_eq!(resolved_sent.len(), 1);
-        assert!(publisher.alert_opened.sent.lock().unwrap().is_empty());
+        let sent = publisher.sink.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].topic, "alert.resolved");
+        assert!(sent[0].key.is_none());
+        assert!(sent[0].headers.is_empty());
 
-        let event = proto::AlertResolved::decode(resolved_sent[0].as_slice()).unwrap();
+        let event = proto::AlertResolved::decode(sent[0].payload.as_slice()).unwrap();
         assert_eq!(event.alert_id, alert.alert_id.to_string());
         assert_eq!(
             event.resolved_at_utc,
