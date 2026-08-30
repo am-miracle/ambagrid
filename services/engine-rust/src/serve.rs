@@ -35,7 +35,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         alert_resolved_topic: cfg.alert_resolved_topic,
     })
     .await?;
-    let ingest = IngestReading::new(&assets, &readings, &alerts, &events);
+    let mut ingest = IngestReading::new(&assets, &readings, &alerts, &events);
+    ingest.policy = cfg.threshold_policy;
 
     consumer::run(
         ConsumerConfig {
