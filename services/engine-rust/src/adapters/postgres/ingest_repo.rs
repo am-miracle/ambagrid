@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::{
     domain::{
         alert::{Alert, AlertDecision, AlertKind, AlertStatus, Severity},
-        asset::{AssetState, Reading},
+        asset::{AssetState, BatteryBmsState, Reading, SmartMeterState, SolarInverterState},
     },
     ports::{IngestRepository, IngestWrite, PolicyOutcome, PortError},
 };
@@ -34,8 +34,7 @@ impl IngestRepository for PostgresIngestRepository {
         let mut tx = self.pool.begin().await.map_err(PortError::storage)?;
 
         upsert_asset(&mut tx, reading).await?;
-        upsert_state(&mut tx, reading).await?;
-        append_reading(&mut tx, reading).await?;
+        write_asset_state_and_reading(&mut tx, reading).await?;
 
         let write = match outcome {
             PolicyOutcome::Open(decision) => {
@@ -115,140 +114,184 @@ async fn upsert_asset(
     Ok(())
 }
 
-async fn upsert_state(
+async fn write_asset_state_and_reading(
     tx: &mut Transaction<'_, Postgres>,
     reading: &Reading,
 ) -> Result<(), PortError> {
     match &reading.state {
         AssetState::SmartMeter(state) => {
-            query(
-                r#"
-                INSERT INTO smart_meter_state (
-                    asset_id, reported_household_id, relay_closed, voltage, current,
-                    active_power, frequency, total_kwh
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                ON CONFLICT (asset_id) DO UPDATE SET
-                    reported_household_id = EXCLUDED.reported_household_id,
-                    relay_closed = EXCLUDED.relay_closed,
-                    voltage = EXCLUDED.voltage,
-                    current = EXCLUDED.current,
-                    active_power = EXCLUDED.active_power,
-                    frequency = EXCLUDED.frequency,
-                    total_kwh = EXCLUDED.total_kwh
-                "#,
-            )
-            .bind(&reading.asset.asset_id)
-            .bind(&state.reported_household_id)
-            .bind(state.relay_closed)
-            .bind(state.voltage)
-            .bind(state.current)
-            .bind(state.active_power)
-            .bind(state.frequency)
-            .bind(state.total_kwh)
-            .execute(&mut **tx)
-            .await
-            .map_err(PortError::storage)?;
+            upsert_smart_meter_state(tx, reading, state).await?;
+            append_smart_meter_reading(tx, reading, state).await?;
         }
         AssetState::BatteryBms(state) => {
-            query(
-                r#"
-                INSERT INTO battery_bms_state (asset_id, battery_soc_pct)
-                VALUES ($1, $2)
-                ON CONFLICT (asset_id) DO UPDATE SET
-                    battery_soc_pct = EXCLUDED.battery_soc_pct
-                "#,
-            )
-            .bind(&reading.asset.asset_id)
-            .bind(state.battery_soc_pct)
-            .execute(&mut **tx)
-            .await
-            .map_err(PortError::storage)?;
+            upsert_battery_bms_state(tx, reading, state).await?;
+            append_battery_bms_reading(tx, reading, state).await?;
         }
         AssetState::SolarInverter(state) => {
-            query(
-                r#"
-                INSERT INTO solar_inverter_state (asset_id, solar_irradiance)
-                VALUES ($1, $2)
-                ON CONFLICT (asset_id) DO UPDATE SET
-                    solar_irradiance = EXCLUDED.solar_irradiance
-                "#,
-            )
-            .bind(&reading.asset.asset_id)
-            .bind(state.solar_irradiance)
-            .execute(&mut **tx)
-            .await
-            .map_err(PortError::storage)?;
+            upsert_solar_inverter_state(tx, reading, state).await?;
+            append_solar_inverter_reading(tx, reading, state).await?;
         }
     }
 
     Ok(())
 }
 
-async fn append_reading(
+async fn upsert_smart_meter_state(
     tx: &mut Transaction<'_, Postgres>,
     reading: &Reading,
+    state: &SmartMeterState,
 ) -> Result<(), PortError> {
-    match &reading.state {
-        AssetState::SmartMeter(state) => {
-            query(
-                r#"
-                INSERT INTO smart_meter_readings (
-                    time, asset_id, internal_temperature, reported_household_id,
-                    relay_closed, voltage, current, active_power, frequency, total_kwh
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                "#,
-            )
-            .bind(reading.observed_at)
-            .bind(&reading.asset.asset_id)
-            .bind(reading.asset.internal_temperature)
-            .bind(&state.reported_household_id)
-            .bind(state.relay_closed)
-            .bind(state.voltage)
-            .bind(state.current)
-            .bind(state.active_power)
-            .bind(state.frequency)
-            .bind(state.total_kwh)
-            .execute(&mut **tx)
-            .await
-            .map_err(PortError::storage)?;
-        }
-        AssetState::BatteryBms(state) => {
-            query(
-                r#"
-                INSERT INTO battery_bms_readings (
-                    time, asset_id, internal_temperature, battery_soc_pct
-                )
-                VALUES ($1, $2, $3, $4)
-                "#,
-            )
-            .bind(reading.observed_at)
-            .bind(&reading.asset.asset_id)
-            .bind(reading.asset.internal_temperature)
-            .bind(state.battery_soc_pct)
-            .execute(&mut **tx)
-            .await
-            .map_err(PortError::storage)?;
-        }
-        AssetState::SolarInverter(state) => {
-            query(
-                r#"
-                INSERT INTO solar_inverter_readings (
-                    time, asset_id, internal_temperature, solar_irradiance
-                )
-                VALUES ($1, $2, $3, $4)
-                "#,
-            )
-            .bind(reading.observed_at)
-            .bind(&reading.asset.asset_id)
-            .bind(reading.asset.internal_temperature)
-            .bind(state.solar_irradiance)
-            .execute(&mut **tx)
-            .await
-            .map_err(PortError::storage)?;
-        }
-    }
+    query(
+        r#"
+        INSERT INTO smart_meter_state (
+            asset_id, reported_household_id, relay_closed, voltage, current,
+            active_power, frequency, total_kwh
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (asset_id) DO UPDATE SET
+            reported_household_id = EXCLUDED.reported_household_id,
+            relay_closed = EXCLUDED.relay_closed,
+            voltage = EXCLUDED.voltage,
+            current = EXCLUDED.current,
+            active_power = EXCLUDED.active_power,
+            frequency = EXCLUDED.frequency,
+            total_kwh = EXCLUDED.total_kwh
+        "#,
+    )
+    .bind(&reading.asset.asset_id)
+    .bind(&state.reported_household_id)
+    .bind(state.relay_closed)
+    .bind(state.voltage)
+    .bind(state.current)
+    .bind(state.active_power)
+    .bind(state.frequency)
+    .bind(state.total_kwh)
+    .execute(&mut **tx)
+    .await
+    .map_err(PortError::storage)?;
+
+    Ok(())
+}
+
+async fn append_smart_meter_reading(
+    tx: &mut Transaction<'_, Postgres>,
+    reading: &Reading,
+    state: &SmartMeterState,
+) -> Result<(), PortError> {
+    query(
+        r#"
+        INSERT INTO smart_meter_readings (
+            time, asset_id, internal_temperature, reported_household_id,
+            relay_closed, voltage, current, active_power, frequency, total_kwh
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        "#,
+    )
+    .bind(reading.observed_at)
+    .bind(&reading.asset.asset_id)
+    .bind(reading.asset.internal_temperature)
+    .bind(&state.reported_household_id)
+    .bind(state.relay_closed)
+    .bind(state.voltage)
+    .bind(state.current)
+    .bind(state.active_power)
+    .bind(state.frequency)
+    .bind(state.total_kwh)
+    .execute(&mut **tx)
+    .await
+    .map_err(PortError::storage)?;
+
+    Ok(())
+}
+
+async fn upsert_battery_bms_state(
+    tx: &mut Transaction<'_, Postgres>,
+    reading: &Reading,
+    state: &BatteryBmsState,
+) -> Result<(), PortError> {
+    query(
+        r#"
+        INSERT INTO battery_bms_state (asset_id, battery_soc_pct)
+        VALUES ($1, $2)
+        ON CONFLICT (asset_id) DO UPDATE SET
+            battery_soc_pct = EXCLUDED.battery_soc_pct
+        "#,
+    )
+    .bind(&reading.asset.asset_id)
+    .bind(state.battery_soc_pct)
+    .execute(&mut **tx)
+    .await
+    .map_err(PortError::storage)?;
+
+    Ok(())
+}
+
+async fn append_battery_bms_reading(
+    tx: &mut Transaction<'_, Postgres>,
+    reading: &Reading,
+    state: &BatteryBmsState,
+) -> Result<(), PortError> {
+    query(
+        r#"
+        INSERT INTO battery_bms_readings (
+            time, asset_id, internal_temperature, battery_soc_pct
+        )
+        VALUES ($1, $2, $3, $4)
+        "#,
+    )
+    .bind(reading.observed_at)
+    .bind(&reading.asset.asset_id)
+    .bind(reading.asset.internal_temperature)
+    .bind(state.battery_soc_pct)
+    .execute(&mut **tx)
+    .await
+    .map_err(PortError::storage)?;
+
+    Ok(())
+}
+
+async fn upsert_solar_inverter_state(
+    tx: &mut Transaction<'_, Postgres>,
+    reading: &Reading,
+    state: &SolarInverterState,
+) -> Result<(), PortError> {
+    query(
+        r#"
+        INSERT INTO solar_inverter_state (asset_id, solar_irradiance)
+        VALUES ($1, $2)
+        ON CONFLICT (asset_id) DO UPDATE SET
+            solar_irradiance = EXCLUDED.solar_irradiance
+        "#,
+    )
+    .bind(&reading.asset.asset_id)
+    .bind(state.solar_irradiance)
+    .execute(&mut **tx)
+    .await
+    .map_err(PortError::storage)?;
+
+    Ok(())
+}
+
+async fn append_solar_inverter_reading(
+    tx: &mut Transaction<'_, Postgres>,
+    reading: &Reading,
+    state: &SolarInverterState,
+) -> Result<(), PortError> {
+    query(
+        r#"
+        INSERT INTO solar_inverter_readings (
+            time, asset_id, internal_temperature, solar_irradiance
+        )
+        VALUES ($1, $2, $3, $4)
+        "#,
+    )
+    .bind(reading.observed_at)
+    .bind(&reading.asset.asset_id)
+    .bind(reading.asset.internal_temperature)
+    .bind(state.solar_irradiance)
+    .execute(&mut **tx)
+    .await
+    .map_err(PortError::storage)?;
 
     Ok(())
 }
