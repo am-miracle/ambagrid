@@ -1,11 +1,8 @@
 use std::future::Future;
 
-use chrono::{DateTime, Utc};
-use uuid::Uuid;
-
 use crate::domain::{
     alert::{Alert, AlertDecision},
-    asset::{Asset, Reading},
+    asset::Reading,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -33,39 +30,34 @@ impl PortError {
     }
 }
 
-pub trait AssetRepository: Send + Sync {
-    fn upsert_asset(&self, asset: &Asset) -> impl Future<Output = Result<(), PortError>> + Send;
-    fn upsert_state(&self, reading: &Reading)
-    -> impl Future<Output = Result<(), PortError>> + Send;
+// What the threshold policy decided a reading should do to alert state.
+// Computed purely (see ThresholdPolicy::evaluate/recovered) before any I/O.
+pub enum PolicyOutcome {
+    Open(AlertDecision),
+    Resolve {
+        resolution_note: String,
+        resolved_by: String,
+    },
+    Unchanged,
 }
 
-pub trait ReadingsSink: Send + Sync {
-    fn append_reading(
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IngestWrite {
+    pub alert_opened: Option<Alert>,
+    pub alert_resolved: Option<Alert>,
+}
+
+// One reading's entire write side: asset state, the time-series reading, and
+// whatever alert-state change the policy decided on. A real implementation
+// runs this as a single transaction, so a mid-write failure (and the retry
+// it triggers) can never leave a partial commit — e.g. a reading recorded
+// without its alert decision, or recorded twice.
+pub trait IngestRepository: Send + Sync {
+    fn ingest(
         &self,
         reading: &Reading,
-    ) -> impl Future<Output = Result<(), PortError>> + Send;
-}
-
-pub trait AlertRepository: Send + Sync {
-    fn open_alert(
-        &self,
-        decision: &AlertDecision,
-    ) -> impl Future<Output = Result<Alert, PortError>> + Send;
-
-    // Most recently opened open alert for the asset, if any. Used to find
-    // what to resolve when a reading comes back within normal range.
-    fn find_open_alert(
-        &self,
-        asset_id: &str,
-    ) -> impl Future<Output = Result<Option<Alert>, PortError>> + Send;
-
-    fn resolve_alert(
-        &self,
-        alert_id: Uuid,
-        resolved_at: DateTime<Utc>,
-        resolution_note: &str,
-        resolved_by: &str,
-    ) -> impl Future<Output = Result<Alert, PortError>> + Send;
+        outcome: PolicyOutcome,
+    ) -> impl Future<Output = Result<IngestWrite, PortError>> + Send;
 }
 
 // The ontology's business-event stream (see docs/ontology.md's Event

@@ -9,10 +9,7 @@ use crate::{
             consumer::{self, ConsumerConfig},
             producer::{KafkaAlertEventPublisher, ProducerConfig},
         },
-        postgres::{
-            PostgresAlertRepository, PostgresAssetRepository, PostgresDeadLetterSink,
-            PostgresReadingsRepository,
-        },
+        postgres::{PostgresDeadLetterSink, PostgresIngestRepository},
     },
     config::Config,
 };
@@ -25,17 +22,15 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .connect(&cfg.database_url)
         .await?;
 
-    let assets = PostgresAssetRepository::new(pool.clone());
-    let readings = PostgresReadingsRepository::new(pool.clone());
-    let alerts = PostgresAlertRepository::new(pool.clone());
-    let dead_letters = PostgresDeadLetterSink::new(pool.clone());
+    let store = PostgresIngestRepository::new(pool.clone());
+    let dead_letters = PostgresDeadLetterSink::new(pool);
     let events = KafkaAlertEventPublisher::connect(ProducerConfig {
         brokers: cfg.kafka_brokers.clone(),
         alert_opened_topic: cfg.alert_opened_topic,
         alert_resolved_topic: cfg.alert_resolved_topic,
     })
     .await?;
-    let mut ingest = IngestReading::new(&assets, &readings, &alerts, &events);
+    let mut ingest = IngestReading::new(&store, &events);
     ingest.policy = cfg.threshold_policy;
 
     consumer::run(

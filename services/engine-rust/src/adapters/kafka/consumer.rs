@@ -13,8 +13,7 @@ use crate::{
     actions::ingest_reading::IngestReading,
     domain::asset::Reading,
     ports::{
-        AlertEvents, AlertRepository, AssetRepository, DeadLetter, DeadLetterSink, DeadLetterStage,
-        PortError, ReadingsSink,
+        AlertEvents, DeadLetter, DeadLetterSink, DeadLetterStage, IngestRepository, PortError,
     },
     telemetry::decode::decode_metric_payload,
 };
@@ -23,16 +22,9 @@ use crate::{
 pub struct ConsumerConfig {
     pub brokers: Vec<String>,
     pub topic: String,
-    // Real consumer-group membership: librdkafka handles partition
-    // assignment and rebalancing across however many replicas share this
-    // group ID, instead of this process reading a hardcoded partition.
     pub group_id: String,
 }
 
-// Bounded and short: this is a live telemetry stream, not a batch job. The
-// goal is smoothing over a brief connection blip, not waiting out a real
-// outage — if Postgres is actually down, no retry budget short of "forever"
-// fixes that, and "forever" would stall every message behind it.
 const MAX_INGEST_ATTEMPTS: u32 = 3;
 
 fn ingest_backoff(attempt: u32) -> Duration {
@@ -65,28 +57,20 @@ impl ConsumerStats {
     }
 }
 
-pub async fn run<A, R, L, E, D>(
+pub async fn run<S, E, D>(
     config: ConsumerConfig,
-    ingest: &IngestReading<'_, A, R, L, E>,
+    ingest: &IngestReading<'_, S, E>,
     dead_letters: &D,
 ) -> Result<(), ConsumerError>
 where
-    A: AssetRepository,
-    R: ReadingsSink,
-    L: AlertRepository,
+    S: IngestRepository,
     E: AlertEvents,
     D: DeadLetterSink,
 {
     let consumer: StreamConsumer = ClientConfig::new()
         .set("bootstrap.servers", config.brokers.join(","))
         .set("group.id", &config.group_id)
-        // Don't skip telemetry already durable in Redpanda: a group with no
-        // committed offset yet starts from the earliest retained record,
-        // not the latest.
         .set("auto.offset.reset", "earliest")
-        // Commit periodically in the background, but only the offsets this
-        // loop has explicitly stored via `store_offset` after a record is
-        // fully handled — never a not-yet-processed one.
         .set("enable.auto.commit", "true")
         .set("auto.commit.interval.ms", "5000")
         .set("enable.auto.offset.store", "false")
@@ -165,14 +149,12 @@ where
 // Retries only PortError::Storage (assumed transient); a data-shape error
 // (PortError::Message) won't be fixed by retrying, so it's returned
 // immediately.
-async fn ingest_with_retry<A, R, L, E>(
-    ingest: &IngestReading<'_, A, R, L, E>,
+async fn ingest_with_retry<S, E>(
+    ingest: &IngestReading<'_, S, E>,
     reading: &Reading,
 ) -> Result<(), PortError>
 where
-    A: AssetRepository,
-    R: ReadingsSink,
-    L: AlertRepository,
+    S: IngestRepository,
     E: AlertEvents,
 {
     for attempt in 1..=MAX_INGEST_ATTEMPTS {
@@ -230,9 +212,129 @@ pub enum ConsumerError {
 
 #[cfg(test)]
 mod tests {
-    use crate::telemetry::decode::DecodeError;
+    use std::sync::atomic::AtomicU32;
+
+    use chrono::Utc;
+
+    use crate::{
+        domain::{
+            alert::Alert,
+            asset::{Asset, AssetState, AssetType, SmartMeterState},
+        },
+        ports::{IngestWrite, PolicyOutcome},
+        telemetry::decode::DecodeError,
+    };
 
     use super::*;
+
+    fn sample_reading() -> Reading {
+        Reading {
+            asset: Asset {
+                asset_id: "met-0101".to_string(),
+                site_id: "ng-kaji-01".to_string(),
+                asset_type: AssetType::SmartMeter,
+                internal_temperature: Some(38.0),
+                last_seen_at: Utc::now(),
+            },
+            observed_at: Utc::now(),
+            state: AssetState::SmartMeter(SmartMeterState::default()),
+        }
+    }
+
+    struct NoopEvents;
+
+    impl AlertEvents for NoopEvents {
+        async fn alert_opened(&self, _alert: &Alert) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        async fn alert_resolved(&self, _alert: &Alert) -> Result<(), PortError> {
+            Ok(())
+        }
+    }
+
+    // Fails with a storage (transient) error on every attempt below
+    // `fail_until`, then succeeds. `fail_until = u32::MAX` never succeeds.
+    #[derive(Default)]
+    struct FlakyStore {
+        attempts: AtomicU32,
+        fail_until: u32,
+    }
+
+    impl IngestRepository for FlakyStore {
+        async fn ingest(
+            &self,
+            _reading: &Reading,
+            _outcome: PolicyOutcome,
+        ) -> Result<IngestWrite, PortError> {
+            let attempt = self.attempts.fetch_add(1, Ordering::Relaxed) + 1;
+            if attempt <= self.fail_until {
+                Err(PortError::storage(std::io::Error::other(
+                    "db connection reset",
+                )))
+            } else {
+                Ok(IngestWrite::default())
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct DataShapeErrorStore {
+        attempts: AtomicU32,
+    }
+
+    impl IngestRepository for DataShapeErrorStore {
+        async fn ingest(
+            &self,
+            _reading: &Reading,
+            _outcome: PolicyOutcome,
+        ) -> Result<IngestWrite, PortError> {
+            self.attempts.fetch_add(1, Ordering::Relaxed);
+            Err(PortError::message("unknown alert severity: bogus"))
+        }
+    }
+
+    #[tokio::test]
+    async fn ingest_with_retry_succeeds_after_a_transient_failure() {
+        let store = FlakyStore {
+            attempts: AtomicU32::new(0),
+            fail_until: 1,
+        };
+        let events = NoopEvents;
+        let ingest = IngestReading::new(&store, &events);
+
+        let result = ingest_with_retry(&ingest, &sample_reading()).await;
+
+        assert!(result.is_ok());
+        assert_eq!(store.attempts.load(Ordering::Relaxed), 2);
+    }
+
+    #[tokio::test]
+    async fn ingest_with_retry_gives_up_after_max_attempts_on_persistent_storage_errors() {
+        let store = FlakyStore {
+            attempts: AtomicU32::new(0),
+            fail_until: u32::MAX,
+        };
+        let events = NoopEvents;
+        let ingest = IngestReading::new(&store, &events);
+
+        let result = ingest_with_retry(&ingest, &sample_reading()).await;
+
+        assert!(result.is_err());
+        assert_eq!(store.attempts.load(Ordering::Relaxed), MAX_INGEST_ATTEMPTS);
+    }
+
+    #[tokio::test]
+    async fn ingest_with_retry_does_not_retry_data_shape_errors() {
+        let store = DataShapeErrorStore::default();
+        let events = NoopEvents;
+        let ingest = IngestReading::new(&store, &events);
+
+        let result = ingest_with_retry(&ingest, &sample_reading()).await;
+
+        assert!(result.is_err());
+        assert_eq!(store.attempts.load(Ordering::Relaxed), 1);
+    }
 
     #[test]
     fn build_dead_letter_preserves_original_payload_partition_and_offset() {
