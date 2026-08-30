@@ -42,6 +42,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         ConsumerConfig {
             brokers: cfg.kafka_brokers,
             topic: cfg.telemetry_topic,
+            group_id: cfg.telemetry_group_id,
         },
         &ingest,
         &dead_letters,

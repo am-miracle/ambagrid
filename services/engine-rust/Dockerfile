@@ -4,6 +4,8 @@ FROM rust:1.98-slim-bookworm AS build
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     protobuf-compiler \
+    pkg-config \
+    librdkafka-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -17,6 +19,7 @@ FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    librdkafka1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

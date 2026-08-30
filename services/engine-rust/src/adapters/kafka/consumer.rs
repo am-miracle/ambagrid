@@ -1,16 +1,12 @@
 use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
 
-use futures_util::StreamExt;
-use rskafka::client::{
-    ClientBuilder,
-    consumer::{StartOffset, StreamConsumerBuilder},
-    partition::UnknownTopicHandling,
+use rdkafka::{
+    ClientConfig, Message,
+    consumer::{Consumer, StreamConsumer},
+    error::KafkaError,
 };
 
 use crate::{
@@ -27,6 +23,10 @@ use crate::{
 pub struct ConsumerConfig {
     pub brokers: Vec<String>,
     pub topic: String,
+    // Real consumer-group membership: librdkafka handles partition
+    // assignment and rebalancing across however many replicas share this
+    // group ID, instead of this process reading a hardcoded partition.
+    pub group_id: String,
 }
 
 // Bounded and short: this is a live telemetry stream, not a batch job. The
@@ -44,6 +44,7 @@ struct ConsumerStats {
     decode_failed: AtomicU64,
     ingest_failed: AtomicU64,
     dlq_failed: AtomicU64,
+    store_offset_failed: AtomicU64,
 }
 
 impl ConsumerStats {
@@ -58,12 +59,12 @@ impl ConsumerStats {
     fn add_dlq_failed(&self) -> u64 {
         self.dlq_failed.fetch_add(1, Ordering::Relaxed) + 1
     }
+
+    fn add_store_offset_failed(&self) -> u64 {
+        self.store_offset_failed.fetch_add(1, Ordering::Relaxed) + 1
+    }
 }
 
-// Single-partition assumption: rskafka has no consumer-group/rebalance
-// protocol, so this reads partition 0 only. Fine for one engine replica;
-// running more than one against a multi-partition topic needs a real
-// partition-assignment scheme first.
 pub async fn run<A, R, L, E, D>(
     config: ConsumerConfig,
     ingest: &IngestReading<'_, A, R, L, E>,
@@ -76,72 +77,89 @@ where
     E: AlertEvents,
     D: DeadLetterSink,
 {
-    let topic = config.topic.clone();
-    let client = ClientBuilder::new(config.brokers)
-        .build()
-        .await
+    let consumer: StreamConsumer = ClientConfig::new()
+        .set("bootstrap.servers", config.brokers.join(","))
+        .set("group.id", &config.group_id)
+        // Don't skip telemetry already durable in Redpanda: a group with no
+        // committed offset yet starts from the earliest retained record,
+        // not the latest.
+        .set("auto.offset.reset", "earliest")
+        // Commit periodically in the background, but only the offsets this
+        // loop has explicitly stored via `store_offset` after a record is
+        // fully handled — never a not-yet-processed one.
+        .set("enable.auto.commit", "true")
+        .set("auto.commit.interval.ms", "5000")
+        .set("enable.auto.offset.store", "false")
+        .create()
         .map_err(ConsumerError::Connect)?;
 
-    let partition_client = Arc::new(
-        client
-            .partition_client(config.topic, 0, UnknownTopicHandling::Retry)
-            .await
-            .map_err(ConsumerError::Connect)?,
-    );
+    consumer
+        .subscribe(&[config.topic.as_str()])
+        .map_err(ConsumerError::Connect)?;
 
-    // Latest: process new readings only. Restarting the engine does not
-    // replay history, since there is nowhere yet to persist a resume offset.
-    let mut stream = StreamConsumerBuilder::new(partition_client, StartOffset::Latest).build();
     let stats = ConsumerStats::default();
 
-    while let Some(next) = stream.next().await {
-        let (record_and_offset, _high_watermark) = next.map_err(ConsumerError::Consume)?;
+    loop {
+        let message = consumer.recv().await.map_err(ConsumerError::Consume)?;
+        let topic = message.topic().to_string();
+        let partition = message.partition();
+        let offset = message.offset();
 
-        let Some(bytes) = record_and_offset.record.value else {
-            continue;
-        };
+        if let Some(bytes) = message.payload().map(<[u8]>::to_vec) {
+            match decode_metric_payload(&bytes) {
+                Ok(reading) => {
+                    if let Err(err) = ingest_with_retry(ingest, &reading).await {
+                        tracing::error!(
+                            error = %err,
+                            ingest_failed = stats.add_ingest_failed(),
+                            "failed to ingest telemetry reading after retries"
+                        );
 
-        let reading = match decode_metric_payload(&bytes) {
-            Ok(reading) => reading,
-            Err(err) => {
-                tracing::warn!(
-                    error = %err,
-                    decode_failed = stats.add_decode_failed(),
-                    "parking malformed telemetry message"
-                );
+                        let entry = build_dead_letter(
+                            &topic,
+                            partition,
+                            offset,
+                            bytes,
+                            DeadLetterStage::Ingest,
+                            &err,
+                        );
+                        park(&stats, dead_letters, &entry).await;
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        error = %err,
+                        decode_failed = stats.add_decode_failed(),
+                        "parking malformed telemetry message"
+                    );
 
-                let entry = build_dead_letter(
-                    &topic,
-                    record_and_offset.offset,
-                    bytes,
-                    DeadLetterStage::Decode,
-                    &err,
-                );
-                park(&stats, dead_letters, &entry).await;
-
-                continue;
+                    let entry = build_dead_letter(
+                        &topic,
+                        partition,
+                        offset,
+                        bytes,
+                        DeadLetterStage::Decode,
+                        &err,
+                    );
+                    park(&stats, dead_letters, &entry).await;
+                }
             }
-        };
+        }
 
-        if let Err(err) = ingest_with_retry(ingest, &reading).await {
+        // Stored once the record is fully handled either way (ingested or
+        // dead-lettered), so a message that's permanently unprocessable
+        // doesn't get redelivered forever, and a crash before this point
+        // simply redelivers the record on the next rebalance/restart.
+        if let Err(err) = consumer.store_offset(&topic, partition, offset) {
             tracing::error!(
                 error = %err,
-                ingest_failed = stats.add_ingest_failed(),
-                "failed to ingest telemetry reading after retries"
+                partition,
+                offset,
+                store_offset_failed = stats.add_store_offset_failed(),
+                "failed to store Kafka offset for commit"
             );
-
-            let entry = build_dead_letter(
-                &topic,
-                record_and_offset.offset,
-                bytes,
-                DeadLetterStage::Ingest,
-                &err,
-            );
-            park(&stats, dead_letters, &entry).await;
         }
     }
-
-    Ok(())
 }
 
 // Retries only PortError::Storage (assumed transient); a data-shape error
@@ -184,9 +202,9 @@ async fn park(stats: &ConsumerStats, dead_letters: &impl DeadLetterSink, entry: 
     }
 }
 
-// Partition is always 0: see the single-partition assumption on `run`.
 fn build_dead_letter(
     topic: &str,
+    partition: i32,
     offset: i64,
     payload: Vec<u8>,
     stage: DeadLetterStage,
@@ -194,7 +212,7 @@ fn build_dead_letter(
 ) -> DeadLetter {
     DeadLetter {
         kafka_topic: topic.to_string(),
-        kafka_partition: 0,
+        kafka_partition: partition,
         kafka_offset: offset,
         payload,
         stage,
@@ -205,9 +223,9 @@ fn build_dead_letter(
 #[derive(Debug, thiserror::Error)]
 pub enum ConsumerError {
     #[error("failed to connect to Kafka: {0}")]
-    Connect(#[source] rskafka::client::error::Error),
+    Connect(#[source] KafkaError),
     #[error("failed to consume from Kafka: {0}")]
-    Consume(#[source] rskafka::client::error::Error),
+    Consume(#[source] KafkaError),
 }
 
 #[cfg(test)]
@@ -217,12 +235,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn build_dead_letter_preserves_original_payload_and_offset() {
+    fn build_dead_letter_preserves_original_payload_partition_and_offset() {
         let payload = b"not a valid metric payload".to_vec();
         let error = DecodeError::MissingDeviceId;
 
         let entry = build_dead_letter(
             "telemetry.ingested",
+            2,
             42,
             payload.clone(),
             DeadLetterStage::Decode,
@@ -230,7 +249,7 @@ mod tests {
         );
 
         assert_eq!(entry.kafka_topic, "telemetry.ingested");
-        assert_eq!(entry.kafka_partition, 0);
+        assert_eq!(entry.kafka_partition, 2);
         assert_eq!(entry.kafka_offset, 42);
         assert_eq!(entry.payload, payload);
         assert_eq!(entry.stage, DeadLetterStage::Decode);
@@ -244,6 +263,7 @@ mod tests {
 
         let entry = build_dead_letter(
             "telemetry.ingested",
+            0,
             7,
             payload.clone(),
             DeadLetterStage::Ingest,

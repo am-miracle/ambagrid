@@ -5,6 +5,7 @@ pub struct Config {
     pub database_url: String,
     pub kafka_brokers: Vec<String>,
     pub telemetry_topic: String,
+    pub telemetry_group_id: String,
     pub alert_opened_topic: String,
     pub alert_resolved_topic: String,
     pub threshold_policy: ThresholdPolicy,
@@ -19,6 +20,7 @@ impl Config {
         let database_url = env_string(&lookup, "DATABASE_URL", None)?;
         let kafka_brokers = env_csv(&lookup, "KAFKA_BROKERS", "localhost:9092");
         let telemetry_topic = env_string(&lookup, "TELEMETRY_TOPIC", Some("telemetry.ingested"))?;
+        let telemetry_group_id = env_string(&lookup, "TELEMETRY_GROUP_ID", Some("engine-rust"))?;
         let alert_opened_topic = env_string(&lookup, "ALERT_OPENED_TOPIC", Some("alert.opened"))?;
         let alert_resolved_topic =
             env_string(&lookup, "ALERT_RESOLVED_TOPIC", Some("alert.resolved"))?;
@@ -57,6 +59,7 @@ impl Config {
             database_url,
             kafka_brokers,
             telemetry_topic,
+            telemetry_group_id,
             alert_opened_topic,
             alert_resolved_topic,
             threshold_policy,
@@ -194,6 +197,7 @@ mod tests {
 
         assert_eq!(cfg.kafka_brokers, vec!["localhost:9092"]);
         assert_eq!(cfg.telemetry_topic, "telemetry.ingested");
+        assert_eq!(cfg.telemetry_group_id, "engine-rust");
         assert_eq!(cfg.alert_opened_topic, "alert.opened");
         assert_eq!(cfg.alert_resolved_topic, "alert.resolved");
         assert_eq!(cfg.threshold_policy, ThresholdPolicy::default());
