@@ -35,6 +35,7 @@ impl PortError {
 pub enum PolicyOutcome {
     Open(AlertDecision),
     Resolve {
+        kind: String,
         resolution_note: String,
         resolved_by: String,
     },

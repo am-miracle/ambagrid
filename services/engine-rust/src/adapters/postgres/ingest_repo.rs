@@ -39,7 +39,7 @@ impl IngestRepository for PostgresIngestRepository {
 
         let write = match outcome {
             PolicyOutcome::Open(decision) => {
-                let alert_opened = if find_open_alert(&mut tx, &decision.asset_id)
+                let alert_opened = if find_open_alert(&mut tx, &decision.asset_id, &decision.kind)
                     .await?
                     .is_some()
                 {
@@ -53,23 +53,24 @@ impl IngestRepository for PostgresIngestRepository {
                 }
             }
             PolicyOutcome::Resolve {
+                kind,
                 resolution_note,
                 resolved_by,
             } => {
-                let alert_resolved = match find_open_alert(&mut tx, &reading.asset.asset_id).await?
-                {
-                    Some(open) => Some(
-                        resolve_alert(
-                            &mut tx,
-                            open.alert_id,
-                            reading.observed_at,
-                            &resolution_note,
-                            &resolved_by,
-                        )
-                        .await?,
-                    ),
-                    None => None,
-                };
+                let alert_resolved =
+                    match find_open_alert(&mut tx, &reading.asset.asset_id, &kind).await? {
+                        Some(open) => Some(
+                            resolve_alert(
+                                &mut tx,
+                                open.alert_id,
+                                reading.observed_at,
+                                &resolution_note,
+                                &resolved_by,
+                            )
+                            .await?,
+                        ),
+                        None => None,
+                    };
                 IngestWrite {
                     alert_opened: None,
                     alert_resolved,
@@ -258,15 +259,16 @@ async fn open_alert(
     let row = query(
         r#"
         INSERT INTO alerts (
-            asset_id, site_id, severity, status, reason, opened_at
+            asset_id, site_id, kind, severity, status, reason, opened_at
         )
-        VALUES ($1, $2, $3, 'open', $4, $5)
-        RETURNING alert_id, asset_id, site_id, severity, status, reason, opened_at,
+        VALUES ($1, $2, $3, $4, 'open', $5, $6)
+        RETURNING alert_id, asset_id, site_id, kind, severity, status, reason, opened_at,
             resolved_at, resolution_note, resolved_by
         "#,
     )
     .bind(&decision.asset_id)
     .bind(&decision.site_id)
+    .bind(&decision.kind)
     .bind(decision.severity.as_str())
     .bind(&decision.reason)
     .bind(decision.opened_at)
@@ -277,21 +279,26 @@ async fn open_alert(
     row_to_alert(row)
 }
 
+// Scoped by kind, not just asset_id: an asset can have multiple concurrent
+// open alerts for distinct problems (e.g. overheating and low battery), and
+// a recovery reading for one kind must not resolve another.
 async fn find_open_alert(
     tx: &mut Transaction<'_, Postgres>,
     asset_id: &str,
+    kind: &str,
 ) -> Result<Option<Alert>, PortError> {
     let row = query(
         r#"
-        SELECT alert_id, asset_id, site_id, severity, status, reason, opened_at,
+        SELECT alert_id, asset_id, site_id, kind, severity, status, reason, opened_at,
             resolved_at, resolution_note, resolved_by
         FROM alerts
-        WHERE asset_id = $1 AND status = 'open'
+        WHERE asset_id = $1 AND kind = $2 AND status = 'open'
         ORDER BY opened_at DESC
         LIMIT 1
         "#,
     )
     .bind(asset_id)
+    .bind(kind)
     .fetch_optional(&mut **tx)
     .await
     .map_err(PortError::storage)?;
@@ -311,7 +318,7 @@ async fn resolve_alert(
         UPDATE alerts
         SET status = 'resolved', resolved_at = $2, resolution_note = $3, resolved_by = $4
         WHERE alert_id = $1 AND status = 'open'
-        RETURNING alert_id, asset_id, site_id, severity, status, reason, opened_at,
+        RETURNING alert_id, asset_id, site_id, kind, severity, status, reason, opened_at,
             resolved_at, resolution_note, resolved_by
         "#,
     )
@@ -332,6 +339,7 @@ fn row_to_alert(row: PgRow) -> Result<Alert, PortError> {
         alert_id: row.get::<Uuid, _>("alert_id"),
         asset_id: row.get("asset_id"),
         site_id: row.get("site_id"),
+        kind: row.get("kind"),
         severity: parse_severity(row.get::<String, _>("severity").as_str())?,
         status: parse_status(row.get::<String, _>("status").as_str())?,
         reason: row.get("reason"),

@@ -19,6 +19,9 @@ message AlertOpened {
   Severity severity = 4;
   string reason = 5;
   int64 opened_at_utc = 6;
+  // Stable condition identifier (e.g. "internal_temperature"), distinct
+  // from `reason`'s human-readable, per-reading text.
+  string kind = 7;
 }
 
 // Emitted when an open alert is resolved, whether automatically (a reading
@@ -33,4 +36,5 @@ message AlertResolved {
   int64 resolved_at_utc = 7;
   string resolution_note = 8;
   string resolved_by = 9;
+  string kind = 10;
 }

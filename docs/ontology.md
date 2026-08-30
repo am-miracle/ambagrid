@@ -107,6 +107,7 @@ Useful properties:
 - `alert_id`
 - `site_id`
 - `asset_id`
+- `kind`
 - `severity`
 - `status`
 - `reason`
@@ -324,9 +325,16 @@ Inputs:
 
 - `site_id`
 - `asset_id`
+- `kind`
 - `severity`
 - `reason`
 - `source_event_id`
+
+`kind` identifies the problem (e.g. `internal_temperature`), distinct from
+`reason`'s human-readable, per-reading text. An asset can have at most one
+open alert per kind, so distinct problems on the same asset (e.g.
+overheating and low battery) get independent alerts instead of one
+colliding with the other.
 
 Effects:
 

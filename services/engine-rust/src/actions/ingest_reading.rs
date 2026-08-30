@@ -1,5 +1,9 @@
 use crate::{
-    domain::{alert::Alert, asset::Reading, rules::ThresholdPolicy},
+    domain::{
+        alert::Alert,
+        asset::Reading,
+        rules::{INTERNAL_TEMPERATURE_ALERT_KIND, ThresholdPolicy},
+    },
     ports::{AlertEvents, IngestRepository, PolicyOutcome, PortError},
 };
 
@@ -36,6 +40,7 @@ where
             Some(decision) => PolicyOutcome::Open(decision),
             None => match self.policy.recovered(&reading) {
                 Some(resolution_note) => PolicyOutcome::Resolve {
+                    kind: INTERNAL_TEMPERATURE_ALERT_KIND.to_string(),
                     resolution_note,
                     resolved_by: RESOLVED_BY_SYSTEM.to_string(),
                 },
@@ -82,7 +87,7 @@ mod tests {
     use chrono::Utc;
     use uuid::Uuid;
 
-    use crate::domain::alert::{Alert, AlertStatus};
+    use crate::domain::alert::{Alert, AlertDecision, AlertStatus, Severity};
     use crate::{
         domain::asset::{Asset, AssetState, AssetType, Reading, SmartMeterState},
         ports::IngestWrite,
@@ -119,7 +124,9 @@ mod tests {
                 PolicyOutcome::Open(decision) => {
                     let mut alerts = self.alerts.lock().unwrap();
                     let already_open = alerts.iter().any(|alert| {
-                        alert.asset_id == decision.asset_id && alert.status == AlertStatus::Open
+                        alert.asset_id == decision.asset_id
+                            && alert.kind == decision.kind
+                            && alert.status == AlertStatus::Open
                     });
 
                     let alert_opened = if already_open {
@@ -129,6 +136,7 @@ mod tests {
                             alert_id: Uuid::new_v4(),
                             asset_id: decision.asset_id.clone(),
                             site_id: decision.site_id.clone(),
+                            kind: decision.kind.clone(),
                             severity: decision.severity,
                             status: AlertStatus::Open,
                             reason: decision.reason.clone(),
@@ -147,12 +155,14 @@ mod tests {
                     }
                 }
                 PolicyOutcome::Resolve {
+                    kind,
                     resolution_note,
                     resolved_by,
                 } => {
                     let mut alerts = self.alerts.lock().unwrap();
                     let open_alert = alerts.iter_mut().find(|alert| {
                         alert.asset_id == reading.asset.asset_id
+                            && alert.kind == kind
                             && alert.status == AlertStatus::Open
                     });
 
@@ -264,6 +274,97 @@ mod tests {
         );
         assert_eq!(store.alerts.lock().unwrap().len(), 1);
         assert_eq!(events.opened.lock().unwrap().len(), 1);
+    }
+
+    fn sample_decision(kind: &str) -> AlertDecision {
+        AlertDecision {
+            asset_id: "met-0101".to_string(),
+            site_id: "ng-kaji-01".to_string(),
+            kind: kind.to_string(),
+            severity: Severity::Critical,
+            reason: format!("{kind}_high"),
+            opened_at: Utc::now(),
+            source_event_id: None,
+        }
+    }
+
+    fn sample_reading() -> Reading {
+        Reading {
+            asset: Asset {
+                asset_id: "met-0101".to_string(),
+                site_id: "ng-kaji-01".to_string(),
+                asset_type: AssetType::SmartMeter,
+                internal_temperature: Some(75.0),
+                last_seen_at: Utc::now(),
+            },
+            observed_at: Utc::now(),
+            state: AssetState::SmartMeter(SmartMeterState::default()),
+        }
+    }
+
+    // Regression test for a bug where duplicate-suppression and resolution
+    // were both scoped only by asset_id: a second, unrelated problem on the
+    // same asset would be silently swallowed by the first alert's presence,
+    // and a recovery reading for one condition could resolve an alert for a
+    // completely different one.
+    #[tokio::test]
+    async fn distinct_alert_kinds_on_the_same_asset_are_independent() {
+        let store = FakeIngestRepository::default();
+        let reading = sample_reading();
+
+        let temperature_write = store
+            .ingest(
+                &reading,
+                PolicyOutcome::Open(sample_decision("internal_temperature")),
+            )
+            .await
+            .unwrap();
+        let battery_write = store
+            .ingest(
+                &reading,
+                PolicyOutcome::Open(sample_decision("battery_soc_low")),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            temperature_write.alert_opened.is_some(),
+            "first alert kind should open"
+        );
+        assert!(
+            battery_write.alert_opened.is_some(),
+            "a different alert kind on the same asset should not be suppressed \
+             by the first one already being open"
+        );
+        assert_eq!(store.alerts.lock().unwrap().len(), 2);
+
+        let resolve_write = store
+            .ingest(
+                &reading,
+                PolicyOutcome::Resolve {
+                    kind: "internal_temperature".to_string(),
+                    resolution_note: "internal_temperature_recovered".to_string(),
+                    resolved_by: RESOLVED_BY_SYSTEM.to_string(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let resolved = resolve_write
+            .alert_resolved
+            .expect("the temperature alert should resolve");
+        assert_eq!(resolved.kind, "internal_temperature");
+
+        let alerts = store.alerts.lock().unwrap();
+        let battery_alert = alerts
+            .iter()
+            .find(|alert| alert.kind == "battery_soc_low")
+            .unwrap();
+        assert_eq!(
+            battery_alert.status,
+            AlertStatus::Open,
+            "resolving the temperature alert must not touch the unrelated battery alert"
+        );
     }
 
     #[tokio::test]

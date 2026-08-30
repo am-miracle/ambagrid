@@ -98,6 +98,7 @@ fn alert_opened_event(alert: &Alert) -> proto::AlertOpened {
         severity: to_proto_severity(alert.severity) as i32,
         reason: alert.reason.clone(),
         opened_at_utc: alert.opened_at.timestamp(),
+        kind: alert.kind.clone(),
     }
 }
 
@@ -116,6 +117,7 @@ fn alert_resolved_event(alert: &Alert) -> proto::AlertResolved {
         resolved_at_utc: alert.resolved_at.unwrap_or_else(Utc::now).timestamp(),
         resolution_note: alert.resolution_note.clone().unwrap_or_default(),
         resolved_by: alert.resolved_by.clone().unwrap_or_default(),
+        kind: alert.kind.clone(),
     }
 }
 
@@ -147,6 +149,7 @@ mod tests {
             alert_id: Uuid::new_v4(),
             asset_id: "met-0101".to_string(),
             site_id: "ng-kaji-01".to_string(),
+            kind: "internal_temperature".to_string(),
             severity: Severity::Critical,
             status: AlertStatus::Open,
             reason: "internal_temperature_high:72.4C>=threshold:70.0C".to_string(),
@@ -178,6 +181,7 @@ mod tests {
         assert_eq!(event.severity, proto::Severity::Critical as i32);
         assert_eq!(event.reason, alert.reason);
         assert_eq!(event.opened_at_utc, alert.opened_at.timestamp());
+        assert_eq!(event.kind, "internal_temperature");
     }
 
     #[tokio::test]

@@ -3,6 +3,8 @@ use crate::domain::{
     asset::{AssetType, Reading},
 };
 
+pub const INTERNAL_TEMPERATURE_ALERT_KIND: &str = "internal_temperature";
+
 // Per-asset-type critical ceilings. These are rough values pulled from public
 // standards/datasheets, not AmbaGrid's actual deployed hardware specs — swap
 // in real numbers once hardware/product confirms them:
@@ -51,6 +53,7 @@ impl ThresholdPolicy {
         Some(AlertDecision {
             asset_id: reading.asset.asset_id.clone(),
             site_id: reading.asset.site_id.clone(),
+            kind: INTERNAL_TEMPERATURE_ALERT_KIND.to_string(),
             severity: Severity::Critical,
             reason: format!(
                 "internal_temperature_high:{temperature:.1}C>=threshold:{threshold:.1}C"

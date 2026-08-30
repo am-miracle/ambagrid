@@ -29,6 +29,7 @@ pub struct Alert {
     pub alert_id: Uuid,
     pub asset_id: String,
     pub site_id: String,
+    pub kind: String,
     pub severity: Severity,
     pub status: AlertStatus,
     pub reason: String,
@@ -42,6 +43,7 @@ pub struct Alert {
 pub struct AlertDecision {
     pub asset_id: String,
     pub site_id: String,
+    pub kind: String,
     pub severity: Severity,
     pub reason: String,
     pub opened_at: DateTime<Utc>,
