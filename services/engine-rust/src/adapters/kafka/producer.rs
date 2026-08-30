@@ -1,6 +1,5 @@
 use std::{collections::BTreeMap, future::Future};
 
-use chrono::Utc;
 use prost::Message;
 use rdkafka::{
     ClientConfig,
@@ -120,7 +119,7 @@ impl<S: RecordSink> AlertEvents for KafkaAlertEventPublisher<S> {
             .send(kafka_record(
                 &self.alert_resolved_topic,
                 None,
-                alert_resolved_event(alert).encode_to_vec(),
+                alert_resolved_event(alert)?.encode_to_vec(),
                 BTreeMap::new(),
             ))
             .await
@@ -201,23 +200,26 @@ fn alert_opened_event(alert: &Alert) -> proto::AlertOpened {
     }
 }
 
-// `resolved_at` is expected to always be set on a resolved alert (the
-// Postgres schema enforces it), but the domain type doesn't guarantee that
-// statically — falling back to "now" keeps a malformed `Alert` from
-// producing a garbage timestamp on the wire.
-fn alert_resolved_event(alert: &Alert) -> proto::AlertResolved {
-    proto::AlertResolved {
+fn alert_resolved_event(alert: &Alert) -> Result<proto::AlertResolved, PortError> {
+    let resolved_at = alert.resolved_at.ok_or_else(|| {
+        PortError::message(format!(
+            "resolved alert {} is missing resolved_at",
+            alert.alert_id
+        ))
+    })?;
+
+    Ok(proto::AlertResolved {
         alert_id: alert.alert_id.to_string(),
         asset_id: alert.asset_id.clone(),
         site_id: alert.site_id.clone(),
         severity: to_proto_severity(alert.severity) as i32,
         reason: alert.reason.clone(),
         opened_at_utc: alert.opened_at.timestamp(),
-        resolved_at_utc: alert.resolved_at.unwrap_or_else(Utc::now).timestamp(),
+        resolved_at_utc: resolved_at.timestamp(),
         resolution_note: alert.resolution_note.clone().unwrap_or_default(),
         resolved_by: alert.resolved_by.clone().unwrap_or_default(),
         kind: alert.kind.as_str().to_string(),
-    }
+    })
 }
 
 #[cfg(test)]
@@ -371,18 +373,19 @@ mod tests {
     }
 
     #[test]
-    fn alert_resolved_event_falls_back_to_now_when_resolved_at_is_missing() {
+    fn alert_resolved_event_rejects_missing_resolved_at() {
         let alert = Alert {
             status: AlertStatus::Resolved,
             resolved_at: None,
             ..open_alert()
         };
 
-        let before = Utc::now().timestamp();
-        let event = alert_resolved_event(&alert);
-        let after = Utc::now().timestamp();
+        let err = alert_resolved_event(&alert).unwrap_err();
 
-        assert!((before..=after).contains(&event.resolved_at_utc));
+        assert_eq!(
+            err.to_string(),
+            format!("resolved alert {} is missing resolved_at", alert.alert_id)
+        );
     }
 
     #[test]
@@ -394,7 +397,7 @@ mod tests {
             ..open_alert()
         };
 
-        let event = alert_resolved_event(&alert);
+        let event = alert_resolved_event(&alert).unwrap();
 
         assert_eq!(event.resolved_at_utc, resolved_at.timestamp());
     }
