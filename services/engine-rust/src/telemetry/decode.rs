@@ -18,6 +18,8 @@ pub enum DecodeError {
     MissingDeviceId,
     #[error("telemetry site_id must not be empty")]
     MissingSiteId,
+    #[error("telemetry metrics must be set for a smart meter payload")]
+    MissingMetrics,
     #[error("invalid telemetry timestamp_utc: {0}")]
     InvalidTimestamp(i64),
     #[error("telemetry metric {0} must be finite")]
@@ -40,15 +42,15 @@ pub fn reading_from_payload(payload: MetricPayload) -> Result<Reading, DecodeErr
 
     let state = match asset_type {
         AssetType::SmartMeter => {
-            let metrics = payload.metrics.unwrap_or_default();
+            let metrics = payload.metrics.ok_or(DecodeError::MissingMetrics)?;
             AssetState::SmartMeter(SmartMeterState {
                 reported_household_id: optional_string(payload.household_id),
                 relay_closed: Some(payload.relay_closed),
-                voltage: finite_f32("voltage", metrics.voltage)?,
-                current: finite_f32("current", metrics.current)?,
-                active_power: finite_f32("active_power", metrics.active_power)?,
-                frequency: finite_f32("frequency", metrics.frequency)?,
-                total_kwh: finite_f64("total_kwh", metrics.total_kwh)?,
+                voltage: finite_optional_f32("voltage", metrics.voltage)?,
+                current: finite_optional_f32("current", metrics.current)?,
+                active_power: finite_optional_f32("active_power", metrics.active_power)?,
+                frequency: finite_optional_f32("frequency", metrics.frequency)?,
+                total_kwh: finite_optional_f64("total_kwh", metrics.total_kwh)?,
             })
         }
         AssetType::BatteryBms => AssetState::BatteryBms(BatteryBmsState {
@@ -111,6 +113,22 @@ fn finite_f64(name: &'static str, value: f64) -> Result<Option<f64>, DecodeError
     }
 }
 
+// A meter not reporting this field (`None`) is left as-is; a reported value
+// still has to be finite.
+fn finite_optional_f32(name: &'static str, value: Option<f32>) -> Result<Option<f32>, DecodeError> {
+    value
+        .map(|value| finite_f32(name, value))
+        .transpose()
+        .map(Option::flatten)
+}
+
+fn finite_optional_f64(name: &'static str, value: Option<f64>) -> Result<Option<f64>, DecodeError> {
+    value
+        .map(|value| finite_f64(name, value))
+        .transpose()
+        .map(Option::flatten)
+}
+
 #[cfg(test)]
 mod tests {
     use prost::Message;
@@ -131,11 +149,11 @@ mod tests {
             site_id: "ng-kaji-01".to_string(),
             household_id: "hh-009".to_string(),
             metrics: Some(ElectricalMetrics {
-                voltage: 231.0,
-                current: 4.2,
-                active_power: 0.91,
-                frequency: 50.0,
-                total_kwh: 103.5,
+                voltage: Some(231.0),
+                current: Some(4.2),
+                active_power: Some(0.91),
+                frequency: Some(50.0),
+                total_kwh: Some(103.5),
             }),
             internal_temperature: 42.5,
             relay_closed: true,
@@ -151,7 +169,34 @@ mod tests {
         assert_eq!(reading.asset.site_id, "ng-kaji-01");
         assert_eq!(reading.asset.asset_type, AssetType::SmartMeter);
         assert_eq!(reading.asset.internal_temperature, Some(42.5));
-        assert!(matches!(reading.state, AssetState::SmartMeter(_)));
+        let AssetState::SmartMeter(state) = &reading.state else {
+            panic!("expected smart meter state");
+        };
+        assert_eq!(state.voltage, Some(231.0));
+        assert_eq!(state.total_kwh, Some(103.5));
+    }
+
+    #[test]
+    fn leaves_unreported_metric_fields_as_none() {
+        let payload = MetricPayload {
+            device_id: "met-0101".to_string(),
+            device_type: DeviceType::SmartMeter as i32,
+            site_id: "ng-kaji-01".to_string(),
+            metrics: Some(ElectricalMetrics {
+                voltage: Some(231.0),
+                current: None,
+                ..Default::default()
+            }),
+            ..MetricPayload::default()
+        };
+
+        let reading = reading_from_payload(payload).unwrap();
+
+        let AssetState::SmartMeter(state) = reading.state else {
+            panic!("expected smart meter state");
+        };
+        assert_eq!(state.voltage, Some(231.0));
+        assert_eq!(state.current, None);
     }
 
     #[test]
@@ -164,5 +209,19 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err, DecodeError::UnknownDeviceType(0));
+    }
+
+    #[test]
+    fn rejects_smart_meter_payload_missing_metrics() {
+        let err = reading_from_payload(MetricPayload {
+            device_id: "met-0101".to_string(),
+            device_type: DeviceType::SmartMeter as i32,
+            site_id: "ng-kaji-01".to_string(),
+            metrics: None,
+            ..MetricPayload::default()
+        })
+        .unwrap_err();
+
+        assert_eq!(err, DecodeError::MissingMetrics);
     }
 }

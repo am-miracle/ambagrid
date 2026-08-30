@@ -74,14 +74,16 @@ func (DeviceType) EnumDescriptor() ([]byte, []int) {
 	return file_telemetry_proto_rawDescGZIP(), []int{0}
 }
 
-// Sub-message grouping raw electrical metrics
+// Sub-message grouping raw electrical metrics. Fields are explicitly
+// optional so a meter that didn't report a given measurement is
+// distinguishable on the wire from one reporting it as zero.
 type ElectricalMetrics struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Voltage       float32                `protobuf:"fixed32,1,opt,name=voltage,proto3" json:"voltage,omitempty"`                            // Volts (V)
-	Current       float32                `protobuf:"fixed32,2,opt,name=current,proto3" json:"current,omitempty"`                            // Amperes (A)
-	ActivePower   float32                `protobuf:"fixed32,3,opt,name=active_power,json=activePower,proto3" json:"active_power,omitempty"` // Kilowatts (kW)
-	Frequency     float32                `protobuf:"fixed32,4,opt,name=frequency,proto3" json:"frequency,omitempty"`                        // Hertz (Hz)
-	TotalKwh      float64                `protobuf:"fixed64,5,opt,name=total_kwh,json=totalKwh,proto3" json:"total_kwh,omitempty"`          // Cumulative Kilowatt-hours (kWh) for billing
+	Voltage       *float32               `protobuf:"fixed32,1,opt,name=voltage,proto3,oneof" json:"voltage,omitempty"`                            // Volts (V)
+	Current       *float32               `protobuf:"fixed32,2,opt,name=current,proto3,oneof" json:"current,omitempty"`                            // Amperes (A)
+	ActivePower   *float32               `protobuf:"fixed32,3,opt,name=active_power,json=activePower,proto3,oneof" json:"active_power,omitempty"` // Kilowatts (kW)
+	Frequency     *float32               `protobuf:"fixed32,4,opt,name=frequency,proto3,oneof" json:"frequency,omitempty"`                        // Hertz (Hz)
+	TotalKwh      *float64               `protobuf:"fixed64,5,opt,name=total_kwh,json=totalKwh,proto3,oneof" json:"total_kwh,omitempty"`          // Cumulative Kilowatt-hours (kWh) for billing
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -117,36 +119,36 @@ func (*ElectricalMetrics) Descriptor() ([]byte, []int) {
 }
 
 func (x *ElectricalMetrics) GetVoltage() float32 {
-	if x != nil {
-		return x.Voltage
+	if x != nil && x.Voltage != nil {
+		return *x.Voltage
 	}
 	return 0
 }
 
 func (x *ElectricalMetrics) GetCurrent() float32 {
-	if x != nil {
-		return x.Current
+	if x != nil && x.Current != nil {
+		return *x.Current
 	}
 	return 0
 }
 
 func (x *ElectricalMetrics) GetActivePower() float32 {
-	if x != nil {
-		return x.ActivePower
+	if x != nil && x.ActivePower != nil {
+		return *x.ActivePower
 	}
 	return 0
 }
 
 func (x *ElectricalMetrics) GetFrequency() float32 {
-	if x != nil {
-		return x.Frequency
+	if x != nil && x.Frequency != nil {
+		return *x.Frequency
 	}
 	return 0
 }
 
 func (x *ElectricalMetrics) GetTotalKwh() float64 {
-	if x != nil {
-		return x.TotalKwh
+	if x != nil && x.TotalKwh != nil {
+		return *x.TotalKwh
 	}
 	return 0
 }
@@ -276,13 +278,22 @@ var File_telemetry_proto protoreflect.FileDescriptor
 
 const file_telemetry_proto_rawDesc = "" +
 	"\n" +
-	"\x0ftelemetry.proto\x12\x12ambagrid.telemetry\"\xa5\x01\n" +
-	"\x11ElectricalMetrics\x12\x18\n" +
-	"\avoltage\x18\x01 \x01(\x02R\avoltage\x12\x18\n" +
-	"\acurrent\x18\x02 \x01(\x02R\acurrent\x12!\n" +
-	"\factive_power\x18\x03 \x01(\x02R\vactivePower\x12\x1c\n" +
-	"\tfrequency\x18\x04 \x01(\x02R\tfrequency\x12\x1b\n" +
-	"\ttotal_kwh\x18\x05 \x01(\x01R\btotalKwh\"\xb8\x03\n" +
+	"\x0ftelemetry.proto\x12\x12ambagrid.telemetry\"\x83\x02\n" +
+	"\x11ElectricalMetrics\x12\x1d\n" +
+	"\avoltage\x18\x01 \x01(\x02H\x00R\avoltage\x88\x01\x01\x12\x1d\n" +
+	"\acurrent\x18\x02 \x01(\x02H\x01R\acurrent\x88\x01\x01\x12&\n" +
+	"\factive_power\x18\x03 \x01(\x02H\x02R\vactivePower\x88\x01\x01\x12!\n" +
+	"\tfrequency\x18\x04 \x01(\x02H\x03R\tfrequency\x88\x01\x01\x12 \n" +
+	"\ttotal_kwh\x18\x05 \x01(\x01H\x04R\btotalKwh\x88\x01\x01B\n" +
+	"\n" +
+	"\b_voltageB\n" +
+	"\n" +
+	"\b_currentB\x0f\n" +
+	"\r_active_powerB\f\n" +
+	"\n" +
+	"_frequencyB\f\n" +
+	"\n" +
+	"_total_kwh\"\xb8\x03\n" +
 	"\rMetricPayload\x12\x1b\n" +
 	"\tdevice_id\x18\x01 \x01(\tR\bdeviceId\x12?\n" +
 	"\vdevice_type\x18\x02 \x01(\x0e2\x1e.ambagrid.telemetry.DeviceTypeR\n" +
@@ -337,6 +348,7 @@ func file_telemetry_proto_init() {
 	if File_telemetry_proto != nil {
 		return
 	}
+	file_telemetry_proto_msgTypes[0].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

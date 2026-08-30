@@ -12,13 +12,15 @@ enum DeviceType {
   DEVICE_TYPE_SOLAR_INVERTER = 3;
 }
 
-// Sub-message grouping raw electrical metrics
+// Sub-message grouping raw electrical metrics. Fields are explicitly
+// optional so a meter that didn't report a given measurement is
+// distinguishable on the wire from one reporting it as zero.
 message ElectricalMetrics {
-  float voltage = 1;         // Volts (V)
-  float current = 2;         // Amperes (A)
-  float active_power = 3;    // Kilowatts (kW)
-  float frequency = 4;       // Hertz (Hz)
-  double total_kwh = 5;      // Cumulative Kilowatt-hours (kWh) for billing
+  optional float voltage = 1;         // Volts (V)
+  optional float current = 2;         // Amperes (A)
+  optional float active_power = 3;    // Kilowatts (kW)
+  optional float frequency = 4;       // Hertz (Hz)
+  optional double total_kwh = 5;      // Cumulative Kilowatt-hours (kWh) for billing
 }
 
 // The master telemetry packet sent by edge hardware into the pipeline

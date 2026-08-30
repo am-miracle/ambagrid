@@ -55,7 +55,10 @@ Core fields:
 
 The simulator always emits `internal_temperature`, `relay_closed`,
 `battery_soc_pct`, and `solar_irradiance` in JSON, even when their value is
-zero or false. `household_id` is still omitted when empty.
+zero or false. `household_id` is still omitted when empty. Each `metrics.*`
+field may also be omitted individually when a meter doesn't report that
+particular measurement; a missing field is distinct from a reported zero and
+is not coerced into one.
 
 ## Sample MQTT → Kafka Payloads
 
@@ -123,6 +126,26 @@ Both the region and device-type segments are wildcards, so any value is
 accepted at those positions; only the topic structure (5 segments, none
 empty, last segment `telemetry`) is enforced. Use this for a bridge instance
 meant to ingest telemetry across every region and device type at once.
+
+### Smart meter payload missing electrical metrics
+
+MQTT publish (the `metrics` object is absent, not just zeroed):
+
+```text
+topic:   africa-west/ng-kaji-01/smartmeter/met-0101/telemetry
+payload: {"device_id":"met-0101","device_type":"DEVICE_TYPE_SMART_METER",
+          "timestamp_utc":1745500000,"site_id":"ng-kaji-01",
+          "household_id":"house-0101",
+          "internal_temperature":42.1,"relay_closed":true,
+          "battery_soc_pct":0,"solar_irradiance":0}
+```
+
+Result: the Rust engine rejects this at decode time (`DecodeError::MissingMetrics`)
+and parks it on `telemetry.ingested.dlq` instead of persisting a smart meter
+reading with fabricated zero voltage/current/power. A smart meter reading
+with `metrics` present but one field omitted (e.g. `current` missing from
+the `metrics` object) is accepted and decodes that one field to `NULL`,
+distinct from a reported `0`.
 
 ## Adapter Targets
 
