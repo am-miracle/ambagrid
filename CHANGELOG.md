@@ -21,6 +21,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 
 - **engine:** Consolidate ingest writes into one transactional repository
 - **engine:** Tighten alert and asset domain types
+- **engine:** Use rdkafka for Kafka publishing
 
 ### Documentation
 
