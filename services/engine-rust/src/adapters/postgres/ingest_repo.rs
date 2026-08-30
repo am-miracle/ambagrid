@@ -260,11 +260,11 @@ async fn open_alert(
     let row = query(
         r#"
         INSERT INTO alerts (
-            asset_id, site_id, kind, severity, status, reason, opened_at
+            asset_id, site_id, kind, severity, status, reason, opened_at, source_event_id
         )
-        VALUES ($1, $2, $3, $4, 'open', $5, $6)
+        VALUES ($1, $2, $3, $4, 'open', $5, $6, $7)
         RETURNING alert_id, asset_id, site_id, kind, severity, status, reason, opened_at,
-            resolved_at, resolution_note, resolved_by
+            source_event_id, resolved_at, resolution_note, resolved_by
         "#,
     )
     .bind(&decision.asset_id)
@@ -273,6 +273,7 @@ async fn open_alert(
     .bind(decision.severity.as_str())
     .bind(&decision.reason)
     .bind(decision.opened_at)
+    .bind(&decision.source_event_id)
     .fetch_one(&mut **tx)
     .await
     .map_err(PortError::storage)?;
@@ -290,7 +291,7 @@ async fn find_open_alert(
 ) -> Result<Option<Alert>, PortError> {
     let row = query(
         r#"
-        SELECT alert_id, asset_id, site_id, kind, severity, status, reason, opened_at,
+        SELECT alert_id, asset_id, site_id, kind, severity, status, reason, opened_at, source_event_id,
             resolved_at, resolution_note, resolved_by
         FROM alerts
         WHERE asset_id = $1 AND kind = $2 AND status = 'open'
@@ -319,7 +320,7 @@ async fn resolve_alert(
         UPDATE alerts
         SET status = 'resolved', resolved_at = $2, resolution_note = $3, resolved_by = $4
         WHERE alert_id = $1 AND status = 'open'
-        RETURNING alert_id, asset_id, site_id, kind, severity, status, reason, opened_at,
+        RETURNING alert_id, asset_id, site_id, kind, severity, status, reason, opened_at, source_event_id,
             resolved_at, resolution_note, resolved_by
         "#,
     )
@@ -345,6 +346,7 @@ fn row_to_alert(row: PgRow) -> Result<Alert, PortError> {
         status: parse_status(row.get::<String, _>("status").as_str())?,
         reason: row.get("reason"),
         opened_at: row.get::<DateTime<Utc>, _>("opened_at"),
+        source_event_id: row.get("source_event_id"),
         resolved_at: row.get::<Option<DateTime<Utc>>, _>("resolved_at"),
         resolution_note: row.get("resolution_note"),
         resolved_by: row.get("resolved_by"),

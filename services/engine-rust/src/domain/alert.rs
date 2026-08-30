@@ -59,6 +59,7 @@ pub struct Alert {
     pub status: AlertStatus,
     pub reason: String,
     pub opened_at: DateTime<Utc>,
+    pub source_event_id: Option<String>,
     pub resolved_at: Option<DateTime<Utc>>,
     pub resolution_note: Option<String>,
     pub resolved_by: Option<String>,

@@ -99,6 +99,7 @@ fn alert_opened_event(alert: &Alert) -> proto::AlertOpened {
         reason: alert.reason.clone(),
         opened_at_utc: alert.opened_at.timestamp(),
         kind: alert.kind.as_str().to_string(),
+        source_event_id: alert.source_event_id.clone(),
     }
 }
 
@@ -154,6 +155,7 @@ mod tests {
             status: AlertStatus::Open,
             reason: "internal_temperature_high:72.4C>=threshold:70.0C".to_string(),
             opened_at: Utc::now(),
+            source_event_id: Some("telemetry-evt-0101".to_string()),
             resolved_at: None,
             resolution_note: None,
             resolved_by: None,
@@ -182,6 +184,7 @@ mod tests {
         assert_eq!(event.reason, alert.reason);
         assert_eq!(event.opened_at_utc, alert.opened_at.timestamp());
         assert_eq!(event.kind, "internal_temperature");
+        assert_eq!(event.source_event_id.as_deref(), Some("telemetry-evt-0101"));
     }
 
     #[tokio::test]

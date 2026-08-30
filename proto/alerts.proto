@@ -22,6 +22,7 @@ message AlertOpened {
   // Stable condition identifier (e.g. "internal_temperature"), distinct
   // from `reason`'s human-readable, per-reading text.
   string kind = 7;
+  optional string source_event_id = 8;
 }
 
 // Emitted when an open alert is resolved, whether automatically (a reading

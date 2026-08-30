@@ -112,6 +112,7 @@ Useful properties:
 - `status`
 - `reason`
 - `opened_at`
+- `source_event_id`
 - `resolved_at`
 
 **Outage**
@@ -489,9 +490,11 @@ corresponding Postgres write commits.
   "alert_id": "b3b3c2b0-6e2a-4d9a-9c3a-1f2e3d4c5b6a",
   "asset_id": "met-0101",
   "site_id": "ng-kaji-01",
+  "kind": "internal_temperature",
   "severity": "SEVERITY_CRITICAL",
   "reason": "internal_temperature_high:72.4C>=threshold:70.0C",
-  "opened_at_utc": 1745500000
+  "opened_at_utc": 1745500000,
+  "source_event_id": "telemetry-evt-0101"
 }
 ```
 
@@ -502,6 +505,7 @@ corresponding Postgres write commits.
   "alert_id": "b3b3c2b0-6e2a-4d9a-9c3a-1f2e3d4c5b6a",
   "asset_id": "met-0101",
   "site_id": "ng-kaji-01",
+  "kind": "internal_temperature",
   "severity": "SEVERITY_CRITICAL",
   "reason": "internal_temperature_high:72.4C>=threshold:70.0C",
   "opened_at_utc": 1745500000,

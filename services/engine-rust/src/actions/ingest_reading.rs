@@ -141,6 +141,7 @@ mod tests {
                             status: AlertStatus::Open,
                             reason: decision.reason.clone(),
                             opened_at: decision.opened_at,
+                            source_event_id: decision.source_event_id.clone(),
                             resolved_at: None,
                             resolution_note: None,
                             resolved_by: None,
@@ -282,7 +283,7 @@ mod tests {
             severity: Severity::Critical,
             reason: format!("{kind}_high"),
             opened_at: Utc::now(),
-            source_event_id: None,
+            source_event_id: Some(format!("event-{kind}")),
         }
     }
 
@@ -351,6 +352,10 @@ mod tests {
             .alert_resolved
             .expect("the temperature alert should resolve");
         assert_eq!(resolved.kind.as_str(), "internal_temperature");
+        assert_eq!(
+            resolved.source_event_id.as_deref(),
+            Some("event-internal_temperature")
+        );
 
         let alerts = store.alerts.lock().unwrap();
         let battery_alert = alerts
