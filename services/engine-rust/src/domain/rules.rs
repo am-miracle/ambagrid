@@ -35,6 +35,22 @@ impl ThresholdPolicy {
             source_event_id: None,
         })
     }
+
+    // Whether the reading indicates recovery, i.e. an open alert on this
+    // asset should be resolved. Missing temperature is treated as "unknown",
+    // not "recovered", so a dropped sensor reading can't quietly close an
+    // alert.
+    pub fn recovered(&self, reading: &Reading) -> Option<String> {
+        let temperature = reading.asset.internal_temperature?;
+        if temperature >= self.internal_temperature_critical_c {
+            return None;
+        }
+
+        Some(format!(
+            "internal_temperature_recovered:{temperature:.1}C<threshold:{:.1}C",
+            self.internal_temperature_critical_c
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -82,5 +98,40 @@ mod tests {
         };
 
         assert!(ThresholdPolicy::default().evaluate(&reading).is_none());
+    }
+
+    #[test]
+    fn reports_recovery_when_temperature_drops_below_threshold() {
+        let reading = Reading {
+            asset: Asset {
+                asset_id: "met-0101".to_string(),
+                site_id: "ng-kaji-01".to_string(),
+                asset_type: AssetType::SmartMeter,
+                internal_temperature: Some(38.0),
+                last_seen_at: Utc::now(),
+            },
+            observed_at: Utc::now(),
+            state: AssetState::SmartMeter(SmartMeterState::default()),
+        };
+
+        let note = ThresholdPolicy::default().recovered(&reading).unwrap();
+        assert!(note.contains("internal_temperature_recovered"));
+    }
+
+    #[test]
+    fn does_not_report_recovery_when_temperature_is_unknown() {
+        let reading = Reading {
+            asset: Asset {
+                asset_id: "met-0101".to_string(),
+                site_id: "ng-kaji-01".to_string(),
+                asset_type: AssetType::SmartMeter,
+                internal_temperature: None,
+                last_seen_at: Utc::now(),
+            },
+            observed_at: Utc::now(),
+            state: AssetState::SmartMeter(SmartMeterState::default()),
+        };
+
+        assert!(ThresholdPolicy::default().recovered(&reading).is_none());
     }
 }

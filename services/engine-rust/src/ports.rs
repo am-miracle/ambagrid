@@ -1,5 +1,8 @@
 use std::future::Future;
 
+use chrono::{DateTime, Utc};
+use uuid::Uuid;
+
 use crate::domain::{
     alert::{Alert, AlertDecision},
     asset::{Asset, Reading},
@@ -47,6 +50,21 @@ pub trait AlertRepository: Send + Sync {
     fn open_alert(
         &self,
         decision: &AlertDecision,
+    ) -> impl Future<Output = Result<Alert, PortError>> + Send;
+
+    // Most recently opened open alert for the asset, if any. Used to find
+    // what to resolve when a reading comes back within normal range.
+    fn find_open_alert(
+        &self,
+        asset_id: &str,
+    ) -> impl Future<Output = Result<Option<Alert>, PortError>> + Send;
+
+    fn resolve_alert(
+        &self,
+        alert_id: Uuid,
+        resolved_at: DateTime<Utc>,
+        resolution_note: &str,
+        resolved_by: &str,
     ) -> impl Future<Output = Result<Alert, PortError>> + Send;
 }
 

@@ -34,6 +34,8 @@ pub struct Alert {
     pub reason: String,
     pub opened_at: DateTime<Utc>,
     pub resolved_at: Option<DateTime<Utc>>,
+    pub resolution_note: Option<String>,
+    pub resolved_by: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
