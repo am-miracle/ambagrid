@@ -7,7 +7,7 @@ edition = "2024"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 futures-util = "0.3.34"
 prost = "0.14.4"
-rdkafka = { version = "0.39.0", features = ["dynamic-linking"] }
+rdkafka = "0.39.0"
 rskafka = "0.6.0"
 sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "uuid", "chrono", "migrate"] }
 thiserror = "2.0"
