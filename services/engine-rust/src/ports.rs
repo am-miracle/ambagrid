@@ -68,6 +68,14 @@ pub trait AlertRepository: Send + Sync {
     ) -> impl Future<Output = Result<Alert, PortError>> + Send;
 }
 
+// The ontology's business-event stream (see docs/ontology.md's Event
+// Topics section): alert.opened and alert.resolved, published alongside
+// the Postgres writes that make those states durable.
+pub trait AlertEvents: Send + Sync {
+    fn alert_opened(&self, alert: &Alert) -> impl Future<Output = Result<(), PortError>> + Send;
+    fn alert_resolved(&self, alert: &Alert) -> impl Future<Output = Result<(), PortError>> + Send;
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeadLetterStage {
     Decode,

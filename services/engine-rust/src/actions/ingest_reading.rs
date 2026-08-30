@@ -4,7 +4,7 @@ use crate::{
         resolve_alert::{self, ResolveAlertInput},
     },
     domain::{alert::Alert, asset::Reading, rules::ThresholdPolicy},
-    ports::{AlertRepository, AssetRepository, PortError, ReadingsSink},
+    ports::{AlertEvents, AlertRepository, AssetRepository, PortError, ReadingsSink},
 };
 
 const RESOLVED_BY_SYSTEM: &str = "system";
@@ -16,24 +16,27 @@ pub struct IngestResult {
     pub alert_resolved: Option<Alert>,
 }
 
-pub struct IngestReading<'a, A, R, L> {
+pub struct IngestReading<'a, A, R, L, E> {
     pub assets: &'a A,
     pub readings: &'a R,
     pub alerts: &'a L,
+    pub events: &'a E,
     pub policy: ThresholdPolicy,
 }
 
-impl<'a, A, R, L> IngestReading<'a, A, R, L>
+impl<'a, A, R, L, E> IngestReading<'a, A, R, L, E>
 where
     A: AssetRepository,
     R: ReadingsSink,
     L: AlertRepository,
+    E: AlertEvents,
 {
-    pub fn new(assets: &'a A, readings: &'a R, alerts: &'a L) -> Self {
+    pub fn new(assets: &'a A, readings: &'a R, alerts: &'a L, events: &'a E) -> Self {
         Self {
             assets,
             readings,
             alerts,
+            events,
             policy: ThresholdPolicy::default(),
         }
     }
@@ -44,10 +47,11 @@ where
         self.readings.append_reading(&reading).await?;
 
         let (alert_opened, alert_resolved) = match self.policy.evaluate(&reading) {
-            Some(decision) => (
-                Some(open_alert::execute(self.alerts, &decision).await?),
-                None,
-            ),
+            Some(decision) => {
+                let alert = open_alert::execute(self.alerts, &decision).await?;
+                self.publish_opened(&alert).await;
+                (Some(alert), None)
+            }
             None => (None, self.resolve_open_alert(&reading).await?),
         };
 
@@ -80,8 +84,24 @@ where
             reading.observed_at,
         )
         .await?;
+        self.publish_resolved(&resolved).await;
 
         Ok(Some(resolved))
+    }
+
+    // Alert state in Postgres is the source of truth; a dropped or delayed
+    // event just makes the ontology stream lag, so publish failures are
+    // logged rather than failing the ingest.
+    async fn publish_opened(&self, alert: &Alert) {
+        if let Err(err) = self.events.alert_opened(alert).await {
+            tracing::warn!(error = %err, alert_id = %alert.alert_id, "failed to publish alert.opened event");
+        }
+    }
+
+    async fn publish_resolved(&self, alert: &Alert) {
+        if let Err(err) = self.events.alert_resolved(alert).await {
+            tracing::warn!(error = %err, alert_id = %alert.alert_id, "failed to publish alert.resolved event");
+        }
     }
 }
 
@@ -188,12 +208,31 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct FakeEvents {
+        opened: Mutex<Vec<Alert>>,
+        resolved: Mutex<Vec<Alert>>,
+    }
+
+    impl AlertEvents for FakeEvents {
+        async fn alert_opened(&self, alert: &Alert) -> Result<(), PortError> {
+            self.opened.lock().unwrap().push(alert.clone());
+            Ok(())
+        }
+
+        async fn alert_resolved(&self, alert: &Alert) -> Result<(), PortError> {
+            self.resolved.lock().unwrap().push(alert.clone());
+            Ok(())
+        }
+    }
+
     #[tokio::test]
     async fn ingests_reading_and_opens_alert_when_policy_fires() {
         let assets = FakeAssets::default();
         let readings = FakeReadings::default();
         let alerts = FakeAlerts::default();
-        let action = IngestReading::new(&assets, &readings, &alerts);
+        let events = FakeEvents::default();
+        let action = IngestReading::new(&assets, &readings, &alerts, &events);
         let observed_at = Utc::now();
 
         let result = action
@@ -218,6 +257,8 @@ mod tests {
         assert_eq!(assets.states.lock().unwrap().len(), 1);
         assert_eq!(readings.readings.lock().unwrap().len(), 1);
         assert_eq!(alerts.alerts.lock().unwrap().len(), 1);
+        assert_eq!(events.opened.lock().unwrap().len(), 1);
+        assert_eq!(events.resolved.lock().unwrap().len(), 0);
     }
 
     #[tokio::test]
@@ -225,7 +266,8 @@ mod tests {
         let assets = FakeAssets::default();
         let readings = FakeReadings::default();
         let alerts = FakeAlerts::default();
-        let action = IngestReading::new(&assets, &readings, &alerts);
+        let events = FakeEvents::default();
+        let action = IngestReading::new(&assets, &readings, &alerts, &events);
         let asset = Asset {
             asset_id: "met-0101".to_string(),
             site_id: "ng-kaji-01".to_string(),
@@ -260,5 +302,47 @@ mod tests {
         assert_eq!(resolved.alert_id, alert_id);
         assert_eq!(resolved.status, AlertStatus::Resolved);
         assert_eq!(resolved.resolved_by.as_deref(), Some("system"));
+        assert_eq!(events.opened.lock().unwrap().len(), 1);
+        assert_eq!(events.resolved.lock().unwrap().len(), 1);
+    }
+
+    // A publish failure must not fail the ingest: Postgres is the source of
+    // truth for alert state, so a broken event stream should only be logged.
+    #[tokio::test]
+    async fn ingest_succeeds_even_when_event_publish_fails() {
+        struct FailingEvents;
+
+        impl AlertEvents for FailingEvents {
+            async fn alert_opened(&self, _alert: &Alert) -> Result<(), PortError> {
+                Err(PortError::message("broker unreachable"))
+            }
+
+            async fn alert_resolved(&self, _alert: &Alert) -> Result<(), PortError> {
+                Err(PortError::message("broker unreachable"))
+            }
+        }
+
+        let assets = FakeAssets::default();
+        let readings = FakeReadings::default();
+        let alerts = FakeAlerts::default();
+        let events = FailingEvents;
+        let action = IngestReading::new(&assets, &readings, &alerts, &events);
+
+        let result = action
+            .execute(Reading {
+                asset: Asset {
+                    asset_id: "met-0101".to_string(),
+                    site_id: "ng-kaji-01".to_string(),
+                    asset_type: AssetType::SmartMeter,
+                    internal_temperature: Some(75.0),
+                    last_seen_at: Utc::now(),
+                },
+                observed_at: Utc::now(),
+                state: AssetState::SmartMeter(SmartMeterState::default()),
+            })
+            .await
+            .unwrap();
+
+        assert!(result.alert_opened.is_some());
     }
 }

@@ -5,7 +5,10 @@ use sqlx::postgres::PgPoolOptions;
 use crate::{
     actions::ingest_reading::IngestReading,
     adapters::{
-        kafka::consumer::{self, ConsumerConfig},
+        kafka::{
+            consumer::{self, ConsumerConfig},
+            producer::{KafkaAlertEventPublisher, ProducerConfig},
+        },
         postgres::{
             PostgresAlertRepository, PostgresAssetRepository, PostgresDeadLetterSink,
             PostgresReadingsRepository,
@@ -25,8 +28,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let assets = PostgresAssetRepository::new(pool.clone());
     let readings = PostgresReadingsRepository::new(pool.clone());
     let alerts = PostgresAlertRepository::new(pool.clone());
-    let dead_letters = PostgresDeadLetterSink::new(pool);
-    let ingest = IngestReading::new(&assets, &readings, &alerts);
+    let dead_letters = PostgresDeadLetterSink::new(pool.clone());
+    let events = KafkaAlertEventPublisher::connect(ProducerConfig {
+        brokers: cfg.kafka_brokers.clone(),
+        alert_opened_topic: cfg.alert_opened_topic,
+        alert_resolved_topic: cfg.alert_resolved_topic,
+    })
+    .await?;
+    let ingest = IngestReading::new(&assets, &readings, &alerts, &events);
 
     consumer::run(
         ConsumerConfig {

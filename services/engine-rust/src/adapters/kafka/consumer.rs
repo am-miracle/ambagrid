@@ -17,8 +17,8 @@ use crate::{
     actions::ingest_reading::IngestReading,
     domain::asset::Reading,
     ports::{
-        AlertRepository, AssetRepository, DeadLetter, DeadLetterSink, DeadLetterStage, PortError,
-        ReadingsSink,
+        AlertEvents, AlertRepository, AssetRepository, DeadLetter, DeadLetterSink, DeadLetterStage,
+        PortError, ReadingsSink,
     },
     telemetry::decode::decode_metric_payload,
 };
@@ -64,15 +64,16 @@ impl ConsumerStats {
 // protocol, so this reads partition 0 only. Fine for one engine replica;
 // running more than one against a multi-partition topic needs a real
 // partition-assignment scheme first.
-pub async fn run<A, R, L, D>(
+pub async fn run<A, R, L, E, D>(
     config: ConsumerConfig,
-    ingest: &IngestReading<'_, A, R, L>,
+    ingest: &IngestReading<'_, A, R, L, E>,
     dead_letters: &D,
 ) -> Result<(), ConsumerError>
 where
     A: AssetRepository,
     R: ReadingsSink,
     L: AlertRepository,
+    E: AlertEvents,
     D: DeadLetterSink,
 {
     let topic = config.topic.clone();
@@ -146,14 +147,15 @@ where
 // Retries only PortError::Storage (assumed transient); a data-shape error
 // (PortError::Message) won't be fixed by retrying, so it's returned
 // immediately.
-async fn ingest_with_retry<A, R, L>(
-    ingest: &IngestReading<'_, A, R, L>,
+async fn ingest_with_retry<A, R, L, E>(
+    ingest: &IngestReading<'_, A, R, L, E>,
     reading: &Reading,
 ) -> Result<(), PortError>
 where
     A: AssetRepository,
     R: ReadingsSink,
     L: AlertRepository,
+    E: AlertEvents,
 {
     for attempt in 1..=MAX_INGEST_ATTEMPTS {
         match ingest.execute(reading.clone()).await {

@@ -3,6 +3,8 @@ pub struct Config {
     pub database_url: String,
     pub kafka_brokers: Vec<String>,
     pub telemetry_topic: String,
+    pub alert_opened_topic: String,
+    pub alert_resolved_topic: String,
 }
 
 impl Config {
@@ -10,6 +12,8 @@ impl Config {
         let database_url = env_string("DATABASE_URL", None)?;
         let kafka_brokers = env_csv("KAFKA_BROKERS", "localhost:9092");
         let telemetry_topic = env_string("TELEMETRY_TOPIC", Some("telemetry.ingested"))?;
+        let alert_opened_topic = env_string("ALERT_OPENED_TOPIC", Some("alert.opened"))?;
+        let alert_resolved_topic = env_string("ALERT_RESOLVED_TOPIC", Some("alert.resolved"))?;
 
         if kafka_brokers.is_empty() {
             return Err(ConfigError::Invalid(
@@ -21,6 +25,8 @@ impl Config {
             database_url,
             kafka_brokers,
             telemetry_topic,
+            alert_opened_topic,
+            alert_resolved_topic,
         })
     }
 }

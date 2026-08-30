@@ -468,6 +468,45 @@ alert.resolved
 
 The names should describe business events, not service internals.
 
+### Sample alert.opened / alert.resolved payloads
+
+Both are protobuf (`proto/alerts.proto`); shown here as their JSON
+equivalent for readability, published by the Rust engine after the
+corresponding Postgres write commits.
+
+`alert.opened`:
+
+```json
+{
+  "alert_id": "b3b3c2b0-6e2a-4d9a-9c3a-1f2e3d4c5b6a",
+  "asset_id": "met-0101",
+  "site_id": "ng-kaji-01",
+  "severity": "SEVERITY_CRITICAL",
+  "reason": "internal_temperature_high:72.4C>=threshold:70.0C",
+  "opened_at_utc": 1745500000
+}
+```
+
+`alert.resolved`, once the same alert clears:
+
+```json
+{
+  "alert_id": "b3b3c2b0-6e2a-4d9a-9c3a-1f2e3d4c5b6a",
+  "asset_id": "met-0101",
+  "site_id": "ng-kaji-01",
+  "severity": "SEVERITY_CRITICAL",
+  "reason": "internal_temperature_high:72.4C>=threshold:70.0C",
+  "opened_at_utc": 1745500000,
+  "resolved_at_utc": 1745500900,
+  "resolution_note": "internal_temperature_recovered:64.0C<threshold:65.0C",
+  "resolved_by": "system"
+}
+```
+
+`resolved_by` is `"system"` for the automatic recovery path (a reading
+coming back within normal range); an operator-triggered resolution would
+carry the operator's identity instead.
+
 ## Storage Boundary
 
 Use PostgreSQL and TimescaleDB differently.

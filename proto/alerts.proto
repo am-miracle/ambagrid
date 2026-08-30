@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package ambagrid.alerts;
+
+option go_package = "ingestion-go/proto/ambagrid/alerts;alerts";
+
+enum Severity {
+  SEVERITY_UNSPECIFIED = 0;
+  SEVERITY_INFO = 1;
+  SEVERITY_WARNING = 2;
+  SEVERITY_CRITICAL = 3;
+}
+
+// Emitted when a threshold policy trips and a new alert is opened for an asset.
+message AlertOpened {
+  string alert_id = 1;
+  string asset_id = 2;
+  string site_id = 3;
+  Severity severity = 4;
+  string reason = 5;
+  int64 opened_at_utc = 6;
+}
+
+// Emitted when an open alert is resolved, whether automatically (a reading
+// recovering within normal range) or by an operator.
+message AlertResolved {
+  string alert_id = 1;
+  string asset_id = 2;
+  string site_id = 3;
+  Severity severity = 4;
+  string reason = 5;
+  int64 opened_at_utc = 6;
+  int64 resolved_at_utc = 7;
+  string resolution_note = 8;
+  string resolved_by = 9;
+}
