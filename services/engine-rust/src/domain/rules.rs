@@ -1,5 +1,5 @@
 use crate::domain::{
-    alert::{AlertDecision, Severity},
+    alert::{AlertDecision, AlertKind, Severity},
     asset::{AssetType, Reading},
 };
 
@@ -45,7 +45,7 @@ impl ThresholdPolicy {
 
     pub fn evaluate(&self, reading: &Reading) -> Option<AlertDecision> {
         let temperature = reading.asset.internal_temperature?;
-        let threshold = self.critical_for(reading.asset.asset_type);
+        let threshold = self.critical_for(reading.asset_type());
         if temperature < threshold {
             return None;
         }
@@ -53,7 +53,7 @@ impl ThresholdPolicy {
         Some(AlertDecision {
             asset_id: reading.asset.asset_id.clone(),
             site_id: reading.asset.site_id.clone(),
-            kind: INTERNAL_TEMPERATURE_ALERT_KIND.to_string(),
+            kind: AlertKind::from(INTERNAL_TEMPERATURE_ALERT_KIND),
             severity: Severity::Critical,
             reason: format!(
                 "internal_temperature_high:{temperature:.1}C>=threshold:{threshold:.1}C"
@@ -70,7 +70,7 @@ impl ThresholdPolicy {
     // alert (see `recovery_margin_c`), not the same boundary.
     pub fn recovered(&self, reading: &Reading) -> Option<String> {
         let temperature = reading.asset.internal_temperature?;
-        let threshold = self.critical_for(reading.asset.asset_type) - self.recovery_margin_c;
+        let threshold = self.critical_for(reading.asset_type()) - self.recovery_margin_c;
         if temperature >= threshold {
             return None;
         }
@@ -85,9 +85,7 @@ impl ThresholdPolicy {
 mod tests {
     use chrono::Utc;
 
-    use crate::domain::asset::{
-        Asset, AssetState, AssetType, BatteryBmsState, Reading, SmartMeterState,
-    };
+    use crate::domain::asset::{Asset, AssetState, BatteryBmsState, Reading, SmartMeterState};
 
     use super::*;
 
@@ -97,7 +95,6 @@ mod tests {
             asset: Asset {
                 asset_id: "met-0101".to_string(),
                 site_id: "ng-kaji-01".to_string(),
-                asset_type: AssetType::SmartMeter,
                 internal_temperature: Some(72.4),
                 last_seen_at: Utc::now(),
             },
@@ -119,7 +116,6 @@ mod tests {
             asset: Asset {
                 asset_id: "met-0101".to_string(),
                 site_id: "ng-kaji-01".to_string(),
-                asset_type: AssetType::SmartMeter,
                 internal_temperature: Some(38.0),
                 last_seen_at: Utc::now(),
             },
@@ -136,7 +132,6 @@ mod tests {
             asset: Asset {
                 asset_id: "bms-0101".to_string(),
                 site_id: "ng-kaji-01".to_string(),
-                asset_type: AssetType::BatteryBms,
                 internal_temperature: Some(60.0),
                 last_seen_at: Utc::now(),
             },
@@ -155,7 +150,6 @@ mod tests {
             asset: Asset {
                 asset_id: "met-0101".to_string(),
                 site_id: "ng-kaji-01".to_string(),
-                asset_type: AssetType::SmartMeter,
                 internal_temperature: Some(38.0),
                 last_seen_at: Utc::now(),
             },
@@ -173,7 +167,6 @@ mod tests {
             asset: Asset {
                 asset_id: "met-0101".to_string(),
                 site_id: "ng-kaji-01".to_string(),
-                asset_type: AssetType::SmartMeter,
                 // Below the 70C open threshold but still above the 65C
                 // recovery threshold (70 - 5C margin): the alert should stay
                 // open rather than flap closed.
@@ -194,7 +187,6 @@ mod tests {
             asset: Asset {
                 asset_id: "met-0101".to_string(),
                 site_id: "ng-kaji-01".to_string(),
-                asset_type: AssetType::SmartMeter,
                 internal_temperature: None,
                 last_seen_at: Utc::now(),
             },

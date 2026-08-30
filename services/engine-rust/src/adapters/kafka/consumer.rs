@@ -219,7 +219,7 @@ mod tests {
     use crate::{
         domain::{
             alert::Alert,
-            asset::{Asset, AssetState, AssetType, SmartMeterState},
+            asset::{Asset, AssetState, SmartMeterState},
         },
         ports::{IngestWrite, PolicyOutcome},
         telemetry::decode::DecodeError,
@@ -232,7 +232,6 @@ mod tests {
             asset: Asset {
                 asset_id: "met-0101".to_string(),
                 site_id: "ng-kaji-01".to_string(),
-                asset_type: AssetType::SmartMeter,
                 internal_temperature: Some(38.0),
                 last_seen_at: Utc::now(),
             },

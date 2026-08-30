@@ -21,7 +21,6 @@ impl AssetType {
 pub struct Asset {
     pub asset_id: String,
     pub site_id: String,
-    pub asset_type: AssetType,
     pub internal_temperature: Option<f32>,
     pub last_seen_at: DateTime<Utc>,
 }
@@ -38,6 +37,22 @@ pub enum AssetState {
     SmartMeter(SmartMeterState),
     BatteryBms(BatteryBmsState),
     SolarInverter(SolarInverterState),
+}
+
+impl AssetState {
+    pub fn asset_type(&self) -> AssetType {
+        match self {
+            Self::SmartMeter(_) => AssetType::SmartMeter,
+            Self::BatteryBms(_) => AssetType::BatteryBms,
+            Self::SolarInverter(_) => AssetType::SolarInverter,
+        }
+    }
+}
+
+impl Reading {
+    pub fn asset_type(&self) -> AssetType {
+        self.state.asset_type()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]

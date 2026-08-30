@@ -1,7 +1,7 @@
 use std::future::Future;
 
 use crate::domain::{
-    alert::{Alert, AlertDecision},
+    alert::{Alert, AlertDecision, AlertKind},
     asset::Reading,
 };
 
@@ -35,7 +35,7 @@ impl PortError {
 pub enum PolicyOutcome {
     Open(AlertDecision),
     Resolve {
-        kind: String,
+        kind: AlertKind,
         resolution_note: String,
         resolved_by: String,
     },

@@ -65,7 +65,6 @@ pub fn reading_from_payload(payload: MetricPayload) -> Result<Reading, DecodeErr
         asset: Asset {
             asset_id,
             site_id,
-            asset_type,
             internal_temperature,
             last_seen_at: observed_at,
         },
@@ -167,7 +166,7 @@ mod tests {
 
         assert_eq!(reading.asset.asset_id, "met-0101");
         assert_eq!(reading.asset.site_id, "ng-kaji-01");
-        assert_eq!(reading.asset.asset_type, AssetType::SmartMeter);
+        assert_eq!(reading.asset_type(), AssetType::SmartMeter);
         assert_eq!(reading.asset.internal_temperature, Some(42.5));
         let AssetState::SmartMeter(state) = &reading.state else {
             panic!("expected smart meter state");

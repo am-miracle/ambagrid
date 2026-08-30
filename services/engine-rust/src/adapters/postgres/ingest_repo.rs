@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        alert::{Alert, AlertDecision, AlertStatus, Severity},
+        alert::{Alert, AlertDecision, AlertKind, AlertStatus, Severity},
         asset::{AssetState, Reading},
     },
     ports::{IngestRepository, IngestWrite, PolicyOutcome, PortError},
@@ -39,14 +39,15 @@ impl IngestRepository for PostgresIngestRepository {
 
         let write = match outcome {
             PolicyOutcome::Open(decision) => {
-                let alert_opened = if find_open_alert(&mut tx, &decision.asset_id, &decision.kind)
-                    .await?
-                    .is_some()
-                {
-                    None
-                } else {
-                    Some(open_alert(&mut tx, &decision).await?)
-                };
+                let alert_opened =
+                    if find_open_alert(&mut tx, &decision.asset_id, decision.kind.as_str())
+                        .await?
+                        .is_some()
+                    {
+                        None
+                    } else {
+                        Some(open_alert(&mut tx, &decision).await?)
+                    };
                 IngestWrite {
                     alert_opened,
                     alert_resolved: None,
@@ -58,7 +59,7 @@ impl IngestRepository for PostgresIngestRepository {
                 resolved_by,
             } => {
                 let alert_resolved =
-                    match find_open_alert(&mut tx, &reading.asset.asset_id, &kind).await? {
+                    match find_open_alert(&mut tx, &reading.asset.asset_id, kind.as_str()).await? {
                         Some(open) => Some(
                             resolve_alert(
                                 &mut tx,
@@ -104,7 +105,7 @@ async fn upsert_asset(
     )
     .bind(&reading.asset.asset_id)
     .bind(&reading.asset.site_id)
-    .bind(reading.asset.asset_type.as_str())
+    .bind(reading.asset_type().as_str())
     .bind(reading.asset.internal_temperature)
     .bind(reading.asset.last_seen_at)
     .execute(&mut **tx)
@@ -268,7 +269,7 @@ async fn open_alert(
     )
     .bind(&decision.asset_id)
     .bind(&decision.site_id)
-    .bind(&decision.kind)
+    .bind(decision.kind.as_str())
     .bind(decision.severity.as_str())
     .bind(&decision.reason)
     .bind(decision.opened_at)
@@ -339,7 +340,7 @@ fn row_to_alert(row: PgRow) -> Result<Alert, PortError> {
         alert_id: row.get::<Uuid, _>("alert_id"),
         asset_id: row.get("asset_id"),
         site_id: row.get("site_id"),
-        kind: row.get("kind"),
+        kind: AlertKind::from(row.get::<String, _>("kind")),
         severity: parse_severity(row.get::<String, _>("severity").as_str())?,
         status: parse_status(row.get::<String, _>("status").as_str())?,
         reason: row.get("reason"),

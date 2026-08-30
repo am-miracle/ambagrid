@@ -1,6 +1,6 @@
 use crate::{
     domain::{
-        alert::Alert,
+        alert::{Alert, AlertKind},
         asset::Reading,
         rules::{INTERNAL_TEMPERATURE_ALERT_KIND, ThresholdPolicy},
     },
@@ -40,7 +40,7 @@ where
             Some(decision) => PolicyOutcome::Open(decision),
             None => match self.policy.recovered(&reading) {
                 Some(resolution_note) => PolicyOutcome::Resolve {
-                    kind: INTERNAL_TEMPERATURE_ALERT_KIND.to_string(),
+                    kind: AlertKind::from(INTERNAL_TEMPERATURE_ALERT_KIND),
                     resolution_note,
                     resolved_by: RESOLVED_BY_SYSTEM.to_string(),
                 },
@@ -87,9 +87,9 @@ mod tests {
     use chrono::Utc;
     use uuid::Uuid;
 
-    use crate::domain::alert::{Alert, AlertDecision, AlertStatus, Severity};
+    use crate::domain::alert::{Alert, AlertDecision, AlertKind, AlertStatus, Severity};
     use crate::{
-        domain::asset::{Asset, AssetState, AssetType, Reading, SmartMeterState},
+        domain::asset::{Asset, AssetState, Reading, SmartMeterState},
         ports::IngestWrite,
     };
 
@@ -216,7 +216,6 @@ mod tests {
                 asset: Asset {
                     asset_id: "met-0101".to_string(),
                     site_id: "ng-kaji-01".to_string(),
-                    asset_type: AssetType::SmartMeter,
                     internal_temperature: Some(75.0),
                     last_seen_at: observed_at,
                 },
@@ -244,7 +243,6 @@ mod tests {
         let asset = Asset {
             asset_id: "met-0101".to_string(),
             site_id: "ng-kaji-01".to_string(),
-            asset_type: AssetType::SmartMeter,
             internal_temperature: Some(75.0),
             last_seen_at: Utc::now(),
         };
@@ -280,7 +278,7 @@ mod tests {
         AlertDecision {
             asset_id: "met-0101".to_string(),
             site_id: "ng-kaji-01".to_string(),
-            kind: kind.to_string(),
+            kind: AlertKind::from(kind),
             severity: Severity::Critical,
             reason: format!("{kind}_high"),
             opened_at: Utc::now(),
@@ -293,7 +291,6 @@ mod tests {
             asset: Asset {
                 asset_id: "met-0101".to_string(),
                 site_id: "ng-kaji-01".to_string(),
-                asset_type: AssetType::SmartMeter,
                 internal_temperature: Some(75.0),
                 last_seen_at: Utc::now(),
             },
@@ -342,7 +339,7 @@ mod tests {
             .ingest(
                 &reading,
                 PolicyOutcome::Resolve {
-                    kind: "internal_temperature".to_string(),
+                    kind: AlertKind::from("internal_temperature"),
                     resolution_note: "internal_temperature_recovered".to_string(),
                     resolved_by: RESOLVED_BY_SYSTEM.to_string(),
                 },
@@ -353,12 +350,12 @@ mod tests {
         let resolved = resolve_write
             .alert_resolved
             .expect("the temperature alert should resolve");
-        assert_eq!(resolved.kind, "internal_temperature");
+        assert_eq!(resolved.kind.as_str(), "internal_temperature");
 
         let alerts = store.alerts.lock().unwrap();
         let battery_alert = alerts
             .iter()
-            .find(|alert| alert.kind == "battery_soc_low")
+            .find(|alert| alert.kind.as_str() == "battery_soc_low")
             .unwrap();
         assert_eq!(
             battery_alert.status,
@@ -375,7 +372,6 @@ mod tests {
         let asset = Asset {
             asset_id: "met-0101".to_string(),
             site_id: "ng-kaji-01".to_string(),
-            asset_type: AssetType::SmartMeter,
             internal_temperature: Some(75.0),
             last_seen_at: Utc::now(),
         };
@@ -435,7 +431,6 @@ mod tests {
                 asset: Asset {
                     asset_id: "met-0101".to_string(),
                     site_id: "ng-kaji-01".to_string(),
-                    asset_type: AssetType::SmartMeter,
                     internal_temperature: Some(75.0),
                     last_seen_at: Utc::now(),
                 },
