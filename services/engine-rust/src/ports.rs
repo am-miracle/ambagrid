@@ -1,5 +1,8 @@
 use std::future::Future;
 
+use chrono::{DateTime, Utc};
+use uuid::Uuid;
+
 use crate::domain::{
     alert::{Alert, AlertDecision, AlertKind},
     asset::Reading,
@@ -59,6 +62,16 @@ pub trait IngestRepository: Send + Sync {
         reading: &Reading,
         outcome: PolicyOutcome,
     ) -> impl Future<Output = Result<IngestWrite, PortError>> + Send;
+}
+
+pub trait AlertRepository: Send + Sync {
+    fn resolve_alert(
+        &self,
+        alert_id: Uuid,
+        resolved_at: DateTime<Utc>,
+        resolution_note: &str,
+        resolved_by: &str,
+    ) -> impl Future<Output = Result<Alert, PortError>> + Send;
 }
 
 // The ontology's business-event stream (see docs/ontology.md's Event

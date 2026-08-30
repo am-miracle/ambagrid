@@ -6,8 +6,15 @@ mod ports;
 mod serve;
 mod telemetry;
 
+use actions::resolve_alert::{ResolveAlert, ResolveAlertInput};
+use adapters::{
+    kafka::producer::{KafkaAlertEventPublisher, ProducerConfig},
+    postgres::PostgresIngestRepository,
+};
+use config::Config;
 use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::EnvFilter;
+use uuid::Uuid;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!();
 
@@ -22,6 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match command.as_str() {
         "migrate" => run_migrations().await,
         "serve" => serve().await,
+        "resolve-alert" => resolve_alert(std::env::args().skip(2).collect()).await,
         "-h" | "--help" | "help" => {
             print_usage();
             Ok(())
@@ -31,6 +39,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(format!("unknown command: {command}").into())
         }
     }
+}
+
+async fn resolve_alert(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    if args.len() < 3 {
+        print_usage();
+        return Err("resolve-alert requires: <alert_id> <resolved_by> <resolution_note>".into());
+    }
+
+    let alert_id = Uuid::parse_str(&args[0])?;
+    let resolved_by = args[1].clone();
+    let resolution_note = args[2..].join(" ");
+
+    let cfg = Config::from_env()?;
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&cfg.database_url)
+        .await?;
+    let store = PostgresIngestRepository::new(pool);
+    let events = KafkaAlertEventPublisher::connect(ProducerConfig {
+        brokers: cfg.kafka_brokers,
+        alert_opened_topic: cfg.alert_opened_topic,
+        alert_resolved_topic: cfg.alert_resolved_topic,
+    })?;
+    let action = ResolveAlert::new(&store, &events);
+
+    let alert = action
+        .execute(ResolveAlertInput {
+            alert_id,
+            resolution_note,
+            resolved_by,
+        })
+        .await?;
+
+    tracing::info!(alert_id = %alert.alert_id, "alert resolved");
+    Ok(())
 }
 
 async fn run_migrations() -> Result<(), Box<dyn std::error::Error>> {
@@ -51,7 +94,9 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn print_usage() {
-    eprintln!("usage: engine-rust <migrate|serve>");
+    eprintln!(
+        "usage: engine-rust <migrate|serve|resolve-alert <alert_id> <resolved_by> <resolution_note>>"
+    );
 }
 
 fn init_logging() {

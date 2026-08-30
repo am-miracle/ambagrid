@@ -7,7 +7,7 @@ use crate::{
         alert::{Alert, AlertDecision, AlertKind, AlertStatus, Severity},
         asset::{AssetState, BatteryBmsState, Reading, SmartMeterState, SolarInverterState},
     },
-    ports::{IngestRepository, IngestWrite, PolicyOutcome, PortError},
+    ports::{AlertRepository, IngestRepository, IngestWrite, PolicyOutcome, PortError},
 };
 
 #[derive(Debug, Clone)]
@@ -82,6 +82,23 @@ impl IngestRepository for PostgresIngestRepository {
         tx.commit().await.map_err(PortError::storage)?;
 
         Ok(write)
+    }
+}
+
+impl AlertRepository for PostgresIngestRepository {
+    async fn resolve_alert(
+        &self,
+        alert_id: Uuid,
+        resolved_at: DateTime<Utc>,
+        resolution_note: &str,
+        resolved_by: &str,
+    ) -> Result<Alert, PortError> {
+        let mut tx = self.pool.begin().await.map_err(PortError::storage)?;
+        let alert =
+            resolve_alert(&mut tx, alert_id, resolved_at, resolution_note, resolved_by).await?;
+        tx.commit().await.map_err(PortError::storage)?;
+
+        Ok(alert)
     }
 }
 
