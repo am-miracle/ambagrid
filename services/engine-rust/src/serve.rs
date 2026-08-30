@@ -7,9 +7,9 @@ use crate::{
     adapters::{
         kafka::{
             consumer::{self, ConsumerConfig},
-            producer::{KafkaAlertEventPublisher, ProducerConfig},
+            producer::{KafkaAlertEventPublisher, KafkaDeadLetterPublisher, ProducerConfig},
         },
-        postgres::{PostgresDeadLetterSink, PostgresIngestRepository},
+        postgres::PostgresIngestRepository,
     },
     config::Config,
 };
@@ -23,7 +23,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     let store = PostgresIngestRepository::new(pool.clone());
-    let dead_letters = PostgresDeadLetterSink::new(pool);
+    let dead_letters =
+        KafkaDeadLetterPublisher::connect(cfg.kafka_brokers.clone(), cfg.telemetry_dlq_topic)
+            .await?;
     let events = KafkaAlertEventPublisher::connect(ProducerConfig {
         brokers: cfg.kafka_brokers.clone(),
         alert_opened_topic: cfg.alert_opened_topic,

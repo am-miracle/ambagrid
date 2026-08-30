@@ -10,7 +10,7 @@ use rskafka::client::{
 use super::proto;
 use crate::{
     domain::alert::{Alert, Severity},
-    ports::{AlertEvents, PortError},
+    ports::{AlertEvents, DeadLetter, DeadLetterSink, PortError},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +51,10 @@ pub struct KafkaAlertEventPublisher<S: RecordSink = PartitionClient> {
     alert_resolved: S,
 }
 
+pub struct KafkaDeadLetterPublisher<S: DeadLetterRecordSink = PartitionClient> {
+    sink: S,
+}
+
 impl KafkaAlertEventPublisher<PartitionClient> {
     pub async fn connect(config: ProducerConfig) -> Result<Self, rskafka::client::error::Error> {
         let client = ClientBuilder::new(config.brokers).build().await?;
@@ -68,6 +72,37 @@ impl KafkaAlertEventPublisher<PartitionClient> {
     }
 }
 
+impl KafkaDeadLetterPublisher<PartitionClient> {
+    pub async fn connect(
+        brokers: Vec<String>,
+        topic: String,
+    ) -> Result<Self, rskafka::client::error::Error> {
+        let client = ClientBuilder::new(brokers).build().await?;
+        let sink = client
+            .partition_client(topic.clone(), 0, UnknownTopicHandling::Retry)
+            .await?;
+
+        Ok(Self { sink })
+    }
+}
+
+pub(crate) trait DeadLetterRecordSink: Send + Sync {
+    fn send_record(
+        &self,
+        record: rskafka::record::Record,
+    ) -> impl Future<Output = Result<(), PortError>> + Send;
+}
+
+impl DeadLetterRecordSink for PartitionClient {
+    async fn send_record(&self, record: rskafka::record::Record) -> Result<(), PortError> {
+        self.produce(vec![record], Compression::NoCompression)
+            .await
+            .map_err(PortError::storage)?;
+
+        Ok(())
+    }
+}
+
 impl<S: RecordSink> AlertEvents for KafkaAlertEventPublisher<S> {
     async fn alert_opened(&self, alert: &Alert) -> Result<(), PortError> {
         self.alert_opened
@@ -79,6 +114,45 @@ impl<S: RecordSink> AlertEvents for KafkaAlertEventPublisher<S> {
         self.alert_resolved
             .send(alert_resolved_event(alert).encode_to_vec())
             .await
+    }
+}
+
+impl<S: DeadLetterRecordSink> DeadLetterSink for KafkaDeadLetterPublisher<S> {
+    async fn park(&self, entry: &DeadLetter) -> Result<(), PortError> {
+        self.sink.send_record(dead_letter_record(entry)).await
+    }
+}
+
+fn dead_letter_record(entry: &DeadLetter) -> rskafka::record::Record {
+    rskafka::record::Record {
+        key: Some(
+            format!(
+                "{}:{}:{}",
+                entry.kafka_topic, entry.kafka_partition, entry.kafka_offset
+            )
+            .into_bytes(),
+        ),
+        value: Some(entry.payload.clone()),
+        headers: BTreeMap::from([
+            (
+                "source_topic".to_string(),
+                entry.kafka_topic.as_bytes().to_vec(),
+            ),
+            (
+                "source_partition".to_string(),
+                entry.kafka_partition.to_string().into_bytes(),
+            ),
+            (
+                "source_offset".to_string(),
+                entry.kafka_offset.to_string().into_bytes(),
+            ),
+            (
+                "stage".to_string(),
+                entry.stage.as_str().as_bytes().to_vec(),
+            ),
+            ("error".to_string(), entry.error.as_bytes().to_vec()),
+        ]),
+        timestamp: Utc::now(),
     }
 }
 
@@ -132,6 +206,7 @@ mod tests {
 
     use super::*;
     use crate::domain::alert::{AlertKind, AlertStatus, Severity};
+    use crate::ports::DeadLetterStage;
 
     #[derive(Default)]
     struct FakeSink {
@@ -141,6 +216,18 @@ mod tests {
     impl RecordSink for FakeSink {
         async fn send(&self, payload: Vec<u8>) -> Result<(), PortError> {
             self.sent.lock().unwrap().push(payload);
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeDeadLetterSink {
+        sent: Mutex<Vec<rskafka::record::Record>>,
+    }
+
+    impl DeadLetterRecordSink for FakeDeadLetterSink {
+        async fn send_record(&self, record: rskafka::record::Record) -> Result<(), PortError> {
+            self.sent.lock().unwrap().push(record);
             Ok(())
         }
     }
@@ -185,6 +272,53 @@ mod tests {
         assert_eq!(event.opened_at_utc, alert.opened_at.timestamp());
         assert_eq!(event.kind, "internal_temperature");
         assert_eq!(event.source_event_id.as_deref(), Some("telemetry-evt-0101"));
+    }
+
+    #[tokio::test]
+    async fn dead_letter_publisher_preserves_payload_and_source_metadata() {
+        let publisher = KafkaDeadLetterPublisher {
+            sink: FakeDeadLetterSink::default(),
+        };
+        let payload = b"malformed metric payload".to_vec();
+        let entry = DeadLetter {
+            kafka_topic: "telemetry.ingested".to_string(),
+            kafka_partition: 2,
+            kafka_offset: 42,
+            payload: payload.clone(),
+            stage: DeadLetterStage::Decode,
+            error: "telemetry metrics must be set for a smart meter payload".to_string(),
+        };
+
+        publisher.park(&entry).await.unwrap();
+
+        let sent = publisher.sink.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        let record = &sent[0];
+        assert_eq!(
+            record.key.as_deref(),
+            Some("telemetry.ingested:2:42".as_bytes())
+        );
+        assert_eq!(record.value.as_deref(), Some(payload.as_slice()));
+        assert_eq!(
+            record.headers.get("source_topic").map(Vec::as_slice),
+            Some("telemetry.ingested".as_bytes())
+        );
+        assert_eq!(
+            record.headers.get("source_partition").map(Vec::as_slice),
+            Some("2".as_bytes())
+        );
+        assert_eq!(
+            record.headers.get("source_offset").map(Vec::as_slice),
+            Some("42".as_bytes())
+        );
+        assert_eq!(
+            record.headers.get("stage").map(Vec::as_slice),
+            Some("decode".as_bytes())
+        );
+        assert_eq!(
+            record.headers.get("error").map(Vec::as_slice),
+            Some("telemetry metrics must be set for a smart meter payload".as_bytes())
+        );
     }
 
     #[tokio::test]

@@ -5,6 +5,7 @@ pub struct Config {
     pub database_url: String,
     pub kafka_brokers: Vec<String>,
     pub telemetry_topic: String,
+    pub telemetry_dlq_topic: String,
     pub telemetry_group_id: String,
     pub alert_opened_topic: String,
     pub alert_resolved_topic: String,
@@ -20,6 +21,11 @@ impl Config {
         let database_url = env_string(&lookup, "DATABASE_URL", None)?;
         let kafka_brokers = env_csv(&lookup, "KAFKA_BROKERS", "localhost:9092");
         let telemetry_topic = env_string(&lookup, "TELEMETRY_TOPIC", Some("telemetry.ingested"))?;
+        let telemetry_dlq_topic = env_string(
+            &lookup,
+            "TELEMETRY_DLQ_TOPIC",
+            Some("telemetry.ingested.dlq"),
+        )?;
         let telemetry_group_id = env_string(&lookup, "TELEMETRY_GROUP_ID", Some("engine-rust"))?;
         let alert_opened_topic = env_string(&lookup, "ALERT_OPENED_TOPIC", Some("alert.opened"))?;
         let alert_resolved_topic =
@@ -59,6 +65,7 @@ impl Config {
             database_url,
             kafka_brokers,
             telemetry_topic,
+            telemetry_dlq_topic,
             telemetry_group_id,
             alert_opened_topic,
             alert_resolved_topic,
@@ -197,6 +204,7 @@ mod tests {
 
         assert_eq!(cfg.kafka_brokers, vec!["localhost:9092"]);
         assert_eq!(cfg.telemetry_topic, "telemetry.ingested");
+        assert_eq!(cfg.telemetry_dlq_topic, "telemetry.ingested.dlq");
         assert_eq!(cfg.telemetry_group_id, "engine-rust");
         assert_eq!(cfg.alert_opened_topic, "alert.opened");
         assert_eq!(cfg.alert_resolved_topic, "alert.resolved");
@@ -206,6 +214,7 @@ mod tests {
     #[test]
     fn from_lookup_wires_each_env_var_to_the_matching_threshold_field() {
         let mut vars = required_vars();
+        vars.insert("TELEMETRY_DLQ_TOPIC", "telemetry.custom.dlq");
         vars.insert("ALERT_OPENED_TOPIC", "custom.alert.opened");
         vars.insert("ALERT_RESOLVED_TOPIC", "custom.alert.resolved");
         vars.insert("SMART_METER_CRITICAL_TEMP_C", "80.0");
@@ -215,6 +224,7 @@ mod tests {
 
         let cfg = Config::from_lookup(lookup_fn(vars)).unwrap();
 
+        assert_eq!(cfg.telemetry_dlq_topic, "telemetry.custom.dlq");
         assert_eq!(cfg.alert_opened_topic, "custom.alert.opened");
         assert_eq!(cfg.alert_resolved_topic, "custom.alert.resolved");
         assert_eq!(

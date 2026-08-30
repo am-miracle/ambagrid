@@ -88,14 +88,16 @@ where
         let topic = message.topic().to_string();
         let partition = message.partition();
         let offset = message.offset();
+        let mut handled = true;
 
         if let Some(bytes) = message.payload().map(<[u8]>::to_vec) {
             match decode_metric_payload(&bytes) {
                 Ok(reading) => {
                     if let Err(err) = ingest_with_retry(ingest, &reading).await {
+                        let ingest_failed = stats.add_ingest_failed();
                         tracing::error!(
                             error = %err,
-                            ingest_failed = stats.add_ingest_failed(),
+                            ingest_failed,
                             "failed to ingest telemetry reading after retries"
                         );
 
@@ -107,13 +109,14 @@ where
                             DeadLetterStage::Ingest,
                             &err,
                         );
-                        park(&stats, dead_letters, &entry).await;
+                        handled = park(&stats, dead_letters, &entry).await;
                     }
                 }
                 Err(err) => {
+                    let decode_failed = stats.add_decode_failed();
                     tracing::warn!(
                         error = %err,
-                        decode_failed = stats.add_decode_failed(),
+                        decode_failed,
                         "parking malformed telemetry message"
                     );
 
@@ -125,9 +128,13 @@ where
                         DeadLetterStage::Decode,
                         &err,
                     );
-                    park(&stats, dead_letters, &entry).await;
+                    handled = park(&stats, dead_letters, &entry).await;
                 }
             }
+        }
+
+        if !handled {
+            continue;
         }
 
         // Stored once the record is fully handled either way (ingested or
@@ -135,11 +142,12 @@ where
         // doesn't get redelivered forever, and a crash before this point
         // simply redelivers the record on the next rebalance/restart.
         if let Err(err) = consumer.store_offset(&topic, partition, offset) {
+            let store_offset_failed = stats.add_store_offset_failed();
             tracing::error!(
                 error = %err,
                 partition,
                 offset,
-                store_offset_failed = stats.add_store_offset_failed(),
+                store_offset_failed,
                 "failed to store Kafka offset for commit"
             );
         }
@@ -174,14 +182,22 @@ where
     unreachable!("loop always returns by the last attempt")
 }
 
-async fn park(stats: &ConsumerStats, dead_letters: &impl DeadLetterSink, entry: &DeadLetter) {
+async fn park(
+    stats: &ConsumerStats,
+    dead_letters: &impl DeadLetterSink,
+    entry: &DeadLetter,
+) -> bool {
     if let Err(err) = dead_letters.park(entry).await {
+        let dlq_failed = stats.add_dlq_failed();
         tracing::error!(
             error = %err,
-            dlq_failed = stats.add_dlq_failed(),
+            dlq_failed,
             "failed to park telemetry message"
         );
+        return false;
     }
+
+    true
 }
 
 fn build_dead_letter(
@@ -212,7 +228,7 @@ pub enum ConsumerError {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicU32;
+    use std::sync::{Mutex, atomic::AtomicU32};
 
     use chrono::Utc;
 
@@ -290,6 +306,30 @@ mod tests {
         ) -> Result<IngestWrite, PortError> {
             self.attempts.fetch_add(1, Ordering::Relaxed);
             Err(PortError::message("unknown alert severity: bogus"))
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingDeadLetterSink {
+        entries: Mutex<Vec<DeadLetter>>,
+        fail: bool,
+    }
+
+    impl DeadLetterSink for RecordingDeadLetterSink {
+        async fn park(&self, entry: &DeadLetter) -> Result<(), PortError> {
+            if self.fail {
+                return Err(PortError::message("dlq unavailable"));
+            }
+
+            self.entries.lock().unwrap().push(DeadLetter {
+                kafka_topic: entry.kafka_topic.clone(),
+                kafka_partition: entry.kafka_partition,
+                kafka_offset: entry.kafka_offset,
+                payload: entry.payload.clone(),
+                stage: entry.stage,
+                error: entry.error.clone(),
+            });
+            Ok(())
         }
     }
 
@@ -374,6 +414,49 @@ mod tests {
         assert_eq!(entry.stage, DeadLetterStage::Ingest);
         assert_eq!(entry.payload, payload);
         assert_eq!(entry.error, error.to_string());
+    }
+
+    #[tokio::test]
+    async fn park_reports_handled_when_dead_letter_sink_succeeds() {
+        let stats = ConsumerStats::default();
+        let sink = RecordingDeadLetterSink::default();
+        let entry = build_dead_letter(
+            "telemetry.ingested",
+            0,
+            7,
+            b"bad reading".to_vec(),
+            DeadLetterStage::Decode,
+            DecodeError::MissingMetrics,
+        );
+
+        let handled = park(&stats, &sink, &entry).await;
+
+        assert!(handled);
+        assert_eq!(sink.entries.lock().unwrap().len(), 1);
+        assert_eq!(stats.dlq_failed.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn park_reports_unhandled_when_dead_letter_sink_fails() {
+        let stats = ConsumerStats::default();
+        let sink = RecordingDeadLetterSink {
+            entries: Mutex::default(),
+            fail: true,
+        };
+        let entry = build_dead_letter(
+            "telemetry.ingested",
+            0,
+            7,
+            b"bad reading".to_vec(),
+            DeadLetterStage::Decode,
+            DecodeError::MissingMetrics,
+        );
+
+        let handled = park(&stats, &sink, &entry).await;
+
+        assert!(!handled);
+        assert!(sink.entries.lock().unwrap().is_empty());
+        assert_eq!(stats.dlq_failed.load(Ordering::Relaxed), 1);
     }
 
     #[test]
