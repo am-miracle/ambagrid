@@ -33,6 +33,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **alerts:** Prevent duplicate alerts from repeated abnormal readings
 - **alerts:** Scope alert open/resolve/duplicate-guard by kind, not just asset
 - **engine:** Avoid dynamic librdkafka dependency in CI
+- **alerts:** Persist opened alert source events
 
 ### Maintenance
 
