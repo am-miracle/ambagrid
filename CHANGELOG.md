@@ -37,6 +37,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **engine:** Avoid dynamic librdkafka dependency in CI
 - **alerts:** Persist opened alert source events
 - **engine:** Publish telemetry failures to Kafka DLQ
+- **alerts:** Reject resolved events without timestamps
 
 ### Maintenance
 
