@@ -3,7 +3,11 @@ use crate::{
         open_alert,
         resolve_alert::{self, ResolveAlertInput},
     },
-    domain::{alert::Alert, asset::Reading, rules::ThresholdPolicy},
+    domain::{
+        alert::{Alert, AlertDecision},
+        asset::Reading,
+        rules::ThresholdPolicy,
+    },
     ports::{AlertEvents, AlertRepository, AssetRepository, PortError, ReadingsSink},
 };
 
@@ -47,11 +51,7 @@ where
         self.readings.append_reading(&reading).await?;
 
         let (alert_opened, alert_resolved) = match self.policy.evaluate(&reading) {
-            Some(decision) => {
-                let alert = open_alert::execute(self.alerts, &decision).await?;
-                self.publish_opened(&alert).await;
-                (Some(alert), None)
-            }
+            Some(decision) => (self.open_new_alert(&reading, decision).await?, None),
             None => (None, self.resolve_open_alert(&reading).await?),
         };
 
@@ -60,6 +60,29 @@ where
             alert_opened,
             alert_resolved,
         })
+    }
+
+    // Opens an alert only if the asset doesn't already have one open: the
+    // condition is edge-triggered (one alert per abnormal episode), not
+    // per-reading, so repeated hot telemetry shouldn't spawn duplicate open
+    // alerts.
+    async fn open_new_alert(
+        &self,
+        reading: &Reading,
+        decision: AlertDecision,
+    ) -> Result<Option<Alert>, PortError> {
+        if self
+            .alerts
+            .find_open_alert(&reading.asset.asset_id)
+            .await?
+            .is_some()
+        {
+            return Ok(None);
+        }
+
+        let alert = open_alert::execute(self.alerts, &decision).await?;
+        self.publish_opened(&alert).await;
+        Ok(Some(alert))
     }
 
     // Resolves the asset's open alert if the reading shows recovery. A
@@ -259,6 +282,48 @@ mod tests {
         assert_eq!(alerts.alerts.lock().unwrap().len(), 1);
         assert_eq!(events.opened.lock().unwrap().len(), 1);
         assert_eq!(events.resolved.lock().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn repeated_abnormal_readings_do_not_open_duplicate_alerts() {
+        let assets = FakeAssets::default();
+        let readings = FakeReadings::default();
+        let alerts = FakeAlerts::default();
+        let events = FakeEvents::default();
+        let action = IngestReading::new(&assets, &readings, &alerts, &events);
+        let asset = Asset {
+            asset_id: "met-0101".to_string(),
+            site_id: "ng-kaji-01".to_string(),
+            asset_type: AssetType::SmartMeter,
+            internal_temperature: Some(75.0),
+            last_seen_at: Utc::now(),
+        };
+
+        let first = action
+            .execute(Reading {
+                asset: asset.clone(),
+                observed_at: Utc::now(),
+                state: AssetState::SmartMeter(SmartMeterState::default()),
+            })
+            .await
+            .unwrap();
+
+        let second = action
+            .execute(Reading {
+                asset: asset.clone(),
+                observed_at: Utc::now(),
+                state: AssetState::SmartMeter(SmartMeterState::default()),
+            })
+            .await
+            .unwrap();
+
+        assert!(first.alert_opened.is_some());
+        assert!(
+            second.alert_opened.is_none(),
+            "should not open a second alert while one is already open"
+        );
+        assert_eq!(alerts.alerts.lock().unwrap().len(), 1);
+        assert_eq!(events.opened.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
