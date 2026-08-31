@@ -41,6 +41,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **alerts:** Reject resolved events without timestamps
 - **alerts:** Keep kind out of event payloads
 - **alerts:** Retain telemetry source event ids
+- **alerts:** Audit and authorize operator resolutions
 
 ### Maintenance
 
