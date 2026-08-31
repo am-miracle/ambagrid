@@ -16,6 +16,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **alerts:** Publish alert.opened/alert.resolved events to kafka
 - **alerts:** Tune threshold policy per asset type with hysteresis and runtime config
 - **kafka:** Migrate consumer to rdkafka for real partition/consumer-group coverage
+- **alerts:** Add operator resolve action
 
 ### Changed
 
