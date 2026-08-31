@@ -357,6 +357,10 @@ Effects:
 - updates `Alert`
 - records resolution history
 
+Operator-triggered resolution must authorize `resolved_by` before mutating
+alert state. Automatic recovery uses the internal `"system"` actor instead
+of this operator action.
+
 ## Revenue Protection Model
 
 Revenue protection should be a core part of the ontology.
@@ -557,6 +561,7 @@ Suggested roles:
 ```text
 Operator
   can acknowledge alerts
+  can resolve alerts
   can request reconnect
   can create maintenance tickets
 

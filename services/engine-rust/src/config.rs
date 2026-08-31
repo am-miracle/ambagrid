@@ -9,6 +9,7 @@ pub struct Config {
     pub telemetry_group_id: String,
     pub alert_opened_topic: String,
     pub alert_resolved_topic: String,
+    pub alert_resolve_operators: Vec<String>,
     pub threshold_policy: ThresholdPolicy,
 }
 
@@ -30,6 +31,7 @@ impl Config {
         let alert_opened_topic = env_string(&lookup, "ALERT_OPENED_TOPIC", Some("alert.opened"))?;
         let alert_resolved_topic =
             env_string(&lookup, "ALERT_RESOLVED_TOPIC", Some("alert.resolved"))?;
+        let alert_resolve_operators = env_csv(&lookup, "ALERT_RESOLVE_OPERATORS", "");
 
         if kafka_brokers.is_empty() {
             return Err(ConfigError::Invalid(
@@ -69,6 +71,7 @@ impl Config {
             telemetry_group_id,
             alert_opened_topic,
             alert_resolved_topic,
+            alert_resolve_operators,
             threshold_policy,
         })
     }
@@ -208,6 +211,7 @@ mod tests {
         assert_eq!(cfg.telemetry_group_id, "engine-rust");
         assert_eq!(cfg.alert_opened_topic, "alert.opened");
         assert_eq!(cfg.alert_resolved_topic, "alert.resolved");
+        assert!(cfg.alert_resolve_operators.is_empty());
         assert_eq!(cfg.threshold_policy, ThresholdPolicy::default());
     }
 
@@ -217,6 +221,7 @@ mod tests {
         vars.insert("TELEMETRY_DLQ_TOPIC", "telemetry.custom.dlq");
         vars.insert("ALERT_OPENED_TOPIC", "custom.alert.opened");
         vars.insert("ALERT_RESOLVED_TOPIC", "custom.alert.resolved");
+        vars.insert("ALERT_RESOLVE_OPERATORS", " operator-0101,operator-0102 ");
         vars.insert("SMART_METER_CRITICAL_TEMP_C", "80.0");
         vars.insert("BATTERY_BMS_CRITICAL_TEMP_C", "50.0");
         vars.insert("SOLAR_INVERTER_CRITICAL_TEMP_C", "90.0");
@@ -227,6 +232,10 @@ mod tests {
         assert_eq!(cfg.telemetry_dlq_topic, "telemetry.custom.dlq");
         assert_eq!(cfg.alert_opened_topic, "custom.alert.opened");
         assert_eq!(cfg.alert_resolved_topic, "custom.alert.resolved");
+        assert_eq!(
+            cfg.alert_resolve_operators,
+            vec!["operator-0101", "operator-0102"]
+        );
         assert_eq!(
             cfg.threshold_policy,
             ThresholdPolicy {

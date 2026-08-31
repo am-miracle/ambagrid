@@ -6,7 +6,7 @@ mod ports;
 mod serve;
 mod telemetry;
 
-use actions::resolve_alert::{ResolveAlert, ResolveAlertInput};
+use actions::resolve_alert::{AllowedResolveOperators, ResolveAlert, ResolveAlertInput};
 use adapters::{
     kafka::producer::{KafkaAlertEventPublisher, ProducerConfig},
     postgres::PostgresIngestRepository,
@@ -57,12 +57,13 @@ async fn resolve_alert(args: Vec<String>) -> Result<(), Box<dyn std::error::Erro
         .connect(&cfg.database_url)
         .await?;
     let store = PostgresIngestRepository::new(pool);
+    let permissions = AllowedResolveOperators::new(cfg.alert_resolve_operators.clone());
     let events = KafkaAlertEventPublisher::connect(ProducerConfig {
         brokers: cfg.kafka_brokers,
         alert_opened_topic: cfg.alert_opened_topic,
         alert_resolved_topic: cfg.alert_resolved_topic,
     })?;
-    let action = ResolveAlert::new(&store, &events);
+    let action = ResolveAlert::new(&store, &events, &permissions);
 
     let alert = action
         .execute(ResolveAlertInput {

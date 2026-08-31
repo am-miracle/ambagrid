@@ -393,7 +393,36 @@ async fn resolve_alert(
     .map_err(PortError::storage)?
     .ok_or_else(|| PortError::message(format!("alert {alert_id} is not open")))?;
 
+    insert_alert_resolution_history(tx, alert_id, resolved_at, resolution_note, resolved_by)
+        .await?;
+
     row_to_alert(row)
+}
+
+async fn insert_alert_resolution_history(
+    tx: &mut Transaction<'_, Postgres>,
+    alert_id: Uuid,
+    resolved_at: DateTime<Utc>,
+    resolution_note: &str,
+    resolved_by: &str,
+) -> Result<(), PortError> {
+    query(
+        r#"
+        INSERT INTO alert_resolution_history (
+            alert_id, resolved_at, resolution_note, resolved_by
+        )
+        VALUES ($1, $2, $3, $4)
+        "#,
+    )
+    .bind(alert_id)
+    .bind(resolved_at)
+    .bind(resolution_note)
+    .bind(resolved_by)
+    .execute(&mut **tx)
+    .await
+    .map_err(PortError::storage)?;
+
+    Ok(())
 }
 
 fn row_to_alert(row: PgRow) -> Result<Alert, PortError> {
