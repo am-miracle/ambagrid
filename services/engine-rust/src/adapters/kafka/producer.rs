@@ -195,7 +195,6 @@ fn alert_opened_event(alert: &Alert) -> proto::AlertOpened {
         severity: to_proto_severity(alert.severity) as i32,
         reason: alert.reason.clone(),
         opened_at_utc: alert.opened_at.timestamp(),
-        kind: alert.kind.as_str().to_string(),
         source_event_id: alert.source_event_id.clone(),
     }
 }
@@ -218,7 +217,6 @@ fn alert_resolved_event(alert: &Alert) -> Result<proto::AlertResolved, PortError
         resolved_at_utc: resolved_at.timestamp(),
         resolution_note: alert.resolution_note.clone().unwrap_or_default(),
         resolved_by: alert.resolved_by.clone().unwrap_or_default(),
-        kind: alert.kind.as_str().to_string(),
     })
 }
 
@@ -287,7 +285,6 @@ mod tests {
         assert_eq!(event.severity, proto::Severity::Critical as i32);
         assert_eq!(event.reason, alert.reason);
         assert_eq!(event.opened_at_utc, alert.opened_at.timestamp());
-        assert_eq!(event.kind, "internal_temperature");
         assert_eq!(event.source_event_id.as_deref(), Some("telemetry-evt-0101"));
     }
 
