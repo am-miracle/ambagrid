@@ -59,7 +59,7 @@ impl ThresholdPolicy {
                 "internal_temperature_high:{temperature:.1}C>=threshold:{threshold:.1}C"
             ),
             opened_at: reading.observed_at,
-            source_event_id: None,
+            source_event_id: reading.source_event_id.clone(),
         })
     }
 
@@ -99,6 +99,7 @@ mod tests {
                 last_seen_at: Utc::now(),
             },
             observed_at: Utc::now(),
+            source_event_id: None,
             state: AssetState::SmartMeter(SmartMeterState::default()),
         };
 
@@ -111,6 +112,28 @@ mod tests {
     }
 
     #[test]
+    fn carries_source_event_id_into_open_alert_decision() {
+        let reading = Reading {
+            asset: Asset {
+                asset_id: "met-0101".to_string(),
+                site_id: "ng-kaji-01".to_string(),
+                internal_temperature: Some(72.4),
+                last_seen_at: Utc::now(),
+            },
+            observed_at: Utc::now(),
+            source_event_id: Some("telemetry.ingested:0:42".to_string()),
+            state: AssetState::SmartMeter(SmartMeterState::default()),
+        };
+
+        let decision = ThresholdPolicy::default().evaluate(&reading).unwrap();
+
+        assert_eq!(
+            decision.source_event_id.as_deref(),
+            Some("telemetry.ingested:0:42")
+        );
+    }
+
+    #[test]
     fn leaves_normal_temperature_alone() {
         let reading = Reading {
             asset: Asset {
@@ -120,6 +143,7 @@ mod tests {
                 last_seen_at: Utc::now(),
             },
             observed_at: Utc::now(),
+            source_event_id: None,
             state: AssetState::SmartMeter(SmartMeterState::default()),
         };
 
@@ -136,6 +160,7 @@ mod tests {
                 last_seen_at: Utc::now(),
             },
             observed_at: Utc::now(),
+            source_event_id: None,
             state: AssetState::BatteryBms(BatteryBmsState::default()),
         };
 
@@ -154,6 +179,7 @@ mod tests {
                 last_seen_at: Utc::now(),
             },
             observed_at: Utc::now(),
+            source_event_id: None,
             state: AssetState::SmartMeter(SmartMeterState::default()),
         };
 
@@ -174,6 +200,7 @@ mod tests {
                 last_seen_at: Utc::now(),
             },
             observed_at: Utc::now(),
+            source_event_id: None,
             state: AssetState::SmartMeter(SmartMeterState::default()),
         };
 
@@ -191,6 +218,7 @@ mod tests {
                 last_seen_at: Utc::now(),
             },
             observed_at: Utc::now(),
+            source_event_id: None,
             state: AssetState::SmartMeter(SmartMeterState::default()),
         };
 

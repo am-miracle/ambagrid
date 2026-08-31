@@ -29,6 +29,7 @@ pub struct Asset {
 pub struct Reading {
     pub asset: Asset,
     pub observed_at: DateTime<Utc>,
+    pub source_event_id: Option<String>,
     pub state: AssetState,
 }
 

@@ -69,6 +69,7 @@ pub fn reading_from_payload(payload: MetricPayload) -> Result<Reading, DecodeErr
             last_seen_at: observed_at,
         },
         observed_at,
+        source_event_id: None,
         state,
     })
 }

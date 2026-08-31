@@ -92,7 +92,8 @@ where
 
         if let Some(bytes) = message.payload().map(<[u8]>::to_vec) {
             match decode_metric_payload(&bytes) {
-                Ok(reading) => {
+                Ok(mut reading) => {
+                    reading.source_event_id = Some(source_event_id(&topic, partition, offset));
                     if let Err(err) = ingest_with_retry(ingest, &reading).await {
                         let ingest_failed = stats.add_ingest_failed();
                         tracing::error!(
@@ -152,6 +153,10 @@ where
             );
         }
     }
+}
+
+fn source_event_id(topic: &str, partition: i32, offset: i64) -> String {
+    format!("{topic}:{partition}:{offset}")
 }
 
 // Retries only PortError::Storage (assumed transient); a data-shape error
@@ -252,8 +257,17 @@ mod tests {
                 last_seen_at: Utc::now(),
             },
             observed_at: Utc::now(),
+            source_event_id: None,
             state: AssetState::SmartMeter(SmartMeterState::default()),
         }
+    }
+
+    #[test]
+    fn source_event_id_uses_kafka_record_coordinates() {
+        assert_eq!(
+            source_event_id("telemetry.ingested", 3, 918),
+            "telemetry.ingested:3:918"
+        );
     }
 
     struct NoopEvents;

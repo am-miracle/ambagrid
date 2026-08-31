@@ -221,6 +221,7 @@ mod tests {
                     last_seen_at: observed_at,
                 },
                 observed_at,
+                source_event_id: Some("telemetry.ingested:0:42".to_string()),
                 state: AssetState::SmartMeter(SmartMeterState::default()),
             })
             .await
@@ -234,6 +235,16 @@ mod tests {
         assert_eq!(store.alerts.lock().unwrap().len(), 1);
         assert_eq!(events.opened.lock().unwrap().len(), 1);
         assert_eq!(events.resolved.lock().unwrap().len(), 0);
+        let opened = result.alert_opened.unwrap();
+        assert_eq!(
+            opened.source_event_id.as_deref(),
+            Some("telemetry.ingested:0:42")
+        );
+        let published = events.opened.lock().unwrap().pop().unwrap();
+        assert_eq!(
+            published.source_event_id.as_deref(),
+            Some("telemetry.ingested:0:42")
+        );
     }
 
     #[tokio::test]
@@ -252,6 +263,7 @@ mod tests {
             .execute(Reading {
                 asset: asset.clone(),
                 observed_at: Utc::now(),
+                source_event_id: None,
                 state: AssetState::SmartMeter(SmartMeterState::default()),
             })
             .await
@@ -261,6 +273,7 @@ mod tests {
             .execute(Reading {
                 asset: asset.clone(),
                 observed_at: Utc::now(),
+                source_event_id: None,
                 state: AssetState::SmartMeter(SmartMeterState::default()),
             })
             .await
@@ -296,6 +309,7 @@ mod tests {
                 last_seen_at: Utc::now(),
             },
             observed_at: Utc::now(),
+            source_event_id: None,
             state: AssetState::SmartMeter(SmartMeterState::default()),
         }
     }
@@ -385,6 +399,7 @@ mod tests {
             .execute(Reading {
                 asset: asset.clone(),
                 observed_at: Utc::now(),
+                source_event_id: None,
                 state: AssetState::SmartMeter(SmartMeterState::default()),
             })
             .await
@@ -398,6 +413,7 @@ mod tests {
                     ..asset
                 },
                 observed_at: Utc::now(),
+                source_event_id: None,
                 state: AssetState::SmartMeter(SmartMeterState::default()),
             })
             .await
@@ -440,6 +456,7 @@ mod tests {
                     last_seen_at: Utc::now(),
                 },
                 observed_at: Utc::now(),
+                source_event_id: None,
                 state: AssetState::SmartMeter(SmartMeterState::default()),
             })
             .await
