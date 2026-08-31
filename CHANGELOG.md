@@ -39,6 +39,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **alerts:** Persist opened alert source events
 - **engine:** Publish telemetry failures to Kafka DLQ
 - **alerts:** Reject resolved events without timestamps
+- **alerts:** Keep kind out of event payloads
 
 ### Maintenance
 
