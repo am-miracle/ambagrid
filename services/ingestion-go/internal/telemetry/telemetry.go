@@ -139,6 +139,9 @@ func jsonToMetricPayload(payload []byte) ([]byte, error) {
 	if err := protojson.Unmarshal(payload, msg); err != nil {
 		return nil, err
 	}
+	if msg.TimestampUtc == nil || msg.GetTimestampUtc() == 0 {
+		return nil, fmt.Errorf("timestamp_utc must be set")
+	}
 	return proto.Marshal(msg)
 }
 

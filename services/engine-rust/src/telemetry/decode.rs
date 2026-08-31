@@ -18,6 +18,8 @@ pub enum DecodeError {
     MissingDeviceId,
     #[error("telemetry site_id must not be empty")]
     MissingSiteId,
+    #[error("telemetry timestamp_utc must be set")]
+    MissingTimestamp,
     #[error("telemetry metrics must be set for a smart meter payload")]
     MissingMetrics,
     #[error("invalid telemetry timestamp_utc: {0}")]
@@ -36,8 +38,12 @@ pub fn reading_from_payload(payload: MetricPayload) -> Result<Reading, DecodeErr
     let asset_id = required(payload.device_id, DecodeError::MissingDeviceId)?;
     let site_id = required(payload.site_id, DecodeError::MissingSiteId)?;
     let asset_type = asset_type(payload.device_type)?;
-    let observed_at = DateTime::<Utc>::from_timestamp(payload.timestamp_utc, 0)
-        .ok_or(DecodeError::InvalidTimestamp(payload.timestamp_utc))?;
+    let timestamp_utc = payload.timestamp_utc.ok_or(DecodeError::MissingTimestamp)?;
+    if timestamp_utc == 0 {
+        return Err(DecodeError::MissingTimestamp);
+    }
+    let observed_at = DateTime::<Utc>::from_timestamp(timestamp_utc, 0)
+        .ok_or(DecodeError::InvalidTimestamp(timestamp_utc))?;
     let internal_temperature = finite_f32("internal_temperature", payload.internal_temperature)?;
 
     let state = match asset_type {
@@ -145,7 +151,7 @@ mod tests {
         let payload = MetricPayload {
             device_id: " met-0101 ".to_string(),
             device_type: DeviceType::SmartMeter as i32,
-            timestamp_utc: 1_787_990_400,
+            timestamp_utc: Some(1_787_990_400),
             site_id: "ng-kaji-01".to_string(),
             household_id: "hh-009".to_string(),
             metrics: Some(ElectricalMetrics {
@@ -181,6 +187,7 @@ mod tests {
         let payload = MetricPayload {
             device_id: "met-0101".to_string(),
             device_type: DeviceType::SmartMeter as i32,
+            timestamp_utc: Some(1_787_990_400),
             site_id: "ng-kaji-01".to_string(),
             metrics: Some(ElectricalMetrics {
                 voltage: Some(231.0),
@@ -203,6 +210,7 @@ mod tests {
     fn rejects_unspecified_device_type() {
         let err = reading_from_payload(MetricPayload {
             device_id: "met-0101".to_string(),
+            timestamp_utc: Some(1_787_990_400),
             site_id: "ng-kaji-01".to_string(),
             ..MetricPayload::default()
         })
@@ -216,6 +224,7 @@ mod tests {
         let err = reading_from_payload(MetricPayload {
             device_id: "met-0101".to_string(),
             device_type: DeviceType::SmartMeter as i32,
+            timestamp_utc: Some(1_787_990_400),
             site_id: "ng-kaji-01".to_string(),
             metrics: None,
             ..MetricPayload::default()
@@ -223,5 +232,34 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err, DecodeError::MissingMetrics);
+    }
+
+    #[test]
+    fn rejects_missing_timestamp() {
+        let err = reading_from_payload(MetricPayload {
+            device_id: "met-0101".to_string(),
+            device_type: DeviceType::SmartMeter as i32,
+            site_id: "ng-kaji-01".to_string(),
+            metrics: Some(ElectricalMetrics::default()),
+            ..MetricPayload::default()
+        })
+        .unwrap_err();
+
+        assert_eq!(err, DecodeError::MissingTimestamp);
+    }
+
+    #[test]
+    fn rejects_default_epoch_timestamp() {
+        let err = reading_from_payload(MetricPayload {
+            device_id: "met-0101".to_string(),
+            device_type: DeviceType::SmartMeter as i32,
+            timestamp_utc: Some(0),
+            site_id: "ng-kaji-01".to_string(),
+            metrics: Some(ElectricalMetrics::default()),
+            ..MetricPayload::default()
+        })
+        .unwrap_err();
+
+        assert_eq!(err, DecodeError::MissingTimestamp);
     }
 }

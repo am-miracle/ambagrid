@@ -216,7 +216,11 @@ fn alert_resolved_event(alert: &Alert) -> Result<proto::AlertResolved, PortError
         opened_at_utc: alert.opened_at.timestamp(),
         resolved_at_utc: resolved_at.timestamp(),
         resolution_note: alert.resolution_note.clone().unwrap_or_default(),
-        resolved_by: alert.resolved_by.clone().unwrap_or_default(),
+        resolved_by: alert
+            .resolved_by
+            .as_ref()
+            .map(|actor| actor.as_str().to_string())
+            .unwrap_or_default(),
     })
 }
 
@@ -229,7 +233,10 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::domain::alert::{AlertKind, AlertStatus, Severity};
+    use crate::domain::{
+        alert::{AlertKind, AlertStatus, Severity},
+        operator::ResolutionActor,
+    };
     use crate::ports::DeadLetterStage;
 
     #[derive(Default)]
@@ -349,7 +356,7 @@ mod tests {
         alert.resolved_at = Some(alert.opened_at + Duration::minutes(5));
         alert.resolution_note =
             Some("internal_temperature_recovered:65.0C<threshold:65.0C".to_string());
-        alert.resolved_by = Some("system".to_string());
+        alert.resolved_by = Some(ResolutionActor::System);
 
         publisher.alert_resolved(&alert).await.unwrap();
 

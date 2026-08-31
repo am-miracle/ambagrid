@@ -350,16 +350,16 @@ Inputs:
 
 - `alert_id`
 - `resolution_note`
-- `resolved_by`
+- `resolved_by` (`OperatorId` for operator actions)
 
 Effects:
 
 - updates `Alert`
 - records resolution history
 
-Operator-triggered resolution must authorize `resolved_by` before mutating
-alert state. Automatic recovery uses the internal `"system"` actor instead
-of this operator action.
+Operator-triggered resolution must authorize `resolved_by` as an `OperatorId`
+before mutating alert state. Automatic recovery uses the reserved internal
+`"system"` actor instead of this operator action.
 
 ## Revenue Protection Model
 

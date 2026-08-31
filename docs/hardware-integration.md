@@ -31,6 +31,9 @@ telemetry.ingested
 ```
 
 Payloads that fail to encode are parked on `telemetry.ingested.dlq` instead of being dropped.
+The Rust engine also parks messages it cannot decode or validate as telemetry.
+Post-decode storage failures are not DLQed: the engine leaves the Kafka offset
+unstored so valid telemetry can be redelivered after the dependency recovers.
 
 ## Payload Model
 
@@ -52,6 +55,10 @@ Core fields:
 - `relay_closed`
 - `battery_soc_pct`
 - `solar_irradiance`
+
+`timestamp_utc` is required even though protobuf uses `optional` to preserve
+field presence; missing or default epoch timestamps are rejected instead of
+being persisted as `1970-01-01`.
 
 The simulator always emits `internal_temperature`, `relay_closed`,
 `battery_soc_pct`, and `solar_irradiance` in JSON, even when their value is

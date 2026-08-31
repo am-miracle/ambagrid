@@ -6,6 +6,7 @@ use uuid::Uuid;
 use crate::domain::{
     alert::{Alert, AlertDecision, AlertKind},
     asset::Reading,
+    operator::{OperatorId, ResolutionActor},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -40,7 +41,7 @@ pub enum PolicyOutcome {
     Resolve {
         kind: AlertKind,
         resolution_note: String,
-        resolved_by: String,
+        resolved_by: ResolutionActor,
     },
     Unchanged,
 }
@@ -70,14 +71,14 @@ pub trait AlertRepository: Send + Sync {
         alert_id: Uuid,
         resolved_at: DateTime<Utc>,
         resolution_note: &str,
-        resolved_by: &str,
+        resolved_by: ResolutionActor,
     ) -> impl Future<Output = Result<Alert, PortError>> + Send;
 }
 
 pub trait ResolveAlertPermission: Send + Sync {
     fn authorize_resolve_alert(
         &self,
-        operator_id: &str,
+        operator_id: &OperatorId,
     ) -> impl Future<Output = Result<(), PortError>> + Send;
 }
 
@@ -92,20 +93,18 @@ pub trait AlertEvents: Send + Sync {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeadLetterStage {
     Decode,
-    Ingest,
 }
 
 impl DeadLetterStage {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Decode => "decode",
-            Self::Ingest => "ingest",
         }
     }
 }
 
-// A telemetry message that failed to decode or ingest, preserved for
-// inspection or replay instead of being dropped.
+// A telemetry message that failed to decode or validate before it became a
+// domain reading, preserved for inspection or replay instead of being dropped.
 pub struct DeadLetter {
     pub kafka_topic: String,
     pub kafka_partition: i32,

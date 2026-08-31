@@ -158,7 +158,7 @@ type MetricPayload struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
 	DeviceId     string                 `protobuf:"bytes,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`                                           // Unique physical hardware identifier (e.g., "met-5540")
 	DeviceType   DeviceType             `protobuf:"varint,2,opt,name=device_type,json=deviceType,proto3,enum=ambagrid.telemetry.DeviceType" json:"device_type,omitempty"` // Type of physical appliance sending data
-	TimestampUtc int64                  `protobuf:"varint,3,opt,name=timestamp_utc,json=timestampUtc,proto3" json:"timestamp_utc,omitempty"`                              // Unix epoch timestamp in seconds
+	TimestampUtc *int64                 `protobuf:"varint,3,opt,name=timestamp_utc,json=timestampUtc,proto3,oneof" json:"timestamp_utc,omitempty"`                        // Unix epoch timestamp in seconds
 	// --- The Ontology Linkage Layer ---
 	// Passing these relations down the wire helps the Rust engine speed up graph traversals
 	SiteId      string `protobuf:"bytes,4,opt,name=site_id,json=siteId,proto3" json:"site_id,omitempty"`                // The Mini-Grid facility identifier (e.g., "ng-kaji-01")
@@ -219,8 +219,8 @@ func (x *MetricPayload) GetDeviceType() DeviceType {
 }
 
 func (x *MetricPayload) GetTimestampUtc() int64 {
-	if x != nil {
-		return x.TimestampUtc
+	if x != nil && x.TimestampUtc != nil {
+		return *x.TimestampUtc
 	}
 	return 0
 }
@@ -293,12 +293,12 @@ const file_telemetry_proto_rawDesc = "" +
 	"\n" +
 	"_frequencyB\f\n" +
 	"\n" +
-	"_total_kwh\"\xb8\x03\n" +
+	"_total_kwh\"\xcf\x03\n" +
 	"\rMetricPayload\x12\x1b\n" +
 	"\tdevice_id\x18\x01 \x01(\tR\bdeviceId\x12?\n" +
 	"\vdevice_type\x18\x02 \x01(\x0e2\x1e.ambagrid.telemetry.DeviceTypeR\n" +
-	"deviceType\x12#\n" +
-	"\rtimestamp_utc\x18\x03 \x01(\x03R\ftimestampUtc\x12\x17\n" +
+	"deviceType\x12(\n" +
+	"\rtimestamp_utc\x18\x03 \x01(\x03H\x00R\ftimestampUtc\x88\x01\x01\x12\x17\n" +
 	"\asite_id\x18\x04 \x01(\tR\x06siteId\x12!\n" +
 	"\fhousehold_id\x18\x05 \x01(\tR\vhouseholdId\x12?\n" +
 	"\ametrics\x18\x06 \x01(\v2%.ambagrid.telemetry.ElectricalMetricsR\ametrics\x121\n" +
@@ -306,7 +306,8 @@ const file_telemetry_proto_rawDesc = "" +
 	"\frelay_closed\x18\b \x01(\bR\vrelayClosed\x12&\n" +
 	"\x0fbattery_soc_pct\x18\t \x01(\x02R\rbatterySocPct\x12)\n" +
 	"\x10solar_irradiance\x18\n" +
-	" \x01(\x02R\x0fsolarIrradiance*\x83\x01\n" +
+	" \x01(\x02R\x0fsolarIrradianceB\x10\n" +
+	"\x0e_timestamp_utc*\x83\x01\n" +
 	"\n" +
 	"DeviceType\x12\x1b\n" +
 	"\x17DEVICE_TYPE_UNSPECIFIED\x10\x00\x12\x1b\n" +
@@ -349,6 +350,7 @@ func file_telemetry_proto_init() {
 		return
 	}
 	file_telemetry_proto_msgTypes[0].OneofWrappers = []any{}
+	file_telemetry_proto_msgTypes[1].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

@@ -12,6 +12,7 @@ use adapters::{
     postgres::PostgresIngestRepository,
 };
 use config::Config;
+use domain::operator::OperatorId;
 use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
@@ -48,7 +49,7 @@ async fn resolve_alert(args: Vec<String>) -> Result<(), Box<dyn std::error::Erro
     }
 
     let alert_id = Uuid::parse_str(&args[0])?;
-    let resolved_by = args[1].clone();
+    let resolved_by = OperatorId::new(args[1].clone())?;
     let resolution_note = args[2..].join(" ");
 
     let cfg = Config::from_env()?;

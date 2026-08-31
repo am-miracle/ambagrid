@@ -6,6 +6,7 @@ use crate::{
     domain::{
         alert::{Alert, AlertDecision, AlertKind, AlertStatus, Severity},
         asset::{AssetState, BatteryBmsState, Reading, SmartMeterState, SolarInverterState},
+        operator::{OperatorId, ResolutionActor},
     },
     ports::{AlertRepository, IngestRepository, IngestWrite, PolicyOutcome, PortError},
 };
@@ -91,11 +92,17 @@ impl AlertRepository for PostgresIngestRepository {
         alert_id: Uuid,
         resolved_at: DateTime<Utc>,
         resolution_note: &str,
-        resolved_by: &str,
+        resolved_by: ResolutionActor,
     ) -> Result<Alert, PortError> {
         let mut tx = self.pool.begin().await.map_err(PortError::storage)?;
-        let alert =
-            resolve_alert(&mut tx, alert_id, resolved_at, resolution_note, resolved_by).await?;
+        let alert = resolve_alert(
+            &mut tx,
+            alert_id,
+            resolved_at,
+            resolution_note,
+            &resolved_by,
+        )
+        .await?;
         tx.commit().await.map_err(PortError::storage)?;
 
         Ok(alert)
@@ -136,20 +143,39 @@ async fn write_asset_state_and_reading(
     reading: &Reading,
 ) -> Result<(), PortError> {
     match &reading.state {
-        AssetState::SmartMeter(state) => {
-            upsert_smart_meter_state(tx, reading, state).await?;
-            append_smart_meter_reading(tx, reading, state).await?;
-        }
-        AssetState::BatteryBms(state) => {
-            upsert_battery_bms_state(tx, reading, state).await?;
-            append_battery_bms_reading(tx, reading, state).await?;
-        }
-        AssetState::SolarInverter(state) => {
-            upsert_solar_inverter_state(tx, reading, state).await?;
-            append_solar_inverter_reading(tx, reading, state).await?;
-        }
+        AssetState::SmartMeter(state) => persist_smart_meter(tx, reading, state).await,
+        AssetState::BatteryBms(state) => persist_battery_bms(tx, reading, state).await,
+        AssetState::SolarInverter(state) => persist_solar_inverter(tx, reading, state).await,
     }
+}
 
+async fn persist_smart_meter(
+    tx: &mut Transaction<'_, Postgres>,
+    reading: &Reading,
+    state: &SmartMeterState,
+) -> Result<(), PortError> {
+    upsert_smart_meter_state(tx, reading, state).await?;
+    append_smart_meter_reading(tx, reading, state).await?;
+    Ok(())
+}
+
+async fn persist_battery_bms(
+    tx: &mut Transaction<'_, Postgres>,
+    reading: &Reading,
+    state: &BatteryBmsState,
+) -> Result<(), PortError> {
+    upsert_battery_bms_state(tx, reading, state).await?;
+    append_battery_bms_reading(tx, reading, state).await?;
+    Ok(())
+}
+
+async fn persist_solar_inverter(
+    tx: &mut Transaction<'_, Postgres>,
+    reading: &Reading,
+    state: &SolarInverterState,
+) -> Result<(), PortError> {
+    upsert_solar_inverter_state(tx, reading, state).await?;
+    append_solar_inverter_reading(tx, reading, state).await?;
     Ok(())
 }
 
@@ -373,7 +399,7 @@ async fn resolve_alert(
     alert_id: Uuid,
     resolved_at: DateTime<Utc>,
     resolution_note: &str,
-    resolved_by: &str,
+    resolved_by: &ResolutionActor,
 ) -> Result<Alert, PortError> {
     let row = query(
         r#"
@@ -387,7 +413,7 @@ async fn resolve_alert(
     .bind(alert_id)
     .bind(resolved_at)
     .bind(resolution_note)
-    .bind(resolved_by)
+    .bind(resolved_by.as_str())
     .fetch_optional(&mut **tx)
     .await
     .map_err(PortError::storage)?
@@ -404,7 +430,7 @@ async fn insert_alert_resolution_history(
     alert_id: Uuid,
     resolved_at: DateTime<Utc>,
     resolution_note: &str,
-    resolved_by: &str,
+    resolved_by: &ResolutionActor,
 ) -> Result<(), PortError> {
     query(
         r#"
@@ -417,7 +443,7 @@ async fn insert_alert_resolution_history(
     .bind(alert_id)
     .bind(resolved_at)
     .bind(resolution_note)
-    .bind(resolved_by)
+    .bind(resolved_by.as_str())
     .execute(&mut **tx)
     .await
     .map_err(PortError::storage)?;
@@ -438,8 +464,21 @@ fn row_to_alert(row: PgRow) -> Result<Alert, PortError> {
         source_event_id: row.get("source_event_id"),
         resolved_at: row.get::<Option<DateTime<Utc>>, _>("resolved_at"),
         resolution_note: row.get("resolution_note"),
-        resolved_by: row.get("resolved_by"),
+        resolved_by: row
+            .get::<Option<String>, _>("resolved_by")
+            .map(parse_resolution_actor)
+            .transpose()?,
     })
+}
+
+fn parse_resolution_actor(value: String) -> Result<ResolutionActor, PortError> {
+    if value == "system" {
+        Ok(ResolutionActor::System)
+    } else {
+        OperatorId::new(value)
+            .map(ResolutionActor::Operator)
+            .map_err(|err| PortError::message(err.to_string()))
+    }
 }
 
 fn parse_severity(value: &str) -> Result<Severity, PortError> {

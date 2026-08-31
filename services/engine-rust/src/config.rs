@@ -1,4 +1,4 @@
-use crate::domain::rules::ThresholdPolicy;
+use crate::domain::{operator::OperatorId, rules::ThresholdPolicy};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -9,7 +9,7 @@ pub struct Config {
     pub telemetry_group_id: String,
     pub alert_opened_topic: String,
     pub alert_resolved_topic: String,
-    pub alert_resolve_operators: Vec<String>,
+    pub alert_resolve_operators: Vec<OperatorId>,
     pub threshold_policy: ThresholdPolicy,
 }
 
@@ -31,7 +31,11 @@ impl Config {
         let alert_opened_topic = env_string(&lookup, "ALERT_OPENED_TOPIC", Some("alert.opened"))?;
         let alert_resolved_topic =
             env_string(&lookup, "ALERT_RESOLVED_TOPIC", Some("alert.resolved"))?;
-        let alert_resolve_operators = env_csv(&lookup, "ALERT_RESOLVE_OPERATORS", "");
+        let alert_resolve_operators = env_csv(&lookup, "ALERT_RESOLVE_OPERATORS", "")
+            .into_iter()
+            .map(OperatorId::new)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| ConfigError::Invalid(err.to_string()))?;
 
         if kafka_brokers.is_empty() {
             return Err(ConfigError::Invalid(
@@ -202,6 +206,19 @@ mod tests {
     }
 
     #[test]
+    fn from_lookup_rejects_reserved_system_operator() {
+        let mut vars = required_vars();
+        vars.insert("ALERT_RESOLVE_OPERATORS", "system");
+
+        let err = Config::from_lookup(lookup_fn(vars)).unwrap_err();
+
+        assert_eq!(
+            err,
+            ConfigError::Invalid("operator_id must not be the reserved system actor".to_string())
+        );
+    }
+
+    #[test]
     fn from_lookup_applies_defaults_when_optional_vars_are_unset() {
         let cfg = Config::from_lookup(lookup_fn(required_vars())).unwrap();
 
@@ -233,7 +250,10 @@ mod tests {
         assert_eq!(cfg.alert_opened_topic, "custom.alert.opened");
         assert_eq!(cfg.alert_resolved_topic, "custom.alert.resolved");
         assert_eq!(
-            cfg.alert_resolve_operators,
+            cfg.alert_resolve_operators
+                .iter()
+                .map(OperatorId::as_str)
+                .collect::<Vec<_>>(),
             vec!["operator-0101", "operator-0102"]
         );
         assert_eq!(

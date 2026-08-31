@@ -27,7 +27,7 @@ message ElectricalMetrics {
 message MetricPayload {
   string device_id = 1;        // Unique physical hardware identifier (e.g., "met-5540")
   DeviceType device_type = 2;  // Type of physical appliance sending data
-  int64 timestamp_utc = 3;     // Unix epoch timestamp in seconds
+  optional int64 timestamp_utc = 3; // Unix epoch timestamp in seconds
 
   // --- The Ontology Linkage Layer ---
   // Passing these relations down the wire helps the Rust engine speed up graph traversals

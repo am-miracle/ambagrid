@@ -2,12 +2,11 @@ use crate::{
     domain::{
         alert::{Alert, AlertKind},
         asset::Reading,
+        operator::ResolutionActor,
         rules::{INTERNAL_TEMPERATURE_ALERT_KIND, ThresholdPolicy},
     },
     ports::{AlertEvents, IngestRepository, PolicyOutcome, PortError},
 };
-
-const RESOLVED_BY_SYSTEM: &str = "system";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct IngestResult {
@@ -42,7 +41,7 @@ where
                 Some(resolution_note) => PolicyOutcome::Resolve {
                     kind: AlertKind::from(INTERNAL_TEMPERATURE_ALERT_KIND),
                     resolution_note,
-                    resolved_by: RESOLVED_BY_SYSTEM.to_string(),
+                    resolved_by: ResolutionActor::System,
                 },
                 None => PolicyOutcome::Unchanged,
             },
@@ -356,7 +355,7 @@ mod tests {
                 PolicyOutcome::Resolve {
                     kind: AlertKind::from("internal_temperature"),
                     resolution_note: "internal_temperature_recovered".to_string(),
-                    resolved_by: RESOLVED_BY_SYSTEM.to_string(),
+                    resolved_by: ResolutionActor::System,
                 },
             )
             .await
@@ -422,7 +421,10 @@ mod tests {
         let resolved = recovered.alert_resolved.unwrap();
         assert_eq!(resolved.alert_id, alert_id);
         assert_eq!(resolved.status, AlertStatus::Resolved);
-        assert_eq!(resolved.resolved_by.as_deref(), Some("system"));
+        assert_eq!(
+            resolved.resolved_by.as_ref().map(ResolutionActor::as_str),
+            Some("system")
+        );
         assert_eq!(events.opened.lock().unwrap().len(), 1);
         assert_eq!(events.resolved.lock().unwrap().len(), 1);
     }

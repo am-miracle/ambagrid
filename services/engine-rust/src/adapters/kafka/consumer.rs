@@ -88,51 +88,21 @@ where
         let topic = message.topic().to_string();
         let partition = message.partition();
         let offset = message.offset();
-        let mut handled = true;
-
-        if let Some(bytes) = message.payload().map(<[u8]>::to_vec) {
-            match decode_metric_payload(&bytes) {
-                Ok(mut reading) => {
-                    reading.source_event_id = Some(source_event_id(&topic, partition, offset));
-                    if let Err(err) = ingest_with_retry(ingest, &reading).await {
-                        let ingest_failed = stats.add_ingest_failed();
-                        tracing::error!(
-                            error = %err,
-                            ingest_failed,
-                            "failed to ingest telemetry reading after retries"
-                        );
-
-                        let entry = build_dead_letter(
-                            &topic,
-                            partition,
-                            offset,
-                            bytes,
-                            DeadLetterStage::Ingest,
-                            &err,
-                        );
-                        handled = park(&stats, dead_letters, &entry).await;
-                    }
-                }
-                Err(err) => {
-                    let decode_failed = stats.add_decode_failed();
-                    tracing::warn!(
-                        error = %err,
-                        decode_failed,
-                        "parking malformed telemetry message"
-                    );
-
-                    let entry = build_dead_letter(
-                        &topic,
-                        partition,
-                        offset,
-                        bytes,
-                        DeadLetterStage::Decode,
-                        &err,
-                    );
-                    handled = park(&stats, dead_letters, &entry).await;
-                }
+        let handled = match message.payload().map(<[u8]>::to_vec) {
+            Some(bytes) => {
+                handle_payload(
+                    ingest,
+                    dead_letters,
+                    &stats,
+                    &topic,
+                    partition,
+                    offset,
+                    bytes,
+                )
+                .await
             }
-        }
+            None => true,
+        };
 
         if !handled {
             continue;
@@ -151,6 +121,56 @@ where
                 store_offset_failed,
                 "failed to store Kafka offset for commit"
             );
+        }
+    }
+}
+
+async fn handle_payload<S, E, D>(
+    ingest: &IngestReading<'_, S, E>,
+    dead_letters: &D,
+    stats: &ConsumerStats,
+    topic: &str,
+    partition: i32,
+    offset: i64,
+    bytes: Vec<u8>,
+) -> bool
+where
+    S: IngestRepository,
+    E: AlertEvents,
+    D: DeadLetterSink,
+{
+    match decode_metric_payload(&bytes) {
+        Ok(mut reading) => {
+            reading.source_event_id = Some(source_event_id(topic, partition, offset));
+            if let Err(err) = ingest_with_retry(ingest, &reading).await {
+                let ingest_failed = stats.add_ingest_failed();
+                tracing::error!(
+                    error = %err,
+                    ingest_failed,
+                    "failed to ingest telemetry reading after retries; leaving offset unstored for redelivery"
+                );
+                return false;
+            }
+
+            true
+        }
+        Err(err) => {
+            let decode_failed = stats.add_decode_failed();
+            tracing::warn!(
+                error = %err,
+                decode_failed,
+                "parking malformed telemetry message"
+            );
+
+            let entry = build_dead_letter(
+                topic,
+                partition,
+                offset,
+                bytes,
+                DeadLetterStage::Decode,
+                &err,
+            );
+            park(stats, dead_letters, &entry).await
         }
     }
 }
@@ -236,6 +256,7 @@ mod tests {
     use std::sync::{Mutex, atomic::AtomicU32};
 
     use chrono::Utc;
+    use prost::Message as _;
 
     use crate::{
         domain::{
@@ -243,7 +264,10 @@ mod tests {
             asset::{Asset, AssetState, SmartMeterState},
         },
         ports::{IngestWrite, PolicyOutcome},
-        telemetry::decode::DecodeError,
+        telemetry::{
+            decode::DecodeError,
+            proto::{DeviceType, ElectricalMetrics, MetricPayload},
+        },
     };
 
     use super::*;
@@ -260,6 +284,20 @@ mod tests {
             source_event_id: None,
             state: AssetState::SmartMeter(SmartMeterState::default()),
         }
+    }
+
+    fn valid_payload_bytes() -> Vec<u8> {
+        let payload = MetricPayload {
+            device_id: "met-0101".to_string(),
+            device_type: DeviceType::SmartMeter as i32,
+            timestamp_utc: Some(1_787_990_400),
+            site_id: "ng-kaji-01".to_string(),
+            metrics: Some(ElectricalMetrics::default()),
+            ..MetricPayload::default()
+        };
+        let mut bytes = Vec::new();
+        payload.encode(&mut bytes).unwrap();
+        bytes
     }
 
     #[test]
@@ -411,23 +449,32 @@ mod tests {
         assert_eq!(entry.error, error.to_string());
     }
 
-    #[test]
-    fn build_dead_letter_marks_ingest_stage_for_ingest_failures() {
-        let payload = b"a validly-decoded but unpersisted reading".to_vec();
-        let error = PortError::message("unknown alert severity: bogus");
+    #[tokio::test]
+    async fn post_decode_storage_failures_are_left_unhandled_for_redelivery() {
+        let store = FlakyStore {
+            attempts: AtomicU32::new(0),
+            fail_until: u32::MAX,
+        };
+        let events = NoopEvents;
+        let ingest = IngestReading::new(&store, &events);
+        let sink = RecordingDeadLetterSink::default();
+        let stats = ConsumerStats::default();
 
-        let entry = build_dead_letter(
+        let handled = handle_payload(
+            &ingest,
+            &sink,
+            &stats,
             "telemetry.ingested",
             0,
             7,
-            payload.clone(),
-            DeadLetterStage::Ingest,
-            &error,
-        );
+            valid_payload_bytes(),
+        )
+        .await;
 
-        assert_eq!(entry.stage, DeadLetterStage::Ingest);
-        assert_eq!(entry.payload, payload);
-        assert_eq!(entry.error, error.to_string());
+        assert!(!handled);
+        assert_eq!(store.attempts.load(Ordering::Relaxed), MAX_INGEST_ATTEMPTS);
+        assert!(sink.entries.lock().unwrap().is_empty());
+        assert_eq!(stats.ingest_failed.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]

@@ -2,7 +2,10 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::{
-    domain::alert::Alert,
+    domain::{
+        alert::Alert,
+        operator::{OperatorId, ResolutionActor},
+    },
     ports::{AlertEvents, AlertRepository, PortError, ResolveAlertPermission},
 };
 
@@ -10,16 +13,16 @@ use crate::{
 pub struct ResolveAlertInput {
     pub alert_id: Uuid,
     pub resolution_note: String,
-    pub resolved_by: String,
+    pub resolved_by: OperatorId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AllowedResolveOperators {
-    allowed_operator_ids: Vec<String>,
+    allowed_operator_ids: Vec<OperatorId>,
 }
 
 impl AllowedResolveOperators {
-    pub fn new(allowed_operator_ids: Vec<String>) -> Self {
+    pub fn new(allowed_operator_ids: Vec<OperatorId>) -> Self {
         Self {
             allowed_operator_ids,
         }
@@ -27,7 +30,7 @@ impl AllowedResolveOperators {
 }
 
 impl ResolveAlertPermission for AllowedResolveOperators {
-    async fn authorize_resolve_alert(&self, operator_id: &str) -> Result<(), PortError> {
+    async fn authorize_resolve_alert(&self, operator_id: &OperatorId) -> Result<(), PortError> {
         if self
             .allowed_operator_ids
             .iter()
@@ -36,7 +39,8 @@ impl ResolveAlertPermission for AllowedResolveOperators {
             Ok(())
         } else {
             Err(PortError::message(format!(
-                "operator {operator_id} is not authorized to resolve alerts"
+                "operator {} is not authorized to resolve alerts",
+                operator_id.as_str()
             )))
         }
     }
@@ -72,10 +76,10 @@ where
         resolved_at: DateTime<Utc>,
     ) -> Result<Alert, PortError> {
         let resolution_note = required("resolution_note", input.resolution_note)?;
-        let resolved_by = required("resolved_by", input.resolved_by)?;
+        let resolved_by = input.resolved_by;
 
         self.permissions
-            .authorize_resolve_alert(resolved_by.as_str())
+            .authorize_resolve_alert(&resolved_by)
             .await?;
 
         let alert = self
@@ -84,7 +88,7 @@ where
                 input.alert_id,
                 resolved_at,
                 resolution_note.as_str(),
-                resolved_by.as_str(),
+                ResolutionActor::Operator(resolved_by),
             )
             .await?;
 
@@ -125,7 +129,7 @@ mod tests {
             alert_id: Uuid,
             resolved_at: DateTime<Utc>,
             resolution_note: &str,
-            resolved_by: &str,
+            resolved_by: ResolutionActor,
         ) -> Result<Alert, PortError> {
             self.resolve_calls.lock().unwrap().push(alert_id);
             let mut alert = self
@@ -142,7 +146,7 @@ mod tests {
             alert.status = AlertStatus::Resolved;
             alert.resolved_at = Some(resolved_at);
             alert.resolution_note = Some(resolution_note.to_string());
-            alert.resolved_by = Some(resolved_by.to_string());
+            alert.resolved_by = Some(resolved_by);
             Ok(alert)
         }
     }
@@ -152,12 +156,13 @@ mod tests {
     }
 
     impl ResolveAlertPermission for FakePermissions {
-        async fn authorize_resolve_alert(&self, operator_id: &str) -> Result<(), PortError> {
+        async fn authorize_resolve_alert(&self, operator_id: &OperatorId) -> Result<(), PortError> {
             if self.allow {
                 Ok(())
             } else {
                 Err(PortError::message(format!(
-                    "operator {operator_id} is not authorized to resolve alerts"
+                    "operator {} is not authorized to resolve alerts",
+                    operator_id.as_str()
                 )))
             }
         }
@@ -219,7 +224,7 @@ mod tests {
                 ResolveAlertInput {
                     alert_id,
                     resolution_note: "checked by field operator".to_string(),
-                    resolved_by: "operator-0101".to_string(),
+                    resolved_by: OperatorId::new("operator-0101").unwrap(),
                 },
                 resolved_at,
             )
@@ -233,7 +238,10 @@ mod tests {
             resolved.resolution_note.as_deref(),
             Some("checked by field operator")
         );
-        assert_eq!(resolved.resolved_by.as_deref(), Some("operator-0101"));
+        assert_eq!(
+            resolved.resolved_by.as_ref().map(ResolutionActor::as_str),
+            Some("operator-0101")
+        );
         assert_eq!(events.resolved.lock().unwrap().len(), 1);
     }
 
@@ -254,7 +262,7 @@ mod tests {
                 ResolveAlertInput {
                     alert_id,
                     resolution_note: "  replaced cooling fan  ".to_string(),
-                    resolved_by: "  operator-0101  ".to_string(),
+                    resolved_by: OperatorId::new("  operator-0101  ").unwrap(),
                 },
                 Utc::now(),
             )
@@ -265,7 +273,10 @@ mod tests {
             resolved.resolution_note.as_deref(),
             Some("replaced cooling fan")
         );
-        assert_eq!(resolved.resolved_by.as_deref(), Some("operator-0101"));
+        assert_eq!(
+            resolved.resolved_by.as_ref().map(ResolutionActor::as_str),
+            Some("operator-0101")
+        );
     }
 
     #[tokio::test]
@@ -280,7 +291,7 @@ mod tests {
                 ResolveAlertInput {
                     alert_id: Uuid::new_v4(),
                     resolution_note: " ".to_string(),
-                    resolved_by: "operator-0101".to_string(),
+                    resolved_by: OperatorId::new("operator-0101").unwrap(),
                 },
                 Utc::now(),
             )
@@ -307,7 +318,7 @@ mod tests {
                 ResolveAlertInput {
                     alert_id,
                     resolution_note: "handled manually".to_string(),
-                    resolved_by: "operator-0101".to_string(),
+                    resolved_by: OperatorId::new("operator-0101").unwrap(),
                 },
                 Utc::now(),
             )
@@ -324,14 +335,15 @@ mod tests {
 
     #[tokio::test]
     async fn configured_permission_allows_only_listed_operators() {
-        let permissions = AllowedResolveOperators::new(vec!["operator-0101".to_string()]);
+        let permissions =
+            AllowedResolveOperators::new(vec![OperatorId::new("operator-0101").unwrap()]);
 
         permissions
-            .authorize_resolve_alert("operator-0101")
+            .authorize_resolve_alert(&OperatorId::new("operator-0101").unwrap())
             .await
             .unwrap();
         let err = permissions
-            .authorize_resolve_alert("operator-9999")
+            .authorize_resolve_alert(&OperatorId::new("operator-9999").unwrap())
             .await
             .unwrap_err();
 
@@ -361,7 +373,7 @@ mod tests {
                 ResolveAlertInput {
                     alert_id,
                     resolution_note: "handled manually".to_string(),
-                    resolved_by: "operator-0101".to_string(),
+                    resolved_by: OperatorId::new("operator-0101").unwrap(),
                 },
                 Utc::now(),
             )

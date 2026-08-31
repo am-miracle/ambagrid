@@ -133,6 +133,7 @@ func TestBuildRecord(t *testing.T) {
 	payload := []byte(`{
 		"device_id": "met-0101",
 		"device_type": "DEVICE_TYPE_SMART_METER",
+		"timestamp_utc": 1745500000,
 		"site_id": "ng-kaji-01",
 		"metrics": {"voltage": 231.0}
 	}`)
@@ -164,6 +165,12 @@ func TestBuildRecord(t *testing.T) {
 	if decoded.GetDeviceType() != telemetrypb.DeviceType_DEVICE_TYPE_SMART_METER {
 		t.Fatalf("decoded DeviceType = %v, want %v", decoded.GetDeviceType(), telemetrypb.DeviceType_DEVICE_TYPE_SMART_METER)
 	}
+	if decoded.TimestampUtc == nil {
+		t.Fatal("decoded TimestampUtc is nil, want presence preserved")
+	}
+	if decoded.GetTimestampUtc() != 1745500000 {
+		t.Fatalf("decoded TimestampUtc = %v, want %v", decoded.GetTimestampUtc(), int64(1745500000))
+	}
 	if decoded.GetSiteId() != "ng-kaji-01" {
 		t.Fatalf("decoded SiteId = %q, want %q", decoded.GetSiteId(), "ng-kaji-01")
 	}
@@ -189,6 +196,19 @@ func TestBuildRecord(t *testing.T) {
 	}
 	if headers["site_id"] != "ng-kaji-01" {
 		t.Fatalf("site_id header = %q", headers["site_id"])
+	}
+}
+
+func TestBuildRecordRejectsMissingTimestamp(t *testing.T) {
+	payload := []byte(`{
+		"device_id": "met-0101",
+		"device_type": "DEVICE_TYPE_SMART_METER",
+		"site_id": "ng-kaji-01",
+		"metrics": {"voltage": 231.0}
+	}`)
+
+	if _, err := BuildRecord("telemetry.ingested", "africa-west/ng-kaji-01/smartmeter/met-0101/telemetry", payload, MessageMetadata{}, TopicConstraints{}); err == nil {
+		t.Fatal("BuildRecord returned nil error for missing timestamp_utc")
 	}
 }
 

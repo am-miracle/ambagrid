@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
+use crate::domain::operator::ResolutionActor;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlertKind(String);
 
@@ -62,7 +64,7 @@ pub struct Alert {
     pub source_event_id: Option<String>,
     pub resolved_at: Option<DateTime<Utc>>,
     pub resolution_note: Option<String>,
-    pub resolved_by: Option<String>,
+    pub resolved_by: Option<ResolutionActor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
