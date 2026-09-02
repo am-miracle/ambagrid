@@ -1,10 +1,12 @@
+use std::str::FromStr;
+
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgRow, query};
 use uuid::Uuid;
 
 use crate::{
     domain::{
-        alert::{Alert, AlertDecision, AlertKind, AlertStatus, Severity},
+        alert::{Alert, AlertDecision, AlertKind},
         asset::{AssetState, BatteryBmsState, Reading, SmartMeterState, SolarInverterState},
         operator::{OperatorId, ResolutionActor},
     },
@@ -138,44 +140,28 @@ async fn upsert_asset(
     Ok(())
 }
 
+// Every asset type follows the same two-step protocol — overwrite the current
+// state row, then append an immutable reading — but each has its own tables
+// and column list, so the SQL is written out per type rather than generated.
 async fn write_asset_state_and_reading(
     tx: &mut Transaction<'_, Postgres>,
     reading: &Reading,
 ) -> Result<(), PortError> {
     match &reading.state {
-        AssetState::SmartMeter(state) => persist_smart_meter(tx, reading, state).await,
-        AssetState::BatteryBms(state) => persist_battery_bms(tx, reading, state).await,
-        AssetState::SolarInverter(state) => persist_solar_inverter(tx, reading, state).await,
+        AssetState::SmartMeter(state) => {
+            upsert_smart_meter_state(tx, reading, state).await?;
+            append_smart_meter_reading(tx, reading, state).await?;
+        }
+        AssetState::BatteryBms(state) => {
+            upsert_battery_bms_state(tx, reading, state).await?;
+            append_battery_bms_reading(tx, reading, state).await?;
+        }
+        AssetState::SolarInverter(state) => {
+            upsert_solar_inverter_state(tx, reading, state).await?;
+            append_solar_inverter_reading(tx, reading, state).await?;
+        }
     }
-}
 
-async fn persist_smart_meter(
-    tx: &mut Transaction<'_, Postgres>,
-    reading: &Reading,
-    state: &SmartMeterState,
-) -> Result<(), PortError> {
-    upsert_smart_meter_state(tx, reading, state).await?;
-    append_smart_meter_reading(tx, reading, state).await?;
-    Ok(())
-}
-
-async fn persist_battery_bms(
-    tx: &mut Transaction<'_, Postgres>,
-    reading: &Reading,
-    state: &BatteryBmsState,
-) -> Result<(), PortError> {
-    upsert_battery_bms_state(tx, reading, state).await?;
-    append_battery_bms_reading(tx, reading, state).await?;
-    Ok(())
-}
-
-async fn persist_solar_inverter(
-    tx: &mut Transaction<'_, Postgres>,
-    reading: &Reading,
-    state: &SolarInverterState,
-) -> Result<(), PortError> {
-    upsert_solar_inverter_state(tx, reading, state).await?;
-    append_solar_inverter_reading(tx, reading, state).await?;
     Ok(())
 }
 
@@ -457,8 +443,8 @@ fn row_to_alert(row: PgRow) -> Result<Alert, PortError> {
         asset_id: row.get("asset_id"),
         site_id: row.get("site_id"),
         kind: AlertKind::from(row.get::<String, _>("kind")),
-        severity: parse_severity(row.get::<String, _>("severity").as_str())?,
-        status: parse_status(row.get::<String, _>("status").as_str())?,
+        severity: parse_domain_value(row.get::<String, _>("severity").as_str())?,
+        status: parse_domain_value(row.get::<String, _>("status").as_str())?,
         reason: row.get("reason"),
         opened_at: row.get::<DateTime<Utc>, _>("opened_at"),
         source_event_id: row.get("source_event_id"),
@@ -481,21 +467,13 @@ fn parse_resolution_actor(value: String) -> Result<ResolutionActor, PortError> {
     }
 }
 
-fn parse_severity(value: &str) -> Result<Severity, PortError> {
-    match value {
-        "info" => Ok(Severity::Info),
-        "warning" => Ok(Severity::Warning),
-        "critical" => Ok(Severity::Critical),
-        _ => Err(PortError::message(format!(
-            "unknown alert severity: {value}"
-        ))),
-    }
-}
-
-fn parse_status(value: &str) -> Result<AlertStatus, PortError> {
-    match value {
-        "open" => Ok(AlertStatus::Open),
-        "resolved" => Ok(AlertStatus::Resolved),
-        _ => Err(PortError::message(format!("unknown alert status: {value}"))),
-    }
+// A value the database holds that the domain no longer recognises is a
+// schema-drift bug, not a transient fault, so it maps to a non-retryable
+// PortError::Message.
+fn parse_domain_value<T>(value: &str) -> Result<T, PortError>
+where
+    T: FromStr,
+    T::Err: std::fmt::Display,
+{
+    T::from_str(value).map_err(|err| PortError::message(err.to_string()))
 }

@@ -27,12 +27,16 @@ pub struct ConsumerConfig {
 
 const MAX_INGEST_ATTEMPTS: u32 = 3;
 
+// Paced so a broker that is down cannot spin this loop on back-to-back errors.
+const CONSUME_ERROR_BACKOFF: Duration = Duration::from_millis(500);
+
 fn ingest_backoff(attempt: u32) -> Duration {
-    Duration::from_millis(100 * 4u64.pow(attempt - 1))
+    Duration::from_millis(100u64.saturating_mul(4u64.saturating_pow(attempt.saturating_sub(1))))
 }
 
 #[derive(Debug, Default)]
 struct ConsumerStats {
+    consume_failed: AtomicU64,
     decode_failed: AtomicU64,
     ingest_failed: AtomicU64,
     dlq_failed: AtomicU64,
@@ -40,6 +44,10 @@ struct ConsumerStats {
 }
 
 impl ConsumerStats {
+    fn add_consume_failed(&self) -> u64 {
+        self.consume_failed.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
     fn add_decode_failed(&self) -> u64 {
         self.decode_failed.fetch_add(1, Ordering::Relaxed) + 1
     }
@@ -84,7 +92,24 @@ where
     let stats = ConsumerStats::default();
 
     loop {
-        let message = consumer.recv().await.map_err(ConsumerError::Consume)?;
+        // rdkafka reconnects and rebalances internally, so a recv() error is
+        // almost always a transient broker or protocol blip. Returning here
+        // would end ingestion for every site until the process is restarted,
+        // so log it and keep consuming instead.
+        let message = match consumer.recv().await {
+            Ok(message) => message,
+            Err(err) => {
+                let consume_failed = stats.add_consume_failed();
+                tracing::error!(
+                    error = %err,
+                    consume_failed,
+                    "kafka receive failed; retrying"
+                );
+                tokio::time::sleep(CONSUME_ERROR_BACKOFF).await;
+                continue;
+            }
+        };
+
         let topic = message.topic().to_string();
         let partition = message.partition();
         let offset = message.offset();
@@ -190,7 +215,8 @@ where
     S: IngestRepository,
     E: AlertEvents,
 {
-    for attempt in 1..=MAX_INGEST_ATTEMPTS {
+    let mut attempt = 1;
+    loop {
         match ingest.execute(reading.clone()).await {
             Ok(_) => return Ok(()),
             Err(err) if err.is_retryable() && attempt < MAX_INGEST_ATTEMPTS => {
@@ -200,11 +226,11 @@ where
                     "retrying telemetry ingest after transient failure"
                 );
                 tokio::time::sleep(ingest_backoff(attempt)).await;
+                attempt += 1;
             }
             Err(err) => return Err(err),
         }
     }
-    unreachable!("loop always returns by the last attempt")
 }
 
 async fn park(
@@ -247,8 +273,6 @@ fn build_dead_letter(
 pub enum ConsumerError {
     #[error("failed to connect to Kafka: {0}")]
     Connect(#[source] KafkaError),
-    #[error("failed to consume from Kafka: {0}")]
-    Consume(#[source] KafkaError),
 }
 
 #[cfg(test)]
@@ -525,5 +549,13 @@ mod tests {
         assert_eq!(ingest_backoff(1), Duration::from_millis(100));
         assert_eq!(ingest_backoff(2), Duration::from_millis(400));
         assert_eq!(ingest_backoff(3), Duration::from_millis(1600));
+    }
+
+    // The retry loop must not depend on MAX_INGEST_ATTEMPTS to avoid a panic,
+    // and the backoff must stay finite for any attempt number.
+    #[test]
+    fn ingest_backoff_saturates_instead_of_overflowing() {
+        assert_eq!(ingest_backoff(0), Duration::from_millis(100));
+        assert_eq!(ingest_backoff(u32::MAX), Duration::from_millis(u64::MAX));
     }
 }

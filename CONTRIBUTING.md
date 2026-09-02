@@ -150,7 +150,8 @@ Go:
 - keep MQTT callbacks fast
 - do not block the Paho callback path on database or Kafka work
 - prefer context deadlines around network calls
-- preserve raw device payloads until a service explicitly owns schema conversion
+- `ingestion-go` owns telemetry schema conversion: it encodes AmbaGrid-shaped JSON into `MetricPayload` protobuf (`BuildRecord`). No other service reshapes device payloads
+- preserve the original bytes when parking a rejected payload in a dead-letter topic
 
 Rust:
 
