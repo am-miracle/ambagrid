@@ -14,11 +14,18 @@ Install the main toolchain:
 - Node.js 22 or newer
 - npm
 - Protobuf compiler (`protoc`)
+- Go protobuf plugin (`protoc-gen-go`): `go install google.golang.org/protobuf/cmd/protoc-gen-go@latest`
 
 On macOS, Docker Desktop may not put the CLI on your shell path. If `docker` is not found, add:
 
 ```bash
 export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
+```
+
+`go install` puts `protoc-gen-go` in `$(go env GOPATH)/bin`. If `protoc` reports it can't find the plugin, add that to your path:
+
+```bash
+export PATH="$PATH:$(go env GOPATH)/bin"
 ```
 
 Start the local infrastructure:
@@ -83,6 +90,12 @@ gofmt -w .
 go test ./...
 ```
 
+If you change `proto/telemetry.proto`, regenerate its Go bindings and commit the result:
+
+```bash
+make proto-gen-go
+```
+
 For the API service:
 
 ```bash
@@ -137,7 +150,8 @@ Go:
 - keep MQTT callbacks fast
 - do not block the Paho callback path on database or Kafka work
 - prefer context deadlines around network calls
-- preserve raw device payloads until a service explicitly owns schema conversion
+- `ingestion-go` owns telemetry schema conversion: it encodes AmbaGrid-shaped JSON into `MetricPayload` protobuf (`BuildRecord`). No other service reshapes device payloads
+- preserve the original bytes when parking a rejected payload in a dead-letter topic
 
 Rust:
 

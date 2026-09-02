@@ -1,0 +1,48 @@
+use std::time::Duration;
+
+use sqlx::postgres::PgPoolOptions;
+
+use crate::{
+    actions::ingest_reading::IngestReading,
+    adapters::{
+        kafka::{
+            consumer::{self, ConsumerConfig},
+            producer::{KafkaAlertEventPublisher, KafkaDeadLetterPublisher, ProducerConfig},
+        },
+        postgres::PostgresIngestRepository,
+    },
+    config::Config,
+};
+
+pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let cfg = Config::from_env()?;
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .acquire_timeout(Duration::from_secs(2))
+        .connect(&cfg.database_url)
+        .await?;
+
+    let store = PostgresIngestRepository::new(pool.clone());
+    let dead_letters =
+        KafkaDeadLetterPublisher::connect(cfg.kafka_brokers.clone(), cfg.telemetry_dlq_topic)?;
+    let events = KafkaAlertEventPublisher::connect(ProducerConfig {
+        brokers: cfg.kafka_brokers.clone(),
+        alert_opened_topic: cfg.alert_opened_topic,
+        alert_resolved_topic: cfg.alert_resolved_topic,
+    })?;
+    let mut ingest = IngestReading::new(&store, &events);
+    ingest.policy = cfg.threshold_policy;
+
+    consumer::run(
+        ConsumerConfig {
+            brokers: cfg.kafka_brokers,
+            topic: cfg.telemetry_topic,
+            group_id: cfg.telemetry_group_id,
+        },
+        &ingest,
+        &dead_letters,
+    )
+    .await?;
+
+    Ok(())
+}

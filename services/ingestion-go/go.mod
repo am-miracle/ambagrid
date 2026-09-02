@@ -5,6 +5,7 @@ go 1.26.5
 require (
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/twmb/franz-go v1.21.6
+	google.golang.org/protobuf v1.36.12
 )
 
 require (

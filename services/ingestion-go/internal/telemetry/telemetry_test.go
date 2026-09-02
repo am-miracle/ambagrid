@@ -1,9 +1,13 @@
 package telemetry
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/kgo"
+	"google.golang.org/protobuf/proto"
+
+	telemetrypb "ingestion-go/proto/ambagrid/telemetry"
 )
 
 func TestDeriveConstraints(t *testing.T) {
@@ -126,9 +130,15 @@ func TestParseTopicRejectsSiteAndDeviceMismatch(t *testing.T) {
 }
 
 func TestBuildRecord(t *testing.T) {
-	payload := []byte(`{"device_id":"met-0101","site_id":"ng-kaji-01"}`)
+	payload := []byte(`{
+		"device_id": "met-0101",
+		"device_type": "DEVICE_TYPE_SMART_METER",
+		"timestamp_utc": 1745500000,
+		"site_id": "ng-kaji-01",
+		"metrics": {"voltage": 231.0}
+	}`)
 
-	record, err := BuildRecord("telemetry.raw", "africa-west/ng-kaji-01/smartmeter/met-0101/telemetry", payload, MessageMetadata{
+	record, err := BuildRecord("telemetry.ingested", "africa-west/ng-kaji-01/smartmeter/met-0101/telemetry", payload, MessageMetadata{
 		Duplicate: true,
 		QOS:       1,
 		Retained:  true,
@@ -138,14 +148,34 @@ func TestBuildRecord(t *testing.T) {
 		t.Fatalf("BuildRecord returned error: %v", err)
 	}
 
-	if record.Topic != "telemetry.raw" {
-		t.Fatalf("Topic = %q, want %q", record.Topic, "telemetry.raw")
+	if record.Topic != "telemetry.ingested" {
+		t.Fatalf("Topic = %q, want %q", record.Topic, "telemetry.ingested")
 	}
 	if string(record.Key) != "met-0101" {
 		t.Fatalf("Key = %q, want %q", string(record.Key), "met-0101")
 	}
-	if string(record.Value) != string(payload) {
-		t.Fatalf("Value = %q, want %q", string(record.Value), string(payload))
+
+	var decoded telemetrypb.MetricPayload
+	if err := proto.Unmarshal(record.Value, &decoded); err != nil {
+		t.Fatalf("record.Value did not decode as MetricPayload protobuf: %v", err)
+	}
+	if decoded.GetDeviceId() != "met-0101" {
+		t.Fatalf("decoded DeviceId = %q, want %q", decoded.GetDeviceId(), "met-0101")
+	}
+	if decoded.GetDeviceType() != telemetrypb.DeviceType_DEVICE_TYPE_SMART_METER {
+		t.Fatalf("decoded DeviceType = %v, want %v", decoded.GetDeviceType(), telemetrypb.DeviceType_DEVICE_TYPE_SMART_METER)
+	}
+	if decoded.TimestampUtc == nil {
+		t.Fatal("decoded TimestampUtc is nil, want presence preserved")
+	}
+	if decoded.GetTimestampUtc() != 1745500000 {
+		t.Fatalf("decoded TimestampUtc = %v, want %v", decoded.GetTimestampUtc(), int64(1745500000))
+	}
+	if decoded.GetSiteId() != "ng-kaji-01" {
+		t.Fatalf("decoded SiteId = %q, want %q", decoded.GetSiteId(), "ng-kaji-01")
+	}
+	if decoded.GetMetrics().GetVoltage() != 231.0 {
+		t.Fatalf("decoded Metrics.Voltage = %v, want %v", decoded.GetMetrics().GetVoltage(), 231.0)
 	}
 
 	headers := headersByKey(record.Headers)
@@ -166,6 +196,86 @@ func TestBuildRecord(t *testing.T) {
 	}
 	if headers["site_id"] != "ng-kaji-01" {
 		t.Fatalf("site_id header = %q", headers["site_id"])
+	}
+}
+
+func TestBuildRecordRejectsMissingTimestamp(t *testing.T) {
+	payload := []byte(`{
+		"device_id": "met-0101",
+		"device_type": "DEVICE_TYPE_SMART_METER",
+		"site_id": "ng-kaji-01",
+		"metrics": {"voltage": 231.0}
+	}`)
+
+	if _, err := BuildRecord("telemetry.ingested", "africa-west/ng-kaji-01/smartmeter/met-0101/telemetry", payload, MessageMetadata{}, TopicConstraints{}); err == nil {
+		t.Fatal("BuildRecord returned nil error for missing timestamp_utc")
+	}
+}
+
+func TestBuildRecordRejectsMalformedPayload(t *testing.T) {
+	payload := []byte(`{"device_id": "met-0101"`) // truncated JSON
+
+	_, err := BuildRecord("telemetry.ingested", "africa-west/ng-kaji-01/smartmeter/met-0101/telemetry", payload, MessageMetadata{}, TopicConstraints{Region: "africa-west", DeviceType: "smartmeter"})
+	if err == nil {
+		t.Fatal("BuildRecord returned nil error for malformed telemetry payload")
+	}
+}
+
+func TestBuildRecordRejectsUnknownDeviceTypeName(t *testing.T) {
+	payload := []byte(`{"device_id": "met-0101", "device_type": "DEVICE_TYPE_NOT_REAL"}`)
+
+	_, err := BuildRecord("telemetry.ingested", "africa-west/ng-kaji-01/smartmeter/met-0101/telemetry", payload, MessageMetadata{}, TopicConstraints{Region: "africa-west", DeviceType: "smartmeter"})
+	if err == nil {
+		t.Fatal("BuildRecord returned nil error for an unknown device_type enum name")
+	}
+}
+
+func TestBuildDeadLetterRecordPreservesOriginalPayload(t *testing.T) {
+	payload := []byte(`{"device_id": "met-0101"`) // truncated JSON
+	cause := errors.New("decode telemetry payload: unexpected end of JSON input")
+
+	record := BuildDeadLetterRecord("telemetry.ingested.dlq", "africa-west/ng-kaji-01/smartmeter/met-0101/telemetry", payload, MessageMetadata{
+		QOS:       1,
+		Retained:  true,
+		Duplicate: true,
+		MessageID: 7,
+	}, cause)
+
+	if record.Topic != "telemetry.ingested.dlq" {
+		t.Fatalf("Topic = %q, want %q", record.Topic, "telemetry.ingested.dlq")
+	}
+	if string(record.Value) != string(payload) {
+		t.Fatalf("Value = %q, want original payload untouched: %q", record.Value, payload)
+	}
+	if string(record.Key) != "africa-west/ng-kaji-01/smartmeter/met-0101/telemetry" {
+		t.Fatalf("Key = %q, want raw mqtt topic", record.Key)
+	}
+
+	headers := headersByKey(record.Headers)
+	if headers["error"] != cause.Error() {
+		t.Fatalf("error header = %q, want %q", headers["error"], cause.Error())
+	}
+	if headers["mqtt_topic"] != "africa-west/ng-kaji-01/smartmeter/met-0101/telemetry" {
+		t.Fatalf("mqtt_topic header = %q", headers["mqtt_topic"])
+	}
+	if headers["mqtt_qos"] != "1" {
+		t.Fatalf("mqtt_qos header = %q", headers["mqtt_qos"])
+	}
+	if headers["mqtt_message_id"] != "7" {
+		t.Fatalf("mqtt_message_id header = %q", headers["mqtt_message_id"])
+	}
+}
+
+func TestBuildDeadLetterRecordHandlesMalformedTopic(t *testing.T) {
+	// A record ParseTopic itself would reject must still produce a DLQ record,
+	// since BuildRecord can fail on the topic before ever reaching the payload.
+	record := BuildDeadLetterRecord("telemetry.ingested.dlq", "not-a-valid-topic", []byte("payload"), MessageMetadata{}, errors.New("boom"))
+
+	if string(record.Key) != "not-a-valid-topic" {
+		t.Fatalf("Key = %q, want raw mqtt topic", record.Key)
+	}
+	if string(record.Value) != "payload" {
+		t.Fatalf("Value = %q, want original payload", record.Value)
 	}
 }
 

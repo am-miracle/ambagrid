@@ -17,7 +17,7 @@ Go ingestion bridge
         |
         | Kafka records
         v
-Redpanda topic: telemetry.raw
+Redpanda topic: telemetry.ingested
         |
         +------> Rust engine
         |          - grid rules

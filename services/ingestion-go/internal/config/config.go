@@ -21,6 +21,7 @@ type Config struct {
 	MQTTQOS                byte
 	KafkaBrokers           []string
 	KafkaTopic             string
+	KafkaDLQTopic          string
 	QueueSize              int
 	WorkerCount            int
 	ProduceTimeout         time.Duration
@@ -71,7 +72,8 @@ func FromEnv() (Config, error) {
 		MQTTClientID:           envString("MQTT_CLIENT_ID", defaultMQTTClientID()),
 		MQTTQOS:                mqttQOS,
 		KafkaBrokers:           envCSV("KAFKA_BROKERS", "localhost:9092"),
-		KafkaTopic:             envString("KAFKA_TOPIC", "telemetry.raw"),
+		KafkaTopic:             envString("KAFKA_TOPIC", "telemetry.ingested"),
+		KafkaDLQTopic:          envString("KAFKA_DLQ_TOPIC", "telemetry.ingested.dlq"),
 		QueueSize:              queueSize,
 		WorkerCount:            workerCount,
 		ProduceTimeout:         produceTimeout,
@@ -91,6 +93,9 @@ func FromEnv() (Config, error) {
 	}
 	if cfg.KafkaTopic == "" {
 		return Config{}, fmt.Errorf("KAFKA_TOPIC must not be empty")
+	}
+	if cfg.KafkaDLQTopic == "" {
+		return Config{}, fmt.Errorf("KAFKA_DLQ_TOPIC must not be empty")
 	}
 	if len(cfg.KafkaBrokers) == 0 {
 		return Config{}, fmt.Errorf("KAFKA_BROKERS must include at least one broker")

@@ -147,7 +147,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	case <-shutdownCtx.Done():
 		return fmt.Errorf("shutdown timeout: %w", shutdownCtx.Err())
 	case <-done:
-		log.Printf("ingestion bridge stopped: received=%d produced=%d dropped=%d failed=%d", st.Received(), st.Produced(), st.Dropped(), st.Failed())
+		log.Printf("ingestion bridge stopped: received=%d produced=%d dropped=%d failed=%d dlq_failed=%d", st.Received(), st.Produced(), st.Dropped(), st.Failed(), st.DLQFailed())
 		return ctx.Err()
 	}
 }
@@ -234,6 +234,7 @@ func runProducerWorker(workerID int, cfg config.Config, kafkaClient *kgo.Client,
 		if err != nil {
 			st.AddFailed()
 			log.Printf("worker=%d invalid mqtt message topic=%s err=%v", workerID, e.Topic, err)
+			parkInDeadLetter(workerID, cfg, kafkaClient, e, st, err)
 			continue
 		}
 
@@ -251,5 +252,16 @@ func runProducerWorker(workerID int, cfg config.Config, kafkaClient *kgo.Client,
 		if cfg.LogEveryNRecords > 0 && produced%cfg.LogEveryNRecords == 0 {
 			log.Printf("worker=%d produced=%d kafka_topic=%s", workerID, produced, cfg.KafkaTopic)
 		}
+	}
+}
+
+func parkInDeadLetter(workerID int, cfg config.Config, kafkaClient *kgo.Client, e envelope, st *stats.IngestionStats, cause error) {
+	record := telemetry.BuildDeadLetterRecord(cfg.KafkaDLQTopic, e.Topic, e.Payload, e.Metadata, cause)
+
+	produceCtx, cancel := context.WithTimeout(context.Background(), cfg.ProduceTimeout)
+	defer cancel()
+	if err := kafkaClient.ProduceSync(produceCtx, record).FirstErr(); err != nil {
+		st.AddDLQFailed()
+		log.Printf("worker=%d failed to park rejected message in dlq topic=%s err=%v", workerID, cfg.KafkaDLQTopic, err)
 	}
 }

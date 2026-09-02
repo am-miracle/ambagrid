@@ -2,7 +2,7 @@ CHANGELOG_FILE := CHANGELOG.md
 CHANGELOG_CHECK_FILE := /tmp/ambagrid_CHANGELOG.md
 DATABASE_URL ?= postgres://ambagrid_admin:ambagrid_secure_pass@localhost:5432/ambagrid_operational
 
-.PHONY: changelog changelog-check db-migrate engine-serve
+.PHONY: changelog changelog-check db-migrate engine-serve proto-gen-go
 
 changelog:
 	git cliff -o $(CHANGELOG_FILE)
@@ -18,3 +18,6 @@ db-migrate:
 
 engine-serve:
 	cd services/engine-rust && DATABASE_URL="$(DATABASE_URL)" cargo run -- serve
+
+proto-gen-go:
+	protoc --go_out=services/ingestion-go --go_opt=module=ingestion-go -I proto proto/telemetry.proto

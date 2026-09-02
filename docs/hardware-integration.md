@@ -24,15 +24,20 @@ The Go ingestion bridge subscribes to:
 africa-west/+/smartmeter/+/telemetry
 ```
 
-It writes raw payloads to Redpanda topic:
+The bridge encodes each JSON payload as `MetricPayload` protobuf and writes it to Redpanda topic:
 
 ```text
-telemetry.raw
+telemetry.ingested
 ```
+
+Payloads that fail to encode are parked on `telemetry.ingested.dlq` instead of being dropped.
+The Rust engine also parks messages it cannot decode or validate as telemetry.
+Post-decode storage failures are not DLQed: the engine leaves the Kafka offset
+unstored so valid telemetry can be redelivered after the dependency recovers.
 
 ## Payload Model
 
-The simulator currently sends JSON shaped like `proto/telemetry.proto` so developers can inspect messages easily.
+The simulator sends JSON shaped like `proto/telemetry.proto` over MQTT so developers can inspect messages easily. The ingestion bridge re-encodes it as protobuf before Kafka, so `telemetry.ingested` messages are binary.
 
 Core fields:
 
@@ -51,11 +56,16 @@ Core fields:
 - `battery_soc_pct`
 - `solar_irradiance`
 
-The platform should move toward Protobuf on the wire once the ingestion and engine contracts stabilize.
+`timestamp_utc` is required even though protobuf uses `optional` to preserve
+field presence; missing or default epoch timestamps are rejected instead of
+being persisted as `1970-01-01`.
 
 The simulator always emits `internal_temperature`, `relay_closed`,
 `battery_soc_pct`, and `solar_irradiance` in JSON, even when their value is
-zero or false. `household_id` is still omitted when empty.
+zero or false. `household_id` is still omitted when empty. Each `metrics.*`
+field may also be omitted individually when a meter doesn't report that
+particular measurement; a missing field is distinct from a reported zero and
+is not coerced into one.
 
 ## Sample MQTT → Kafka Payloads
 
@@ -82,11 +92,11 @@ payload: {"device_id":"met-0101","device_type":"DEVICE_TYPE_SMART_METER",
           "battery_soc_pct":0,"solar_irradiance":0}
 ```
 
-Resulting Kafka record on `telemetry.raw`:
+Resulting Kafka record on `telemetry.ingested`:
 
 ```text
 Key:   met-0101
-Value: <payload above, verbatim>
+Value: <the JSON above, encoded as MetricPayload protobuf>
 Headers:
   mqtt_topic  = africa-west/ng-kaji-01/smartmeter/met-0101/telemetry
   region      = africa-west
@@ -113,17 +123,7 @@ bridge derives its accepted region/device-type from whatever filter it was
 started with, so a config change is enough to widen *which topics* it will
 ingest from.
 
-This is **not** the same as onboarding a new vendor's hardware. The bridge
-only validates topic structure — it forwards `payload` verbatim and never
-inspects or reshapes it (see `BuildRecord` in
-`services/ingestion-go/internal/telemetry/telemetry.go`). A real inverter
-publishes in its vendor's own payload shape, not AmbaGrid telemetry JSON. Per
-the core rule above, that payload still needs an adapter to translate it into
-the AmbaGrid telemetry model *before* it reaches this topic — pointing this
-filter at a vendor's raw, un-normalized output would push it straight into
-`telemetry.raw`, bypassing the adapter contract entirely. The config change
-only helps once an adapter (see Adapter Targets below) already exists and is
-publishing normalized payloads under the new topic.
+This is **not** the same as onboarding a new vendor's hardware. The bridge only validates topic structure and encodes JSON into protobuf (see `BuildRecord` in `services/ingestion-go/internal/telemetry/telemetry.go`) — it does not translate vendor field names or units. A real inverter publishes in its vendor's own payload shape, not AmbaGrid telemetry JSON. Per the core rule above, that payload still needs an adapter to translate it into the AmbaGrid telemetry model *before* it reaches this topic — pointing this filter at a vendor's raw, un-normalized output would just get rejected into `telemetry.ingested.dlq`. The config change only helps once an adapter (see Adapter Targets below) already exists and is publishing AmbaGrid-shaped JSON under the new topic.
 
 ### Fully wildcarded filter
 
@@ -133,6 +133,26 @@ Both the region and device-type segments are wildcards, so any value is
 accepted at those positions; only the topic structure (5 segments, none
 empty, last segment `telemetry`) is enforced. Use this for a bridge instance
 meant to ingest telemetry across every region and device type at once.
+
+### Smart meter payload missing electrical metrics
+
+MQTT publish (the `metrics` object is absent, not just zeroed):
+
+```text
+topic:   africa-west/ng-kaji-01/smartmeter/met-0101/telemetry
+payload: {"device_id":"met-0101","device_type":"DEVICE_TYPE_SMART_METER",
+          "timestamp_utc":1745500000,"site_id":"ng-kaji-01",
+          "household_id":"house-0101",
+          "internal_temperature":42.1,"relay_closed":true,
+          "battery_soc_pct":0,"solar_irradiance":0}
+```
+
+Result: the Rust engine rejects this at decode time (`DecodeError::MissingMetrics`)
+and parks it on `telemetry.ingested.dlq` instead of persisting a smart meter
+reading with fabricated zero voltage/current/power. A smart meter reading
+with `metrics` present but one field omitted (e.g. `current` missing from
+the `metrics` object) is accepted and decodes that one field to `NULL`,
+distinct from a reported `0`.
 
 ## Adapter Targets
 

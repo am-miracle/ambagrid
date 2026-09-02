@@ -44,9 +44,10 @@ services:
   redpanda-console:
     image: redpandadata/console:v2.8.3
     container_name: ambagrid-streaming-ui
-    entrypoint: >
-      /bin/sh -c "echo \"kafka: { brokers: ['redpanda:29092'] }\" > /tmp/config.yml &&
-                  /app/console --config.filepath=/tmp/config.yml"
+    entrypoint: /app/console --config.filepath=/etc/console/config.yml
+    volumes:
+      - ./deploy/redpanda-console/config.yml:/etc/console/config.yml
+      - ./proto/telemetry.proto:/etc/console/proto/telemetry.proto
     ports:
       - "8080:8080"   # Open http://localhost:8080 to watch hardware metrics live
     depends_on:
@@ -64,7 +65,8 @@ services:
       MQTT_BROKER: tcp://mqtt-broker:1883
       MQTT_TOPIC_FILTER: africa-west/+/smartmeter/+/telemetry
       KAFKA_BROKERS: redpanda:29092
-      KAFKA_TOPIC: telemetry.raw
+      KAFKA_TOPIC: telemetry.ingested
+      KAFKA_DLQ_TOPIC: telemetry.ingested.dlq
       INGESTION_LOG_EVERY_N: 25
     depends_on:
       - mqtt-broker

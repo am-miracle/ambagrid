@@ -107,10 +107,12 @@ Useful properties:
 - `alert_id`
 - `site_id`
 - `asset_id`
+- `kind`
 - `severity`
 - `status`
 - `reason`
 - `opened_at`
+- `source_event_id`
 - `resolved_at`
 
 **Outage**
@@ -324,9 +326,16 @@ Inputs:
 
 - `site_id`
 - `asset_id`
+- `kind`
 - `severity`
 - `reason`
 - `source_event_id`
+
+`kind` identifies the problem (e.g. `internal_temperature`), distinct from
+`reason`'s human-readable, per-reading text. An asset can have at most one
+open alert per kind, so distinct problems on the same asset (e.g.
+overheating and low battery) get independent alerts instead of one
+colliding with the other.
 
 Effects:
 
@@ -341,12 +350,16 @@ Inputs:
 
 - `alert_id`
 - `resolution_note`
-- `resolved_by`
+- `resolved_by` (`OperatorId` for operator actions)
 
 Effects:
 
 - updates `Alert`
 - records resolution history
+
+Operator-triggered resolution must authorize `resolved_by` as an `OperatorId`
+before mutating alert state. Automatic recovery uses the reserved internal
+`"system"` actor instead of this operator action.
 
 ## Revenue Protection Model
 
@@ -456,7 +469,7 @@ The delivery mechanism can vary.
 The ontology should be fed by stream events. Initial topic names:
 
 ```text
-telemetry.raw
+telemetry.ingested
 payment.confirmed
 payment.failed
 credit.issued
@@ -467,6 +480,46 @@ alert.resolved
 ```
 
 The names should describe business events, not service internals.
+
+### Sample alert.opened / alert.resolved payloads
+
+Both are protobuf (`proto/alerts.proto`); shown here as their JSON
+equivalent for readability, published by the Rust engine after the
+corresponding Postgres write commits.
+
+`alert.opened`:
+
+```json
+{
+  "alert_id": "b3b3c2b0-6e2a-4d9a-9c3a-1f2e3d4c5b6a",
+  "asset_id": "met-0101",
+  "site_id": "ng-kaji-01",
+  "severity": "SEVERITY_CRITICAL",
+  "reason": "internal_temperature_high:72.4C>=threshold:70.0C",
+  "opened_at_utc": 1745500000,
+  "source_event_id": "telemetry-evt-0101"
+}
+```
+
+`alert.resolved`, once the same alert clears:
+
+```json
+{
+  "alert_id": "b3b3c2b0-6e2a-4d9a-9c3a-1f2e3d4c5b6a",
+  "asset_id": "met-0101",
+  "site_id": "ng-kaji-01",
+  "severity": "SEVERITY_CRITICAL",
+  "reason": "internal_temperature_high:72.4C>=threshold:70.0C",
+  "opened_at_utc": 1745500000,
+  "resolved_at_utc": 1745500900,
+  "resolution_note": "internal_temperature_recovered:64.0C<threshold:65.0C",
+  "resolved_by": "system"
+}
+```
+
+`resolved_by` is `"system"` for the automatic recovery path (a reading
+coming back within normal range); an operator-triggered resolution would
+carry the operator's identity instead.
 
 ## Storage Boundary
 
@@ -508,6 +561,7 @@ Suggested roles:
 ```text
 Operator
   can acknowledge alerts
+  can resolve alerts
   can request reconnect
   can create maintenance tickets
 
