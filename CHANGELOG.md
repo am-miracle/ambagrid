@@ -43,6 +43,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **alerts:** Retain telemetry source event ids
 - **alerts:** Audit and authorize operator resolutions
 - **engine:** Harden telemetry and alert boundaries
+- **engine:** Make kafka ingestion resilient to transient broker failures
 
 ### Maintenance
 
