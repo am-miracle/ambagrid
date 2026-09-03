@@ -40,7 +40,48 @@ services:
     networks:
       - ambagrid-network
 
-  # 3. Redpanda Console (Web UI to view your live message streams)
+  # 3. One-shot topic provisioning
+  #
+  # Topics are created explicitly rather than auto-created, because an
+  # auto-created topic silently gets the cluster default of one partition —
+  # and consumer-group parallelism is capped at the partition count, so a
+  # 1-partition telemetry topic caps the engine at a single working replica
+  # no matter how many you deploy.
+  #
+  # Raising the partition count of an existing topic rehashes keys: a meter
+  # whose readings hashed to partition 0 may hash elsewhere afterwards, so its
+  # old and new records sit on different partitions and can be consumed out of
+  # order across the boundary. Locally, drop and recreate the topic. In a real
+  # deployment this needs a planned cutover.
+  redpanda-topics:
+    image: redpandadata/redpanda:v24.3.4
+    container_name: ambagrid-topics
+    restart: "no"
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        set -e
+        until rpk cluster info --brokers redpanda:29092 >/dev/null 2>&1; do
+          echo "waiting for redpanda..."
+          sleep 1
+        done
+        # Telemetry is the only high-volume topic, so it is the only one
+        # partitioned for parallel consumers. 12 caps the engine at 12 working
+        # replicas, well beyond current fleet sizes.
+        rpk topic create telemetry.ingested -p 12 --brokers redpanda:29092 || true
+        # Low volume by definition, and a single partition keeps alert events
+        # globally ordered for anything reading them back.
+        rpk topic create telemetry.ingested.dlq -p 1 --brokers redpanda:29092 || true
+        rpk topic create alert.opened -p 1 --brokers redpanda:29092 || true
+        rpk topic create alert.resolved -p 1 --brokers redpanda:29092 || true
+        rpk topic list --brokers redpanda:29092
+    depends_on:
+      - redpanda
+    networks:
+      - ambagrid-network
+
+  # 4. Redpanda Console (Web UI to view your live message streams)
   redpanda-console:
     image: redpandadata/console:v2.8.3
     container_name: ambagrid-streaming-ui
@@ -55,7 +96,7 @@ services:
     networks:
       - ambagrid-network
 
-  # 4. MQTT to Redpanda ingestion bridge
+  # 5. MQTT to Redpanda ingestion bridge
   ingestion-go:
     build:
       context: ./services/ingestion-go
@@ -67,14 +108,18 @@ services:
       KAFKA_BROKERS: redpanda:29092
       KAFKA_TOPIC: telemetry.ingested
       KAFKA_DLQ_TOPIC: telemetry.ingested.dlq
+      # Off so a mistyped topic fails loudly instead of silently creating a
+      # 1-partition topic that caps throughput. redpanda-topics owns creation.
+      KAFKA_ALLOW_AUTO_TOPIC: "false"
       INGESTION_LOG_EVERY_N: 25
     depends_on:
       - mqtt-broker
       - redpanda
+      - redpanda-topics
     networks:
       - ambagrid-network
 
-  # 5. PostgreSQL + TimescaleDB (Relational & High-Density Metric Storage)
+  # 6. PostgreSQL + TimescaleDB (Relational & High-Density Metric Storage)
   database:
     image: timescale/timescaledb:2.17.2-pg15
     container_name: ambagrid-db
