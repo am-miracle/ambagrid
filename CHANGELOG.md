@@ -11,39 +11,13 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - Add MQTT to Redpanda ingestion bridge
 - Add app and service scaffolding
 - **engine:** Add database migrations (#2)
-- **telemetry:** Ingest protobuf readings
-- **alerts:** Add resolve_alert action and resolution metadata
-- **alerts:** Publish alert.opened/alert.resolved events to kafka
-- **alerts:** Tune threshold policy per asset type with hysteresis and runtime config
-- **kafka:** Migrate consumer to rdkafka for real partition/consumer-group coverage
-- **alerts:** Add operator resolve action
-
-### Changed
-
-- **engine:** Consolidate ingest writes into one transactional repository
-- **engine:** Tighten alert and asset domain types
-- **engine:** Use rdkafka for Kafka publishing
-- **engine:** Group asset persistence by state
+- **telemetry:** Ingest protobuf readings (#6)
+- Telemetry ingestion pipeline with alert lifecycle and horizontal scaling (#9)
 
 ### Documentation
 
 - Add open source project foundations
 - Add ontology and roadmap docs
-
-### Fixed
-
-- **telemetry:** Reject incomplete smart-meter metrics and preserve per-field presence
-- **alerts:** Prevent duplicate alerts from repeated abnormal readings
-- **alerts:** Scope alert open/resolve/duplicate-guard by kind, not just asset
-- **engine:** Avoid dynamic librdkafka dependency in CI
-- **alerts:** Persist opened alert source events
-- **engine:** Publish telemetry failures to Kafka DLQ
-- **alerts:** Reject resolved events without timestamps
-- **alerts:** Keep kind out of event payloads
-- **alerts:** Retain telemetry source event ids
-- **alerts:** Audit and authorize operator resolutions
-- **engine:** Harden telemetry and alert boundaries
-- **engine:** Make kafka ingestion resilient to transient broker failures
 
 ### Maintenance
 
