@@ -9,7 +9,7 @@ This project sits close to real infrastructure. Treat every change as if a field
 Install the main toolchain:
 
 - Docker Desktop
-- Go 1.26 or newer
+- Go 1.27 or newer
 - Rust stable
 - Node.js 22 or newer
 - npm
