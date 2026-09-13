@@ -5,7 +5,10 @@ DATABASE_URL ?= postgres://ambagrid_admin:ambagrid_secure_pass@localhost:5432/am
 KAFKA_BROKERS ?= localhost:9092
 TELEMETRY_PARTITIONS ?= 12
 
-.PHONY: changelog changelog-check db-migrate engine-serve kafka-topics proto-gen-go
+.PHONY: api-serve changelog changelog-check db-migrate engine-serve kafka-topics proto-gen-go
+
+api-serve:
+	cd services/api-go && DATABASE_URL="$(DATABASE_URL)" go run .
 
 changelog:
 	git cliff -o $(CHANGELOG_FILE)

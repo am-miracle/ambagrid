@@ -131,6 +131,41 @@ services:
       - "5432:5432"   # Connect via your Go API or table managers (DBeaver/pgAdmin)
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    # Dependents wait on this rather than on the container merely starting:
+    # Postgres runs initdb on a fresh volume, so "started" is several seconds
+    # short of "accepting connections".
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ambagrid_admin -d ambagrid_operational"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - ambagrid-network
+
+  # 7. Read API (HTTP view of asset state and alerts)
+  #
+  # Stateless and read-only, so replicas scale horizontally behind a load
+  # balancer. DB_MAX_CONNS is the cap on the load one replica can put on
+  # Postgres: multiply by replica count before raising it, and expect a
+  # connection pooler rather than a bigger number once that product grows.
+  #
+  # No container_name, so `--scale api-go=N` works here; drop the published
+  # port below when scaling locally, or the second replica cannot bind it.
+  api-go:
+    build:
+      context: ./services/api-go
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://ambagrid_admin:ambagrid_secure_pass@database:5432/ambagrid_operational
+      API_HTTP_ADDR: ":8081"
+      API_CORS_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:5173
+      DB_MAX_CONNS: "10"
+    ports:
+      - "8081:8081"   # http://localhost:8081/v1/sites
+    depends_on:
+      database:
+        condition: service_healthy
     networks:
       - ambagrid-network
 

@@ -17,32 +17,44 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.26.5"
+          go-version: "1.27"
           cache-dependency-path: |
             go.sum
+            services/api-go/go.sum
             services/ingestion-go/go.sum
 
       - name: Check root Go formatting
         run: test -z "$(gofmt -l scripts)"
 
+      - name: Vet root Go module
+        run: go vet ./...
+
       - name: Test root Go module
-        run: go test ./...
+        run: go test -race ./...
 
       - name: Check API formatting
         working-directory: services/api-go
         run: test -z "$(gofmt -l .)"
 
+      - name: Vet API service
+        working-directory: services/api-go
+        run: go vet ./...
+
       - name: Test API service
         working-directory: services/api-go
-        run: go test ./...
+        run: go test -race ./...
 
       - name: Check ingestion formatting
         working-directory: services/ingestion-go
         run: test -z "$(gofmt -l .)"
 
+      - name: Vet ingestion service
+        working-directory: services/ingestion-go
+        run: go vet ./...
+
       - name: Test ingestion service
         working-directory: services/ingestion-go
-        run: go test ./...
+        run: go test -race ./...
 
   rust:
     name: Rust

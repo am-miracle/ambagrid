@@ -33,6 +33,16 @@ For a short smoke test:
 go run scripts/virtual_meter.go -sites 1 -meters-per-site 2 -interval 1s -duration 5s -log-publishes
 ```
 
+Serve the read API (asset state and alerts over HTTP):
+
+```bash
+make api-serve
+```
+
+```bash
+curl http://localhost:8081/v1/sites
+```
+
 Apply database migrations explicitly:
 
 ```bash
@@ -69,6 +79,7 @@ MQTT WebSockets:   localhost:9001
 Redpanda Kafka:    localhost:9092
 Redpanda Console:  localhost:8080
 PostgreSQL:        localhost:5432
+Read API:          localhost:8081
 ```
 
 From inside Docker Compose:
@@ -82,6 +93,7 @@ Postgres:  database:5432
 ## Project Docs
 
 - [Architecture](docs/architecture.md)
+- [Read API](docs/api.md)
 - [Hardware integration](docs/hardware-integration.md)
 - [Ontology](docs/ontology.md)
 - [Roadmap](docs/roadmap.md)
