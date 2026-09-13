@@ -52,7 +52,7 @@ http://localhost:8080
 apps/                  React control room
 proto/                 shared telemetry contracts
 scripts/               local developer tools and simulators
-services/api-go/       Go API service
+services/api-go/       Go read API (asset state, alerts)
 services/ingestion-go/ MQTT to Redpanda bridge
 services/engine-rust/  Rust grid engine
 docs/                  architecture and hardware notes
@@ -101,8 +101,12 @@ For the API service:
 ```bash
 cd services/api-go
 gofmt -w .
-go test ./...
+go test -race ./...
 ```
+
+Its layering is documented in [docs/api.md](docs/api.md): controllers own HTTP,
+services own request rules, repositories own SQL. Keep new endpoints on that
+path rather than querying the database from a handler.
 
 For the Rust engine:
 

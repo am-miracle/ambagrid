@@ -54,8 +54,27 @@ type meterState struct {
 	rng         *rand.Rand
 }
 
+// Passing this prefix swaps the generated site IDs for demoSiteIDs, which read
+// like real deployments in a control room demo.
+const demoSitePrefix = "ng-demo"
+
+var demoSiteIDs = []string{
+	"rivers-bolo",
+	"lagos-epe",
+	"imo-ohaji",
+	"nasarawa-duduguru",
+	"bayelsa-oweikorogha",
+}
+
+func siteIDFor(sitePrefix string, siteNumber int) string {
+	if sitePrefix == demoSitePrefix {
+		return demoSiteIDs[siteNumber-1]
+	}
+	return fmt.Sprintf("%s-%02d", sitePrefix, siteNumber)
+}
+
 func newMeterState(region, sitePrefix string, siteNumber, meterNumber int) *meterState {
-	siteID := fmt.Sprintf("%s-%02d", sitePrefix, siteNumber)
+	siteID := siteIDFor(sitePrefix, siteNumber)
 	deviceID := fmt.Sprintf("met-%02d%02d", siteNumber, meterNumber)
 	return &meterState{
 		topic:       fmt.Sprintf("%s/%s/smartmeter/%s/telemetry", region, siteID, deviceID),
@@ -79,7 +98,7 @@ func main() {
 	var (
 		brokerURL     = flag.String("broker", "tcp://localhost:1883", "MQTT broker URL")
 		region        = flag.String("region", "africa-west", "MQTT topic region prefix")
-		sitePrefix    = flag.String("site-prefix", "ng-kaji", "site ID prefix")
+		sitePrefix    = flag.String("site-prefix", "ng-kaji", "site ID prefix, or "+demoSitePrefix+" for named demo sites")
 		siteCount     = flag.Int("sites", 5, "number of simulated sites")
 		metersPerSite = flag.Int("meters-per-site", 10, "number of simulated meters per site")
 		interval      = flag.Duration("interval", 5*time.Second, "publish interval")
@@ -91,6 +110,11 @@ func main() {
 
 	if *siteCount < 1 || *metersPerSite < 1 {
 		log.Fatal("sites and meters-per-site must both be greater than zero")
+	}
+	// Rejected rather than topped up with generated IDs, which would publish
+	// half named and half numbered sites under one run and read as two fleets.
+	if *sitePrefix == demoSitePrefix && *siteCount > len(demoSiteIDs) {
+		log.Fatalf("site-prefix %s has only %d named sites; -sites %d is too many", demoSitePrefix, len(demoSiteIDs), *siteCount)
 	}
 	if *qos > 2 {
 		log.Fatal("qos must be 0, 1, or 2")
