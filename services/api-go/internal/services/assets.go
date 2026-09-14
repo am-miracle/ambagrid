@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"api-go/internal/domain"
 	"api-go/internal/page"
@@ -47,4 +48,43 @@ func (s *AssetService) Get(ctx context.Context, assetID string) (domain.Asset, e
 	}
 
 	return s.assets.GetAsset(ctx, assetID)
+}
+
+type GetReadingSeriesRequest struct {
+	From     time.Time
+	To       time.Time
+	Metric   domain.ReadingMetric
+	Interval domain.ReadingInterval
+}
+
+func (s *AssetService) Readings(ctx context.Context, assetID string, request GetReadingSeriesRequest) (domain.ReadingSeries, error) {
+	assetID = strings.TrimSpace(assetID)
+	if assetID == "" {
+		return domain.ReadingSeries{}, fmt.Errorf("%w: asset_id must not be empty", domain.ErrInvalidID)
+	}
+	if !request.From.Before(request.To) {
+		return domain.ReadingSeries{}, fmt.Errorf("%w: from must be before to", ErrInvalidRequest)
+	}
+	if request.Interval.MaximumWindow() == 0 {
+		return domain.ReadingSeries{}, fmt.Errorf("%w: interval is required", ErrInvalidRequest)
+	}
+	if request.To.Sub(request.From) > request.Interval.MaximumWindow() {
+		return domain.ReadingSeries{}, fmt.Errorf("%w: interval %s supports at most %s", ErrInvalidRequest, request.Interval, request.Interval.MaximumWindow())
+	}
+	asset, err := s.assets.GetAsset(ctx, assetID)
+	if err != nil {
+		return domain.ReadingSeries{}, err
+	}
+	if !request.Metric.Supports(asset.AssetType) {
+		return domain.ReadingSeries{}, fmt.Errorf("%w: metric %q is unavailable for asset type %q", ErrInvalidRequest, request.Metric, asset.AssetType)
+	}
+
+	return s.assets.GetReadingSeries(ctx, domain.ReadingQuery{
+		AssetID:   assetID,
+		AssetType: asset.AssetType,
+		From:      request.From.UTC(),
+		To:        request.To.UTC(),
+		Metric:    request.Metric,
+		Interval:  request.Interval,
+	})
 }

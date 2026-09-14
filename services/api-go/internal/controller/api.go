@@ -28,6 +28,7 @@ func (a API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/sites", a.handleListSites)
 	mux.HandleFunc("GET /v1/assets", a.handleListAssets)
 	mux.HandleFunc("GET /v1/assets/{asset_id}", a.handleGetAsset)
+	mux.HandleFunc("GET /v1/assets/{asset_id}/readings", a.handleGetAssetReadings)
 	mux.HandleFunc("GET /v1/alerts", a.handleListAlerts)
 	mux.HandleFunc("GET /v1/alerts/{alert_id}", a.handleGetAlert)
 

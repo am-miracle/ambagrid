@@ -13,6 +13,7 @@ import (
 type AssetRepository interface {
 	ListAssets(ctx context.Context, query domain.AssetQuery) (page.Page[domain.Asset], error)
 	GetAsset(ctx context.Context, assetID string) (domain.Asset, error)
+	GetReadingSeries(ctx context.Context, query domain.ReadingQuery) (domain.ReadingSeries, error)
 }
 
 type AlertRepository interface {

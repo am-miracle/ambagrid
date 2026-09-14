@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var errInvalidParameter = errors.New("invalid query parameter")
@@ -52,4 +53,29 @@ func enumParam[T any](r *http.Request, key string, parse func(string) (T, error)
 		return nil, fmt.Errorf("%w: %s", errInvalidParameter, err)
 	}
 	return &value, nil
+}
+
+func requiredEnumParam[T any](r *http.Request, key string, parse func(string) (T, error)) (T, error) {
+	var zero T
+	raw := optionalParam(r, key)
+	if raw == nil {
+		return zero, fmt.Errorf("%w: %s is required", errInvalidParameter, key)
+	}
+	value, err := parse(*raw)
+	if err != nil {
+		return zero, fmt.Errorf("%w: %s", errInvalidParameter, err)
+	}
+	return value, nil
+}
+
+func requiredTimeParam(r *http.Request, key string) (time.Time, error) {
+	raw := optionalParam(r, key)
+	if raw == nil {
+		return time.Time{}, fmt.Errorf("%w: %s is required", errInvalidParameter, key)
+	}
+	value, err := time.Parse(time.RFC3339Nano, *raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%w: %s must be an RFC 3339 timestamp", errInvalidParameter, key)
+	}
+	return value, nil
 }

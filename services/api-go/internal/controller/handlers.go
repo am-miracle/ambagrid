@@ -46,6 +46,42 @@ func (a API) handleGetAsset(w http.ResponseWriter, r *http.Request) {
 	writeObject(w, r, a.logger(), toAssetDTO(asset))
 }
 
+func (a API) handleGetAssetReadings(w http.ResponseWriter, r *http.Request) {
+	from, err := requiredTimeParam(r, "from")
+	if err != nil {
+		writeError(w, r, a.logger(), err)
+		return
+	}
+	to, err := requiredTimeParam(r, "to")
+	if err != nil {
+		writeError(w, r, a.logger(), err)
+		return
+	}
+	metric, err := requiredEnumParam(r, "metric", domain.ParseReadingMetric)
+	if err != nil {
+		writeError(w, r, a.logger(), err)
+		return
+	}
+	interval, err := requiredEnumParam(r, "interval", domain.ParseReadingInterval)
+	if err != nil {
+		writeError(w, r, a.logger(), err)
+		return
+	}
+
+	series, err := a.Assets.Readings(r.Context(), r.PathValue("asset_id"), services.GetReadingSeriesRequest{
+		From:     from,
+		To:       to,
+		Metric:   metric,
+		Interval: interval,
+	})
+	if err != nil {
+		writeError(w, r, a.logger(), err)
+		return
+	}
+
+	writeObject(w, r, a.logger(), toReadingSeriesDTO(series))
+}
+
 func (a API) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 	limit, err := limitParam(r)
 	if err != nil {

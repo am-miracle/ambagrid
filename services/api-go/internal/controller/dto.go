@@ -12,12 +12,12 @@ import (
 // nullable readings remain present so clients can distinguish missing data.
 
 type assetDTO struct {
-	AssetID             string    `json:"asset_id"`
-	SiteID              string    `json:"site_id"`
-	AssetType           string    `json:"asset_type"`
-	InternalTemperature *float32  `json:"internal_temperature"`
-	LastSeenAt          time.Time `json:"last_seen_at"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	AssetID             string           `json:"asset_id"`
+	SiteID              string           `json:"site_id"`
+	AssetType           domain.AssetType `json:"asset_type"`
+	InternalTemperature *float32         `json:"internal_temperature"`
+	LastSeenAt          time.Time        `json:"last_seen_at"`
+	UpdatedAt           time.Time        `json:"updated_at"`
 
 	SmartMeter    *smartMeterStateDTO    `json:"smart_meter,omitempty"`
 	BatteryBMS    *batteryBMSStateDTO    `json:"battery_bms,omitempty"`
@@ -49,7 +49,7 @@ func toAssetDTO(asset domain.Asset) assetDTO {
 	dto := assetDTO{
 		AssetID:             asset.AssetID,
 		SiteID:              asset.SiteID,
-		AssetType:           string(asset.AssetType),
+		AssetType:           asset.AssetType,
 		InternalTemperature: asset.InternalTemperature,
 		LastSeenAt:          asset.LastSeenAt,
 		UpdatedAt:           asset.UpdatedAt,
@@ -83,19 +83,52 @@ func toAssetDTO(asset domain.Asset) assetDTO {
 	return dto
 }
 
+type readingSeriesDTO struct {
+	AssetID     string                    `json:"asset_id"`
+	AssetType   domain.AssetType          `json:"asset_type"`
+	From        time.Time                 `json:"from"`
+	To          time.Time                 `json:"to"`
+	Metric      domain.ReadingMetric      `json:"metric"`
+	Interval    domain.ReadingInterval    `json:"interval"`
+	Aggregation domain.ReadingAggregation `json:"aggregation"`
+	Points      []readingPointDTO         `json:"points"`
+}
+
+type readingPointDTO struct {
+	Time  time.Time `json:"time"`
+	Value float64   `json:"value"`
+}
+
+func toReadingSeriesDTO(series domain.ReadingSeries) readingSeriesDTO {
+	points := make([]readingPointDTO, 0, len(series.Points))
+	for _, point := range series.Points {
+		points = append(points, readingPointDTO{Time: point.Time, Value: point.Value})
+	}
+	return readingSeriesDTO{
+		AssetID:     series.AssetID,
+		AssetType:   series.AssetType,
+		From:        series.From,
+		To:          series.To,
+		Metric:      series.Metric,
+		Interval:    series.Interval,
+		Aggregation: series.Aggregation,
+		Points:      points,
+	}
+}
+
 type alertDTO struct {
-	AlertID        string     `json:"alert_id"`
-	AssetID        string     `json:"asset_id"`
-	SiteID         string     `json:"site_id"`
-	Kind           string     `json:"kind"`
-	Severity       string     `json:"severity"`
-	Status         string     `json:"status"`
-	Reason         string     `json:"reason"`
-	OpenedAt       time.Time  `json:"opened_at"`
-	SourceEventID  *string    `json:"source_event_id"`
-	ResolvedAt     *time.Time `json:"resolved_at"`
-	ResolutionNote *string    `json:"resolution_note"`
-	ResolvedBy     *string    `json:"resolved_by"`
+	AlertID        string             `json:"alert_id"`
+	AssetID        string             `json:"asset_id"`
+	SiteID         string             `json:"site_id"`
+	Kind           string             `json:"kind"`
+	Severity       domain.Severity    `json:"severity"`
+	Status         domain.AlertStatus `json:"status"`
+	Reason         string             `json:"reason"`
+	OpenedAt       time.Time          `json:"opened_at"`
+	SourceEventID  *string            `json:"source_event_id"`
+	ResolvedAt     *time.Time         `json:"resolved_at"`
+	ResolutionNote *string            `json:"resolution_note"`
+	ResolvedBy     *string            `json:"resolved_by"`
 }
 
 func toAlertDTO(alert domain.Alert) alertDTO {
@@ -104,8 +137,8 @@ func toAlertDTO(alert domain.Alert) alertDTO {
 		AssetID:        alert.AssetID,
 		SiteID:         alert.SiteID,
 		Kind:           alert.Kind,
-		Severity:       string(alert.Severity),
-		Status:         string(alert.Status),
+		Severity:       alert.Severity,
+		Status:         alert.Status,
 		Reason:         alert.Reason,
 		OpenedAt:       alert.OpenedAt,
 		SourceEventID:  alert.SourceEventID,
