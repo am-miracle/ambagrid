@@ -20,6 +20,7 @@ type AssetService interface {
 type AlertService interface {
 	List(ctx context.Context, request services.ListAlertsRequest) (page.Page[domain.Alert], error)
 	Get(ctx context.Context, alertID string) (services.AlertDetail, error)
+	Resolve(ctx context.Context, alertID string, request services.ResolveAlertRequest) (domain.Alert, error)
 }
 
 type SiteService interface {

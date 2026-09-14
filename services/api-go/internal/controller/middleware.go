@@ -19,6 +19,7 @@ type contextKey int
 const requestIDKey contextKey = iota
 
 const requestIDHeader = "X-Request-Id"
+const operatorIDHeader = "X-Operator-Id"
 
 // RequestIDFrom returns the request's correlation ID, if present.
 func RequestIDFrom(ctx context.Context) string {
@@ -148,8 +149,8 @@ func withCORS(allowedOrigins []string) middleware {
 			origin := r.Header.Get("Origin")
 			if origin != "" && slices.Contains(allowedOrigins, origin) {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
-				w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", strings.Join([]string{"Content-Type", requestIDHeader}, ", "))
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Headers", strings.Join([]string{"Content-Type", requestIDHeader, operatorIDHeader}, ", "))
 				w.Header().Set("Access-Control-Max-Age", "600")
 				// Tell shared caches that the response varies by origin.
 				w.Header().Add("Vary", "Origin")

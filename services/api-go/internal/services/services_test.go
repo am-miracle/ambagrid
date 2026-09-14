@@ -12,11 +12,14 @@ import (
 )
 
 type fakeAlertRepository struct {
-	alert         domain.Alert
-	getErr        error
-	resolutions   []domain.AlertResolution
-	gotAlertQuery domain.AlertQuery
-	detailCalls   int
+	alert             domain.Alert
+	getErr            error
+	resolveErr        error
+	resolutions       []domain.AlertResolution
+	gotAlertQuery     domain.AlertQuery
+	gotResolveCommand domain.ResolveAlertCommand
+	detailCalls       int
+	resolveCalls      int
 }
 
 func (f *fakeAlertRepository) ListAlerts(_ context.Context, query domain.AlertQuery) (page.Page[domain.Alert], error) {
@@ -27,6 +30,12 @@ func (f *fakeAlertRepository) ListAlerts(_ context.Context, query domain.AlertQu
 func (f *fakeAlertRepository) GetAlertWithResolutions(context.Context, string) (domain.Alert, []domain.AlertResolution, error) {
 	f.detailCalls++
 	return f.alert, f.resolutions, f.getErr
+}
+
+func (f *fakeAlertRepository) ResolveAlert(_ context.Context, command domain.ResolveAlertCommand) (domain.Alert, error) {
+	f.resolveCalls++
+	f.gotResolveCommand = command
+	return f.alert, f.resolveErr
 }
 
 func testLimits() PageLimits {
@@ -183,6 +192,50 @@ func TestAlertServiceGetReturnsMissingAlertError(t *testing.T) {
 
 	if repo.detailCalls != 1 {
 		t.Fatalf("repository was queried %d times, want 1", repo.detailCalls)
+	}
+}
+
+func TestAlertServiceResolveValidatesAndPassesACommandThrough(t *testing.T) {
+	repo := &fakeAlertRepository{
+		alert: domain.Alert{AlertID: "0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b", Status: domain.AlertStatusResolved},
+	}
+
+	alert, err := newTestAlertService(repo).Resolve(context.Background(), "0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b", ResolveAlertRequest{
+		ResolutionNote: "  fan cleaned  ",
+		ResolvedBy:     " operator-0101 ",
+	})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	if alert.Status != domain.AlertStatusResolved {
+		t.Fatalf("alert status = %v, want resolved", alert.Status)
+	}
+	if got := repo.gotResolveCommand; got.AlertID != "0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b" || got.ResolutionNote != "fan cleaned" || got.ResolvedBy != "operator-0101" {
+		t.Fatalf("resolve command = %+v", got)
+	}
+}
+
+func TestAlertServiceResolveRejectsBadInputBeforeQuerying(t *testing.T) {
+	tests := map[string]ResolveAlertRequest{
+		"empty note":      {ResolutionNote: " ", ResolvedBy: "operator-0101"},
+		"empty operator":  {ResolutionNote: "fan cleaned", ResolvedBy: " "},
+		"system operator": {ResolutionNote: "fan cleaned", ResolvedBy: "system"},
+	}
+
+	for name, request := range tests {
+		t.Run(name, func(t *testing.T) {
+			repo := &fakeAlertRepository{}
+
+			_, err := newTestAlertService(repo).Resolve(context.Background(), "0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b", request)
+
+			if err == nil {
+				t.Fatal("Resolve() error = nil, want validation error")
+			}
+			if repo.resolveCalls != 0 {
+				t.Fatalf("repository was queried %d times, want 0", repo.resolveCalls)
+			}
+		})
 	}
 }
 

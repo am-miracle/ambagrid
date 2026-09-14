@@ -22,15 +22,16 @@ func (a API) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	// Liveness does not depend on the database; readiness does.
-	mux.HandleFunc("GET /healthz", a.handleLive)
-	mux.HandleFunc("GET /readyz", a.handleReady)
+	a.handleRoute(mux, http.MethodGet, "/healthz", a.handleLive)
+	a.handleRoute(mux, http.MethodGet, "/readyz", a.handleReady)
 
-	mux.HandleFunc("GET /v1/sites", a.handleListSites)
-	mux.HandleFunc("GET /v1/assets", a.handleListAssets)
-	mux.HandleFunc("GET /v1/assets/{asset_id}", a.handleGetAsset)
-	mux.HandleFunc("GET /v1/assets/{asset_id}/readings", a.handleGetAssetReadings)
-	mux.HandleFunc("GET /v1/alerts", a.handleListAlerts)
-	mux.HandleFunc("GET /v1/alerts/{alert_id}", a.handleGetAlert)
+	a.handleRoute(mux, http.MethodGet, "/v1/sites", a.handleListSites)
+	a.handleRoute(mux, http.MethodGet, "/v1/assets", a.handleListAssets)
+	a.handleRoute(mux, http.MethodGet, "/v1/assets/{asset_id}", a.handleGetAsset)
+	a.handleRoute(mux, http.MethodGet, "/v1/assets/{asset_id}/readings", a.handleGetAssetReadings)
+	a.handleRoute(mux, http.MethodGet, "/v1/alerts", a.handleListAlerts)
+	a.handleRoute(mux, http.MethodGet, "/v1/alerts/{alert_id}", a.handleGetAlert)
+	a.handleRoute(mux, http.MethodPost, "/v1/alerts/{alert_id}/resolve", a.handleResolveAlert)
 
 	// Keep unmatched responses in the API's JSON envelope.
 	mux.HandleFunc("/", a.handleUnmatched)
@@ -54,12 +55,14 @@ func (a API) logger() *slog.Logger {
 	return slog.Default()
 }
 
-func (a API) handleUnmatched(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", "GET, OPTIONS")
-		writeErrorBody(w, a.logger(), http.StatusMethodNotAllowed, codeMethodNotAllowed, "this API is read-only", RequestIDFrom(r.Context()))
-		return
-	}
+func (a API) handleRoute(mux *http.ServeMux, method, pattern string, handler http.HandlerFunc) {
+	mux.HandleFunc(method+" "+pattern, handler)
+	mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Allow", method+", OPTIONS")
+		writeErrorBody(w, a.logger(), http.StatusMethodNotAllowed, codeMethodNotAllowed, "method not allowed", RequestIDFrom(r.Context()))
+	})
+}
 
+func (a API) handleUnmatched(w http.ResponseWriter, r *http.Request) {
 	writeErrorBody(w, a.logger(), http.StatusNotFound, codeNotFound, "no such endpoint", RequestIDFrom(r.Context()))
 }

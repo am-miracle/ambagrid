@@ -2,6 +2,9 @@
 package controller
 
 import (
+	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 
 	"api-go/internal/domain"
@@ -148,6 +151,43 @@ func (a API) handleGetAlert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeObject(w, r, a.logger(), toAlertDetailDTO(detail))
+}
+
+type resolveAlertBody struct {
+	ResolutionNote string `json:"resolution_note"`
+}
+
+func (a API) handleResolveAlert(w http.ResponseWriter, r *http.Request) {
+	operatorHeaders := r.Header.Values(operatorIDHeader)
+	if len(operatorHeaders) == 0 {
+		writeErrorBody(w, a.logger(), http.StatusUnauthorized, codeUnauthenticated, "missing trusted operator identity", RequestIDFrom(r.Context()))
+		return
+	}
+
+	resolvedBy := r.Header.Get(operatorIDHeader)
+
+	var body resolveAlertBody
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
+		writeError(w, r, a.logger(), errInvalidParameter)
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeError(w, r, a.logger(), errInvalidParameter)
+		return
+	}
+
+	alert, err := a.Alerts.Resolve(r.Context(), r.PathValue("alert_id"), services.ResolveAlertRequest{
+		ResolutionNote: body.ResolutionNote,
+		ResolvedBy:     resolvedBy,
+	})
+	if err != nil {
+		writeError(w, r, a.logger(), err)
+		return
+	}
+
+	writeObject(w, r, a.logger(), toAlertDTO(alert))
 }
 
 func (a API) handleListSites(w http.ResponseWriter, r *http.Request) {

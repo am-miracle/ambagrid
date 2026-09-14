@@ -1,7 +1,7 @@
 # api-go
 
-Read-only HTTP API over the operational database: asset latest state, alerts,
-and site rollups for the control room.
+HTTP API over the operational database: asset latest state, alerts, site
+rollups, and narrow operator commands for the control room.
 
 Full endpoint reference and design notes: [docs/api.md](../../docs/api.md).
 
@@ -30,6 +30,10 @@ DATABASE_URL="postgres://ambagrid_admin:ambagrid_secure_pass@localhost:5432/amba
 ```bash
 curl http://localhost:8081/v1/sites
 curl "http://localhost:8081/v1/alerts?status=open&severity=critical"
+curl -X POST http://localhost:8081/v1/alerts/0bb99171-6d9a-42d4-8124-a5d995b10fd4/resolve \
+  -H "Content-Type: application/json" \
+  -H "X-Operator-Id: operator-0101" \
+  -d '{"resolution_note":"fan cleaned"}'
 ```
 
 With no telemetry ingested yet, every listing is empty. Run the simulator and
@@ -45,7 +49,7 @@ make engine-serve
 ```text
 main.go                        wiring: config -> pool -> services -> server
 internal/config/               environment wiring
-internal/domain/               read model: assets, alerts, sites
+internal/domain/               assets, alerts, sites, command inputs
 internal/page/                 keyset pagination and opaque cursors
 internal/controller/           HTTP: routes, middleware, DTOs, error mapping
 internal/services/             application layer and repository ports

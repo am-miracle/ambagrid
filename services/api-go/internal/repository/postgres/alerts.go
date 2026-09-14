@@ -41,6 +41,39 @@ FROM alert_resolution_history
 WHERE alert_id = $1::uuid
 ORDER BY recorded_at DESC`
 
+const resolveAlertSQL = `
+UPDATE alerts
+SET status = 'resolved',
+    resolved_at = $2,
+    resolution_note = $3,
+    resolved_by = $4,
+    updated_at = $2
+WHERE alert_id = $1::uuid
+  AND status = 'open'
+RETURNING alert_id::text,
+       asset_id,
+       site_id,
+       kind,
+       severity,
+       status,
+       reason,
+       opened_at,
+       source_event_id,
+       resolved_at,
+       resolution_note,
+       resolved_by`
+
+const insertAlertResolutionSQL = `
+INSERT INTO alert_resolution_history (
+    alert_id, resolved_at, resolution_note, resolved_by
+)
+VALUES ($1::uuid, $2, $3, $4)`
+
+const alertExistsSQL = `
+SELECT EXISTS (
+    SELECT 1 FROM alerts WHERE alert_id = $1::uuid
+)`
+
 func (s *Store) ListAlerts(ctx context.Context, query domain.AlertQuery) (page.Page[domain.Alert], error) {
 	var (
 		afterOpenedAt *time.Time
@@ -147,6 +180,42 @@ func (s *Store) GetAlertWithResolutions(ctx context.Context, alertID string) (do
 		return domain.Alert{}, nil, fmt.Errorf("commit alert detail transaction: %w", err)
 	}
 	return alert, resolutions, nil
+}
+
+func (s *Store) ResolveAlert(ctx context.Context, command domain.ResolveAlertCommand) (domain.Alert, error) {
+	ctx, cancel := s.withTimeout(ctx)
+	defer cancel()
+
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return domain.Alert{}, fmt.Errorf("begin alert resolution transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	resolvedAt := time.Now().UTC()
+	alert, err := scanAlert(tx.QueryRow(ctx, resolveAlertSQL, command.AlertID, resolvedAt, command.ResolutionNote, command.ResolvedBy))
+	if errors.Is(err, pgx.ErrNoRows) {
+		var exists bool
+		if existsErr := tx.QueryRow(ctx, alertExistsSQL, command.AlertID).Scan(&exists); existsErr != nil {
+			return domain.Alert{}, fmt.Errorf("check alert existence: %w", existsErr)
+		}
+		if !exists {
+			return domain.Alert{}, fmt.Errorf("%w: alert %q", domain.ErrNotFound, command.AlertID)
+		}
+		return domain.Alert{}, fmt.Errorf("%w: alert %q is not open", domain.ErrConflict, command.AlertID)
+	}
+	if err != nil {
+		return domain.Alert{}, err
+	}
+
+	if _, err := tx.Exec(ctx, insertAlertResolutionSQL, command.AlertID, resolvedAt, command.ResolutionNote, command.ResolvedBy); err != nil {
+		return domain.Alert{}, fmt.Errorf("insert alert resolution history: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Alert{}, fmt.Errorf("commit alert resolution transaction: %w", err)
+	}
+	return alert, nil
 }
 
 func queryAlertResolutions(ctx context.Context, tx pgx.Tx, alertID string) ([]domain.AlertResolution, error) {

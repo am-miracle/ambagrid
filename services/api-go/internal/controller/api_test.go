@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,11 +44,15 @@ func (f *fakeAssets) Readings(_ context.Context, _ string, request services.GetR
 }
 
 type fakeAlerts struct {
-	listResult page.Page[domain.Alert]
-	listErr    error
-	detail     services.AlertDetail
-	getErr     error
-	gotRequest services.ListAlertsRequest
+	listResult        page.Page[domain.Alert]
+	listErr           error
+	detail            services.AlertDetail
+	getErr            error
+	resolved          domain.Alert
+	resolveErr        error
+	gotRequest        services.ListAlertsRequest
+	gotResolveAlertID string
+	gotResolveRequest services.ResolveAlertRequest
 }
 
 func (f *fakeAlerts) List(_ context.Context, request services.ListAlertsRequest) (page.Page[domain.Alert], error) {
@@ -57,6 +62,12 @@ func (f *fakeAlerts) List(_ context.Context, request services.ListAlertsRequest)
 
 func (f *fakeAlerts) Get(context.Context, string) (services.AlertDetail, error) {
 	return f.detail, f.getErr
+}
+
+func (f *fakeAlerts) Resolve(_ context.Context, alertID string, request services.ResolveAlertRequest) (domain.Alert, error) {
+	f.gotResolveAlertID = alertID
+	f.gotResolveRequest = request
+	return f.resolved, f.resolveErr
 }
 
 type fakeSites struct {
@@ -103,6 +114,18 @@ func (a testAPI) get(t *testing.T, target string) *httptest.ResponseRecorder {
 	t.Helper()
 	recorder := httptest.NewRecorder()
 	a.handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, target, nil))
+	return recorder
+}
+
+func (a testAPI) post(t *testing.T, target, body string, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	for key, value := range headers {
+		request.Header.Set(key, value)
+	}
+	a.handler.ServeHTTP(recorder, request)
 	return recorder
 }
 
@@ -274,6 +297,83 @@ func TestGetAlertIncludesResolutionHistory(t *testing.T) {
 	}
 }
 
+func TestResolveAlertUsesTheTrustedOperatorHeader(t *testing.T) {
+	api := newTestAPI()
+	resolvedAt := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	note := "fan cleaned"
+	resolvedBy := "operator-0101"
+	api.alerts.resolved = domain.Alert{
+		AlertID:        "0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b",
+		Severity:       domain.SeverityCritical,
+		Status:         domain.AlertStatusResolved,
+		ResolvedAt:     &resolvedAt,
+		ResolutionNote: &note,
+		ResolvedBy:     &resolvedBy,
+	}
+
+	recorder := api.post(t, "/v1/alerts/0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b/resolve", `{"resolution_note":"fan cleaned"}`, map[string]string{
+		operatorIDHeader: "operator-0101",
+	})
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	if api.alerts.gotResolveAlertID != "0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b" {
+		t.Fatalf("alert id = %q", api.alerts.gotResolveAlertID)
+	}
+	if got := api.alerts.gotResolveRequest; got.ResolutionNote != "fan cleaned" || got.ResolvedBy != "operator-0101" {
+		t.Fatalf("resolve request = %+v", got)
+	}
+	data := decodeBody(t, recorder)["data"].(map[string]any)
+	if data["status"] != "resolved" || data["resolved_by"] != "operator-0101" || data["resolution_note"] != "fan cleaned" {
+		t.Fatalf("data = %v", data)
+	}
+}
+
+func TestResolveAlertRequiresTrustedOperatorIdentity(t *testing.T) {
+	api := newTestAPI()
+
+	recorder := api.post(t, "/v1/alerts/0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b/resolve", `{"resolution_note":"fan cleaned"}`, nil)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", recorder.Code)
+	}
+	if api.alerts.gotResolveAlertID != "" {
+		t.Fatalf("service was called for alert %q", api.alerts.gotResolveAlertID)
+	}
+	if code := decodeBody(t, recorder)["error"].(map[string]any)["code"]; code != codeUnauthenticated {
+		t.Fatalf("code = %v, want %v", code, codeUnauthenticated)
+	}
+}
+
+func TestResolveAlertRejectsAnEmptyTrustedOperatorIdentity(t *testing.T) {
+	api := newTestAPI()
+	api.alerts.resolveErr = domain.ErrInvalidID
+
+	recorder := api.post(t, "/v1/alerts/0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b/resolve", `{"resolution_note":"fan cleaned"}`, map[string]string{
+		operatorIDHeader: "",
+	})
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", recorder.Code)
+	}
+	if api.alerts.gotResolveAlertID == "" || api.alerts.gotResolveRequest.ResolvedBy != "" {
+		t.Fatalf("resolve request = id %q, request %+v", api.alerts.gotResolveAlertID, api.alerts.gotResolveRequest)
+	}
+}
+
+func TestResolveAlertRejectsInvalidJSON(t *testing.T) {
+	api := newTestAPI()
+
+	recorder := api.post(t, "/v1/alerts/0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b/resolve", `{"resolution_note":`, map[string]string{
+		operatorIDHeader: "operator-0101",
+	})
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", recorder.Code)
+	}
+}
+
 func TestErrorsMapToStatusCodes(t *testing.T) {
 	tests := map[string]struct {
 		target     string
@@ -281,12 +381,13 @@ func TestErrorsMapToStatusCodes(t *testing.T) {
 		wantStatus int
 		wantCode   string
 	}{
-		"missing object":  {target: "/v1/assets/met-0104", serviceErr: domain.ErrNotFound, wantStatus: http.StatusNotFound, wantCode: codeNotFound},
-		"malformed id":    {target: "/v1/assets/met-0104", serviceErr: domain.ErrInvalidID, wantStatus: http.StatusBadRequest, wantCode: codeInvalidArgument},
-		"forged cursor":   {target: "/v1/assets/met-0104", serviceErr: page.ErrInvalidCursor, wantStatus: http.StatusBadRequest, wantCode: codeInvalidArgument},
-		"oversized page":  {target: "/v1/assets/met-0104", serviceErr: services.ErrInvalidRequest, wantStatus: http.StatusBadRequest, wantCode: codeInvalidArgument},
-		"slow query":      {target: "/v1/assets/met-0104", serviceErr: context.DeadlineExceeded, wantStatus: http.StatusGatewayTimeout, wantCode: codeDeadlineExceeded},
-		"database is out": {target: "/v1/assets/met-0104", serviceErr: errors.New("connection refused"), wantStatus: http.StatusInternalServerError, wantCode: codeInternal},
+		"missing object":   {target: "/v1/assets/met-0104", serviceErr: domain.ErrNotFound, wantStatus: http.StatusNotFound, wantCode: codeNotFound},
+		"malformed id":     {target: "/v1/assets/met-0104", serviceErr: domain.ErrInvalidID, wantStatus: http.StatusBadRequest, wantCode: codeInvalidArgument},
+		"command conflict": {target: "/v1/assets/met-0104", serviceErr: domain.ErrConflict, wantStatus: http.StatusConflict, wantCode: codeConflict},
+		"forged cursor":    {target: "/v1/assets/met-0104", serviceErr: page.ErrInvalidCursor, wantStatus: http.StatusBadRequest, wantCode: codeInvalidArgument},
+		"oversized page":   {target: "/v1/assets/met-0104", serviceErr: services.ErrInvalidRequest, wantStatus: http.StatusBadRequest, wantCode: codeInvalidArgument},
+		"slow query":       {target: "/v1/assets/met-0104", serviceErr: context.DeadlineExceeded, wantStatus: http.StatusGatewayTimeout, wantCode: codeDeadlineExceeded},
+		"database is out":  {target: "/v1/assets/met-0104", serviceErr: errors.New("connection refused"), wantStatus: http.StatusInternalServerError, wantCode: codeInternal},
 	}
 
 	for name, test := range tests {
@@ -368,13 +469,27 @@ func TestWriteMethodsAreNotRouted(t *testing.T) {
 	api.handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/alerts", nil))
 
 	if recorder.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("status = %d, want 405 on a read-only surface", recorder.Code)
+		t.Fatalf("status = %d, want 405 for an unrouted method", recorder.Code)
 	}
 	if got := recorder.Header().Get("Allow"); got != "GET, OPTIONS" {
-		t.Fatalf("Allow = %q, want the readable methods", got)
+		t.Fatalf("Allow = %q, want the supported methods", got)
 	}
 	if code := decodeBody(t, recorder)["error"].(map[string]any)["code"]; code != codeMethodNotAllowed {
 		t.Fatalf("code = %v, want %v", code, codeMethodNotAllowed)
+	}
+}
+
+func TestResolveRouteAdvertisesOnlyItsSupportedMethod(t *testing.T) {
+	api := newTestAPI()
+	recorder := httptest.NewRecorder()
+
+	api.handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/v1/alerts/0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b/resolve", nil))
+
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", recorder.Code)
+	}
+	if got := recorder.Header().Get("Allow"); got != "POST, OPTIONS" {
+		t.Fatalf("Allow = %q, want POST and OPTIONS", got)
 	}
 }
 

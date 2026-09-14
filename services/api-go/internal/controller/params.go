@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-var errInvalidParameter = errors.New("invalid query parameter")
+var errInvalidParameter = errors.New("invalid request parameter")
 
 // limitParam returns zero when the client omits the page size.
 func limitParam(r *http.Request) (int, error) {

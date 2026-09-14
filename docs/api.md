@@ -1,20 +1,20 @@
-# Read API
+# Operator API
 
 `services/api-go` exposes what the platform already knows — asset latest state
 and the alert lifecycle — over HTTP, so operators and the control room can see
-it without `psql` or `rpk`.
+and act on it without `psql` or `rpk`.
 
-It is deliberately read-only. The engine owns every write to the operational
-database; the API only reads what the engine has already made durable. Actions
-that change grid state (resolving an alert, issuing a meter command) belong in
-the engine's action layer, not behind a convenience endpoint here.
+Most endpoints are read-model queries. Operator commands are intentionally
+narrow and audit-oriented: they validate the request, use the trusted operator
+identity supplied by the deployment gateway, then make the operational state
+change durable.
 
 ## Shape of the Service
 
 ```text
 HTTP request
   -> controller   routing, query parsing, JSON encoding, status codes
-  -> services     page-size limits, identifier validation, what is read together
+  -> services     page-size limits, identifier validation, command validation
   -> repository   SQL against Postgres/TimescaleDB
 ```
 
@@ -27,7 +27,7 @@ no database.
 services/api-go/
   main.go                        wiring: config -> pool -> services -> server
   internal/config/               environment wiring
-  internal/domain/               read model: assets, alerts, sites
+  internal/domain/               assets, alerts, sites, command inputs
   internal/page/                 keyset pagination and opaque cursors
   internal/controller/           HTTP: routes, middleware, DTOs, error mapping
   internal/services/             application layer and repository ports
@@ -281,6 +281,36 @@ An alert can be resolved, reopened by the engine and resolved again, so the
 history is a list. It is unpaginated: its length is bounded by how many times
 an operator has resolved one alert, not by fleet size.
 
+### `POST /v1/alerts/{alert_id}/resolve`
+
+Resolves one open alert as an operator action.
+
+The API does not authenticate users itself yet. Deploy it behind a gateway that
+authenticates the caller and injects `X-Operator-Id`; the API treats that header
+as trusted deployment metadata and records it as `resolved_by`. Do not expose
+this endpoint directly to the internet.
+
+```bash
+curl -X POST "http://localhost:8081/v1/alerts/0bb99171-6d9a-42d4-8124-a5d995b10fd4/resolve" \
+  -H "Content-Type: application/json" \
+  -H "X-Operator-Id: operator-0101" \
+  -d '{"resolution_note":"fan cleaned"}'
+```
+
+Request body:
+
+```json
+{
+  "resolution_note": "fan cleaned"
+}
+```
+
+Successful responses return the resolved alert in the normal object envelope.
+Missing `X-Operator-Id` returns 401. A malformed alert ID, empty
+`resolution_note`, empty operator ID, or reserved `system` operator ID returns
+400. A missing alert returns 404. An alert that exists but is no longer open
+returns 409.
+
 ### `GET /healthz` and `GET /readyz`
 
 `/healthz` is liveness and never touches the database — restarting a replica
@@ -324,10 +354,9 @@ behind a load balancer. What does not scale automatically:
   scans every asset and every open alert regardless of page. Acceptable while a
   deployment is one operator's grid; the fix when it stops being acceptable is
   a continuous aggregate or a real sites table, not a bigger query.
-- **Read replicas.** Every connection is opened `default_transaction_read_only`
-  and the service issues no writes, so pointing `DATABASE_URL` at a replica
-  works. Expect replication lag to show up as an alert appearing a moment after
-  the engine opened it.
+- **Read replicas.** The service now includes operator commands, so the primary
+  `DATABASE_URL` must point at a writable database. Split read/write pools
+  before pointing listings at replicas.
 
 Every request carries a deadline into Postgres, and `DB_STATEMENT_TIMEOUT` is
 the server-side backstop: without it a query whose client gave up keeps running
@@ -335,9 +364,14 @@ and pins the connection that cancelling it was meant to free.
 
 ## Not Here Yet
 
-- **Authentication.** There is none. Run it behind a gateway that terminates
-  TLS and authenticates callers; do not expose it to the internet as is.
+- **Built-in authentication.** There is none. Run it behind a gateway that
+  terminates TLS, authenticates callers, and injects `X-Operator-Id` for
+  operator commands; do not expose it to the internet as is.
 - **Customers, balances, payments, commands.** Those ontology objects have no
   tables yet. When they land, they are new `/v1` collections, not changes to
   these.
-- **Writes.** Resolving an alert stays an engine action.
+- **General writes.** Alert resolution is the only operator command exposed
+  here. Meter commands, payments, credits, and customer changes are not here yet.
+- **Command event publishing.** The Go alert-resolution endpoint updates
+  Postgres and resolution history. Publishing `alert.resolved` from this path
+  still needs a command-event publisher or an engine command bridge.

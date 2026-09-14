@@ -8,18 +8,25 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5"
 
 	"api-go/internal/domain"
 )
 
 // Store reads the operational database with bounded query time.
 type Store struct {
-	pool         *pgxpool.Pool
+	pool         databasePool
 	queryTimeout time.Duration
 }
 
-func NewStore(pool *pgxpool.Pool, queryTimeout time.Duration) *Store {
+type databasePool interface {
+	BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error)
+	Ping(ctx context.Context) error
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+func NewStore(pool databasePool, queryTimeout time.Duration) *Store {
 	return &Store{pool: pool, queryTimeout: queryTimeout}
 }
 

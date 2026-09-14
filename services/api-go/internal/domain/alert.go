@@ -3,6 +3,7 @@ package domain
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -52,6 +53,25 @@ type Alert struct {
 	ResolvedAt     *time.Time
 	ResolutionNote *string
 	ResolvedBy     *string
+}
+
+// ResolveAlertCommand contains the validated data needed to resolve an alert.
+type ResolveAlertCommand struct {
+	AlertID        string
+	ResolutionNote string
+	ResolvedBy     string
+}
+
+func ValidateOperatorID(value string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	switch trimmed {
+	case "":
+		return "", fmt.Errorf("%w: operator_id must not be empty", ErrInvalidID)
+	case "system":
+		return "", fmt.Errorf("%w: operator_id must not be the reserved system actor", ErrInvalidID)
+	default:
+		return trimmed, nil
+	}
 }
 
 // alertResolution records one resolution in an alert's lifecycle.

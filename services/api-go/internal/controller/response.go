@@ -48,7 +48,9 @@ type errorDetail struct {
 
 const (
 	codeInvalidArgument  = "invalid_argument"
+	codeUnauthenticated  = "unauthenticated"
 	codeNotFound         = "not_found"
+	codeConflict         = "conflict"
 	codeMethodNotAllowed = "method_not_allowed"
 	codeDeadlineExceeded = "deadline_exceeded"
 	codeInternal         = "internal"
@@ -93,6 +95,8 @@ func writeError(w http.ResponseWriter, r *http.Request, logger *slog.Logger, err
 	requestID := RequestIDFrom(r.Context())
 
 	switch {
+	case errors.Is(err, domain.ErrConflict):
+		writeErrorBody(w, logger, http.StatusConflict, codeConflict, err.Error(), requestID)
 	case errors.Is(err, domain.ErrNotFound):
 		writeErrorBody(w, logger, http.StatusNotFound, codeNotFound, "object not found", requestID)
 	case errors.Is(err, page.ErrInvalidCursor):

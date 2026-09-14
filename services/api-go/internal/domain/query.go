@@ -8,6 +8,8 @@ var ErrNotFound = errors.New("not found")
 
 var ErrInvalidData = errors.New("invalid data")
 
+var ErrConflict = errors.New("conflict")
+
 // Query carries filters and pagination for a repository listing.
 type Query[F any] struct {
 	Filter F

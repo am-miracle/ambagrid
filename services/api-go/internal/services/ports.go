@@ -19,6 +19,7 @@ type AssetRepository interface {
 type AlertRepository interface {
 	ListAlerts(ctx context.Context, query domain.AlertQuery) (page.Page[domain.Alert], error)
 	GetAlertWithResolutions(ctx context.Context, alertID string) (domain.Alert, []domain.AlertResolution, error)
+	ResolveAlert(ctx context.Context, command domain.ResolveAlertCommand) (domain.Alert, error)
 }
 
 type SiteRepository interface {

@@ -46,7 +46,7 @@ Rust is the control engine. It is the right place for low-latency rules, graph t
 
 PostgreSQL with TimescaleDB stores operational data and high-frequency metrics. Normal relational tables hold sites, households, devices, and users. Hypertables should hold voltage, current, power, frequency, and battery readings.
 
-Go also serves the read API. `services/api-go` exposes asset latest state, alerts, and site rollups over HTTP so the control room and operators can see what the engine has recorded. It is read-only: the engine owns every write, and the API only reads what the engine has already made durable. Read the endpoint reference and layering in [api.md](api.md).
+Go also serves the operator API. `services/api-go` exposes asset latest state, alerts, and site rollups over HTTP so the control room and operators can see what the engine has recorded. It also exposes narrow operator commands such as alert resolution, using trusted identity injected by a deployment gateway until built-in authentication exists. Read the endpoint reference and layering in [api.md](api.md).
 
 TypeScript and React power the control room. The frontend is where operators see live state, alerts, maps, and battery health.
 

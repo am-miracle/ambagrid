@@ -3,6 +3,8 @@ package services
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"api-go/internal/domain"
 	"api-go/internal/page"
@@ -30,6 +32,11 @@ type ListAlertsRequest struct {
 type AlertDetail struct {
 	Alert       domain.Alert
 	Resolutions []domain.AlertResolution
+}
+
+type ResolveAlertRequest struct {
+	ResolutionNote string
+	ResolvedBy     string
 }
 
 func (s *AlertService) List(ctx context.Context, request ListAlertsRequest) (page.Page[domain.Alert], error) {
@@ -69,4 +76,26 @@ func (s *AlertService) Get(ctx context.Context, alertID string) (AlertDetail, er
 	}
 
 	return AlertDetail{Alert: alert, Resolutions: resolutions}, nil
+}
+
+func (s *AlertService) Resolve(ctx context.Context, alertID string, request ResolveAlertRequest) (domain.Alert, error) {
+	if err := domain.ValidateAlertID(alertID); err != nil {
+		return domain.Alert{}, err
+	}
+
+	resolutionNote := strings.TrimSpace(request.ResolutionNote)
+	if resolutionNote == "" {
+		return domain.Alert{}, fmt.Errorf("%w: resolution_note must not be empty", ErrInvalidRequest)
+	}
+
+	resolvedBy, err := domain.ValidateOperatorID(request.ResolvedBy)
+	if err != nil {
+		return domain.Alert{}, err
+	}
+
+	return s.alerts.ResolveAlert(ctx, domain.ResolveAlertCommand{
+		AlertID:        alertID,
+		ResolutionNote: resolutionNote,
+		ResolvedBy:     resolvedBy,
+	})
 }
