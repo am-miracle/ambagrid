@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
+use serde_json::{Value, json};
 use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgRow, query};
 use uuid::Uuid;
 
@@ -350,7 +351,9 @@ async fn open_alert(
     .await
     .map_err(PortError::storage)?;
 
-    row_to_alert(row)
+    let alert = row_to_alert(row)?;
+    insert_alert_event(tx, "alert.opened", alert_opened_payload(&alert)).await?;
+    Ok(alert)
 }
 
 // Scoped by kind, not just asset_id: an asset can have multiple concurrent
@@ -408,7 +411,90 @@ async fn resolve_alert(
     insert_alert_resolution_history(tx, alert_id, resolved_at, resolution_note, resolved_by)
         .await?;
 
-    row_to_alert(row)
+    let alert = row_to_alert(row)?;
+    insert_alert_event(tx, "alert.resolved", alert_resolved_payload(&alert)?).await?;
+    Ok(alert)
+}
+
+async fn insert_alert_event(
+    tx: &mut Transaction<'_, Postgres>,
+    event_type: &str,
+    payload: Value,
+) -> Result<(), PortError> {
+    let aggregate_id = payload["alert_id"]
+        .as_str()
+        .ok_or_else(|| PortError::message("alert outbox payload is missing alert_id"))?;
+    let payload = serde_json::to_string(&payload).map_err(PortError::storage)?;
+
+    query(
+        r#"
+        INSERT INTO command_event_outbox (
+            topic, event_type, aggregate_type, aggregate_id, payload
+        )
+        VALUES ($1, $1, 'alert', $2, $3::jsonb)
+        "#,
+    )
+    .bind(event_type)
+    .bind(aggregate_id)
+    .bind(payload)
+    .execute(&mut **tx)
+    .await
+    .map_err(PortError::storage)?;
+
+    Ok(())
+}
+
+fn alert_opened_payload(alert: &Alert) -> Value {
+    json!({
+        "alert_id": alert.alert_id.to_string(),
+        "asset_id": alert.asset_id,
+        "site_id": alert.site_id,
+        "severity": proto_severity(alert.severity),
+        "reason": alert.reason,
+        "opened_at_utc": alert.opened_at.timestamp(),
+        "source_event_id": alert.source_event_id,
+    })
+}
+
+fn alert_resolved_payload(alert: &Alert) -> Result<Value, PortError> {
+    let resolved_at = alert.resolved_at.ok_or_else(|| {
+        PortError::message(format!(
+            "resolved alert {} is missing resolved_at",
+            alert.alert_id
+        ))
+    })?;
+    let resolution_note = alert.resolution_note.as_deref().ok_or_else(|| {
+        PortError::message(format!(
+            "resolved alert {} is missing resolution_note",
+            alert.alert_id
+        ))
+    })?;
+    let resolved_by = alert.resolved_by.as_ref().ok_or_else(|| {
+        PortError::message(format!(
+            "resolved alert {} is missing resolved_by",
+            alert.alert_id
+        ))
+    })?;
+
+    Ok(json!({
+        "alert_id": alert.alert_id.to_string(),
+        "asset_id": alert.asset_id,
+        "site_id": alert.site_id,
+        "severity": proto_severity(alert.severity),
+        "reason": alert.reason,
+        "opened_at_utc": alert.opened_at.timestamp(),
+        "resolved_at_utc": resolved_at.timestamp(),
+        "resolution_note": resolution_note,
+        "resolved_by": resolved_by.as_str(),
+    }))
+}
+
+fn proto_severity(severity: crate::domain::alert::Severity) -> &'static str {
+    match severity {
+        crate::domain::alert::Severity::Info => "SEVERITY_INFO",
+        crate::domain::alert::Severity::Warning => "SEVERITY_WARNING",
+        crate::domain::alert::Severity::Critical => "SEVERITY_CRITICAL",
+    }
 }
 
 async fn insert_alert_resolution_history(
@@ -476,4 +562,57 @@ where
     T::Err: std::fmt::Display,
 {
     T::from_str(value).map_err(|err| PortError::message(err.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone;
+
+    use crate::domain::alert::{AlertStatus, Severity};
+
+    use super::*;
+
+    fn alert() -> Alert {
+        Alert {
+            alert_id: Uuid::parse_str("2f1b98a9-7ab4-4bb7-8f24-90ae8b09a76c").unwrap(),
+            asset_id: "met-0101".to_string(),
+            site_id: "ng-kaji-01".to_string(),
+            kind: AlertKind::from("internal_temperature"),
+            severity: Severity::Critical,
+            status: AlertStatus::Open,
+            reason: "internal_temperature_high".to_string(),
+            opened_at: Utc.timestamp_opt(1_789_351_200, 0).unwrap(),
+            source_event_id: Some("telemetry.ingested:2:17".to_string()),
+            resolved_at: None,
+            resolution_note: None,
+            resolved_by: None,
+        }
+    }
+
+    #[test]
+    fn alert_opened_outbox_payload_matches_the_protobuf_json_shape() {
+        let payload = alert_opened_payload(&alert());
+
+        assert_eq!(payload["severity"], "SEVERITY_CRITICAL");
+        assert_eq!(payload["opened_at_utc"], 1_789_351_200);
+        assert_eq!(payload["source_event_id"], "telemetry.ingested:2:17");
+    }
+
+    #[test]
+    fn alert_resolved_outbox_payload_preserves_resolution_fields() {
+        let opened = alert();
+        let resolved = Alert {
+            status: AlertStatus::Resolved,
+            resolved_at: Some(Utc.timestamp_opt(1_789_351_500, 0).unwrap()),
+            resolution_note: Some("temperature recovered".to_string()),
+            resolved_by: Some(ResolutionActor::System),
+            ..opened
+        };
+
+        let payload = alert_resolved_payload(&resolved).unwrap();
+
+        assert_eq!(payload["resolved_at_utc"], 1_789_351_500);
+        assert_eq!(payload["resolution_note"], "temperature recovered");
+        assert_eq!(payload["resolved_by"], "system");
+    }
 }

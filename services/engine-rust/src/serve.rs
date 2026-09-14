@@ -7,7 +7,7 @@ use crate::{
     adapters::{
         kafka::{
             consumer::{self, ConsumerConfig},
-            producer::{KafkaAlertEventPublisher, KafkaDeadLetterPublisher, ProducerConfig},
+            producer::KafkaDeadLetterPublisher,
         },
         postgres::PostgresIngestRepository,
     },
@@ -25,12 +25,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let store = PostgresIngestRepository::new(pool.clone());
     let dead_letters =
         KafkaDeadLetterPublisher::connect(cfg.kafka_brokers.clone(), cfg.telemetry_dlq_topic)?;
-    let events = KafkaAlertEventPublisher::connect(ProducerConfig {
-        brokers: cfg.kafka_brokers.clone(),
-        alert_opened_topic: cfg.alert_opened_topic,
-        alert_resolved_topic: cfg.alert_resolved_topic,
-    })?;
-    let mut ingest = IngestReading::new(&store, &events);
+    let mut ingest = IngestReading::new(&store);
     ingest.policy = cfg.threshold_policy;
 
     consumer::run(

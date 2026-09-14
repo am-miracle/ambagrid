@@ -2,7 +2,11 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -35,11 +39,15 @@ func (*fakeDatabasePool) QueryRow(context.Context, string, ...any) pgx.Row {
 type fakeTransaction struct {
 	pgx.Tx
 	rows       []pgx.Row
-	execSQL    string
-	execArgs   []any
+	execCalls  []execCall
 	execErr    error
 	committed  bool
 	rolledBack bool
+}
+
+type execCall struct {
+	sql  string
+	args []any
 }
 
 func (tx *fakeTransaction) QueryRow(context.Context, string, ...any) pgx.Row {
@@ -49,8 +57,7 @@ func (tx *fakeTransaction) QueryRow(context.Context, string, ...any) pgx.Row {
 }
 
 func (tx *fakeTransaction) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	tx.execSQL = sql
-	tx.execArgs = args
+	tx.execCalls = append(tx.execCalls, execCall{sql: sql, args: args})
 	return pgconn.NewCommandTag("INSERT 0 1"), tx.execErr
 }
 
@@ -124,14 +131,69 @@ func TestResolveAlertUpdatesAndRecordsHistoryAtomically(t *testing.T) {
 	if alert.Status != domain.AlertStatusResolved || alert.ResolvedAt == nil {
 		t.Fatalf("alert = %+v, want resolved alert", alert)
 	}
-	if tx.execSQL != insertAlertResolutionSQL {
-		t.Fatalf("history SQL = %q, want insertAlertResolutionSQL", tx.execSQL)
+	if len(tx.execCalls) != 2 {
+		t.Fatalf("exec calls = %d, want history and outbox inserts", len(tx.execCalls))
 	}
-	if len(tx.execArgs) != 4 || tx.execArgs[0] != command.AlertID || tx.execArgs[2] != command.ResolutionNote || tx.execArgs[3] != command.ResolvedBy {
-		t.Fatalf("history args = %#v", tx.execArgs)
+	history := tx.execCalls[0]
+	if history.sql != insertAlertResolutionSQL {
+		t.Fatalf("history SQL = %q, want insertAlertResolutionSQL", history.sql)
+	}
+	if len(history.args) != 4 || history.args[0] != command.AlertID || history.args[2] != command.ResolutionNote || history.args[3] != command.ResolvedBy {
+		t.Fatalf("history args = %#v", history.args)
+	}
+	outbox := tx.execCalls[1]
+	if outbox.sql != insertCommandEventSQL {
+		t.Fatalf("outbox SQL = %q, want insertCommandEventSQL", outbox.sql)
+	}
+	if len(outbox.args) != 5 || outbox.args[0] != alertResolvedEventType || outbox.args[1] != alertResolvedEventType || outbox.args[2] != "alert" || outbox.args[3] != command.AlertID {
+		t.Fatalf("outbox args = %#v", outbox.args)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(outbox.args[4].([]byte), &payload); err != nil {
+		t.Fatalf("decode outbox payload: %v", err)
+	}
+	if payload["alert_id"] != command.AlertID || payload["severity"] != "SEVERITY_CRITICAL" || payload["resolution_note"] != command.ResolutionNote || payload["resolved_by"] != command.ResolvedBy {
+		t.Fatalf("payload = %#v", payload)
 	}
 	if !tx.committed {
 		t.Fatal("transaction was not committed")
+	}
+}
+
+func TestAlertResolvedPayloadMatchesSharedOutboxFixture(t *testing.T) {
+	resolvedAt := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	resolutionNote := "fan cleaned"
+	resolvedBy := "operator-0101"
+	alert := domain.Alert{
+		AlertID:        "0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b",
+		AssetID:        "battery-01",
+		SiteID:         "site-01",
+		Severity:       domain.SeverityCritical,
+		Reason:         "temperature exceeded threshold",
+		OpenedAt:       resolvedAt.Add(-time.Hour),
+		ResolvedAt:     &resolvedAt,
+		ResolutionNote: &resolutionNote,
+		ResolvedBy:     &resolvedBy,
+	}
+
+	payload, err := alertResolvedPayload(alert)
+	if err != nil {
+		t.Fatalf("alertResolvedPayload() error = %v", err)
+	}
+	fixtureBytes, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "proto", "fixtures", "alert_resolved_outbox_payload.json"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(payload, &got); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	var want map[string]any
+	if err := json.Unmarshal(fixtureBytes, &want); err != nil {
+		t.Fatalf("decode fixture: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("payload = %#v, want %#v", got, want)
 	}
 }
 
@@ -183,4 +245,38 @@ func TestResolveAlertRollsBackWhenHistoryInsertFails(t *testing.T) {
 	if !tx.rolledBack {
 		t.Fatal("transaction with failed history insert was not rolled back")
 	}
+}
+
+func TestResolveAlertRollsBackWhenOutboxInsertFails(t *testing.T) {
+	command := domain.ResolveAlertCommand{AlertID: "0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b"}
+	tx := &fakeTransaction{
+		rows:    []pgx.Row{resolvedAlertRow(command)},
+		execErr: nil,
+	}
+	txWithFailingSecondExec := &failingSecondExecTransaction{fakeTransaction: tx}
+	pool := &fakeDatabasePool{tx: txWithFailingSecondExec}
+
+	_, err := NewStore(pool, time.Second).ResolveAlert(context.Background(), command)
+
+	if err == nil {
+		t.Fatal("ResolveAlert() error = nil, want outbox insert error")
+	}
+	if tx.committed {
+		t.Fatal("transaction with failed outbox insert was committed")
+	}
+	if !tx.rolledBack {
+		t.Fatal("transaction with failed outbox insert was not rolled back")
+	}
+}
+
+type failingSecondExecTransaction struct {
+	*fakeTransaction
+}
+
+func (tx *failingSecondExecTransaction) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	if len(tx.execCalls) == 1 {
+		tx.execCalls = append(tx.execCalls, execCall{sql: sql, args: args})
+		return pgconn.CommandTag{}, errors.New("outbox unavailable")
+	}
+	return tx.fakeTransaction.Exec(ctx, sql, args...)
 }

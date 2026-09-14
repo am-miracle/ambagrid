@@ -6,7 +6,7 @@ use crate::{
         alert::Alert,
         operator::{OperatorId, ResolutionActor},
     },
-    ports::{AlertEvents, AlertRepository, PortError, ResolveAlertPermission},
+    ports::{AlertRepository, PortError, ResolveAlertPermission},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,24 +46,18 @@ impl ResolveAlertPermission for AllowedResolveOperators {
     }
 }
 
-pub struct ResolveAlert<'a, R, E, P> {
+pub struct ResolveAlert<'a, R, P> {
     pub store: &'a R,
-    pub events: &'a E,
     pub permissions: &'a P,
 }
 
-impl<'a, R, E, P> ResolveAlert<'a, R, E, P>
+impl<'a, R, P> ResolveAlert<'a, R, P>
 where
     R: AlertRepository,
-    E: AlertEvents,
     P: ResolveAlertPermission,
 {
-    pub fn new(store: &'a R, events: &'a E, permissions: &'a P) -> Self {
-        Self {
-            store,
-            events,
-            permissions,
-        }
+    pub fn new(store: &'a R, permissions: &'a P) -> Self {
+        Self { store, permissions }
     }
 
     pub async fn execute(&self, input: ResolveAlertInput) -> Result<Alert, PortError> {
@@ -82,21 +76,14 @@ where
             .authorize_resolve_alert(&resolved_by)
             .await?;
 
-        let alert = self
-            .store
+        self.store
             .resolve_alert(
                 input.alert_id,
                 resolved_at,
                 resolution_note.as_str(),
                 ResolutionActor::Operator(resolved_by),
             )
-            .await?;
-
-        if let Err(err) = self.events.alert_resolved(&alert).await {
-            tracing::warn!(error = %err, alert_id = %alert.alert_id, "failed to publish alert.resolved event");
-        }
-
-        Ok(alert)
+            .await
     }
 }
 
@@ -168,27 +155,6 @@ mod tests {
         }
     }
 
-    #[derive(Default)]
-    struct FakeEvents {
-        resolved: Mutex<Vec<Alert>>,
-        fail: bool,
-    }
-
-    impl AlertEvents for FakeEvents {
-        async fn alert_opened(&self, _alert: &Alert) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        async fn alert_resolved(&self, alert: &Alert) -> Result<(), PortError> {
-            if self.fail {
-                return Err(PortError::message("broker unavailable"));
-            }
-
-            self.resolved.lock().unwrap().push(alert.clone());
-            Ok(())
-        }
-    }
-
     fn open_alert() -> Alert {
         Alert {
             alert_id: Uuid::new_v4(),
@@ -207,7 +173,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolves_alert_and_publishes_resolved_event() {
+    async fn resolves_alert() {
         let alert = open_alert();
         let alert_id = alert.alert_id;
         let resolved_at = Utc::now();
@@ -215,9 +181,8 @@ mod tests {
             alert: Mutex::new(Some(alert)),
             resolve_calls: Mutex::default(),
         };
-        let events = FakeEvents::default();
         let permissions = FakePermissions { allow: true };
-        let action = ResolveAlert::new(&store, &events, &permissions);
+        let action = ResolveAlert::new(&store, &permissions);
 
         let resolved = action
             .execute_at(
@@ -242,7 +207,6 @@ mod tests {
             resolved.resolved_by.as_ref().map(ResolutionActor::as_str),
             Some("operator-0101")
         );
-        assert_eq!(events.resolved.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -253,9 +217,8 @@ mod tests {
             alert: Mutex::new(Some(alert)),
             resolve_calls: Mutex::default(),
         };
-        let events = FakeEvents::default();
         let permissions = FakePermissions { allow: true };
-        let action = ResolveAlert::new(&store, &events, &permissions);
+        let action = ResolveAlert::new(&store, &permissions);
 
         let resolved = action
             .execute_at(
@@ -282,9 +245,8 @@ mod tests {
     #[tokio::test]
     async fn rejects_empty_resolution_inputs() {
         let store = FakeAlertRepository::default();
-        let events = FakeEvents::default();
         let permissions = FakePermissions { allow: true };
-        let action = ResolveAlert::new(&store, &events, &permissions);
+        let action = ResolveAlert::new(&store, &permissions);
 
         let err = action
             .execute_at(
@@ -302,16 +264,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_unauthorized_operator_before_mutating_or_publishing() {
+    async fn rejects_unauthorized_operator_before_mutating() {
         let alert = open_alert();
         let alert_id = alert.alert_id;
         let store = FakeAlertRepository {
             alert: Mutex::new(Some(alert)),
             resolve_calls: Mutex::default(),
         };
-        let events = FakeEvents::default();
         let permissions = FakePermissions { allow: false };
-        let action = ResolveAlert::new(&store, &events, &permissions);
+        let action = ResolveAlert::new(&store, &permissions);
 
         let err = action
             .execute_at(
@@ -330,7 +291,6 @@ mod tests {
             "operator operator-0101 is not authorized to resolve alerts"
         );
         assert!(store.resolve_calls.lock().unwrap().is_empty());
-        assert!(events.resolved.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -351,35 +311,5 @@ mod tests {
             err.to_string(),
             "operator operator-9999 is not authorized to resolve alerts"
         );
-    }
-
-    #[tokio::test]
-    async fn resolution_succeeds_even_when_event_publish_fails() {
-        let alert = open_alert();
-        let alert_id = alert.alert_id;
-        let store = FakeAlertRepository {
-            alert: Mutex::new(Some(alert)),
-            resolve_calls: Mutex::default(),
-        };
-        let events = FakeEvents {
-            resolved: Mutex::default(),
-            fail: true,
-        };
-        let permissions = FakePermissions { allow: true };
-        let action = ResolveAlert::new(&store, &events, &permissions);
-
-        let result = action
-            .execute_at(
-                ResolveAlertInput {
-                    alert_id,
-                    resolution_note: "handled manually".to_string(),
-                    resolved_by: OperatorId::new("operator-0101").unwrap(),
-                },
-                Utc::now(),
-            )
-            .await;
-
-        assert!(result.is_ok());
-        assert!(events.resolved.lock().unwrap().is_empty());
     }
 }

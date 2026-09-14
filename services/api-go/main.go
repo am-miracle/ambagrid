@@ -1,4 +1,4 @@
-// starts the read API and wires its dependencies.
+// starts the operator API and wires its dependencies.
 package main
 
 import (

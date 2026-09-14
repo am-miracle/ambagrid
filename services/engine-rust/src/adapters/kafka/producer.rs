@@ -6,19 +6,10 @@ use rdkafka::{
     message::{Header, OwnedHeaders},
     producer::{FutureProducer, FutureRecord},
 };
+use serde::Deserialize;
 
 use super::proto;
-use crate::{
-    domain::alert::{Alert, Severity},
-    ports::{AlertEvents, DeadLetter, DeadLetterSink, PortError},
-};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProducerConfig {
-    pub brokers: Vec<String>,
-    pub alert_opened_topic: String,
-    pub alert_resolved_topic: String,
-}
+use crate::ports::{DeadLetter, DeadLetterSink, OutboxEvent, OutboxEvents, PortError};
 
 // A single-record producer, kept as a trait so tests can substitute a fake
 // and assert on topic routing/payloads without a live broker.
@@ -60,32 +51,13 @@ impl RecordSink for FutureProducer {
     }
 }
 
-// Publishes the alert.opened/alert.resolved business events described in
-// docs/ontology.md.
-pub struct KafkaAlertEventPublisher<S: RecordSink = FutureProducer> {
-    sink: S,
-    alert_opened_topic: String,
-    alert_resolved_topic: String,
-}
-
 pub struct KafkaDeadLetterPublisher<S: RecordSink = FutureProducer> {
     topic: String,
     sink: S,
 }
 
-impl KafkaAlertEventPublisher<FutureProducer> {
-    pub fn connect(config: ProducerConfig) -> Result<Self, rdkafka::error::KafkaError> {
-        let sink = ClientConfig::new()
-            .set("bootstrap.servers", config.brokers.join(","))
-            .set("message.timeout.ms", "5000")
-            .create()?;
-
-        Ok(Self {
-            sink,
-            alert_opened_topic: config.alert_opened_topic,
-            alert_resolved_topic: config.alert_resolved_topic,
-        })
-    }
+pub struct KafkaOutboxEventPublisher<S: RecordSink = FutureProducer> {
+    sink: S,
 }
 
 impl KafkaDeadLetterPublisher<FutureProducer> {
@@ -102,27 +74,14 @@ impl KafkaDeadLetterPublisher<FutureProducer> {
     }
 }
 
-impl<S: RecordSink> AlertEvents for KafkaAlertEventPublisher<S> {
-    async fn alert_opened(&self, alert: &Alert) -> Result<(), PortError> {
-        self.sink
-            .send(kafka_record(
-                &self.alert_opened_topic,
-                None,
-                alert_opened_event(alert).encode_to_vec(),
-                BTreeMap::new(),
-            ))
-            .await
-    }
+impl KafkaOutboxEventPublisher<FutureProducer> {
+    pub fn connect(brokers: Vec<String>) -> Result<Self, rdkafka::error::KafkaError> {
+        let sink = ClientConfig::new()
+            .set("bootstrap.servers", brokers.join(","))
+            .set("message.timeout.ms", "5000")
+            .create()?;
 
-    async fn alert_resolved(&self, alert: &Alert) -> Result<(), PortError> {
-        self.sink
-            .send(kafka_record(
-                &self.alert_resolved_topic,
-                None,
-                alert_resolved_event(alert)?.encode_to_vec(),
-                BTreeMap::new(),
-            ))
-            .await
+        Ok(Self { sink })
     }
 }
 
@@ -130,6 +89,122 @@ impl<S: RecordSink> DeadLetterSink for KafkaDeadLetterPublisher<S> {
     async fn park(&self, entry: &DeadLetter) -> Result<(), PortError> {
         self.sink.send(dead_letter_record(&self.topic, entry)).await
     }
+}
+
+impl<S: RecordSink> OutboxEvents for KafkaOutboxEventPublisher<S> {
+    async fn publish(&self, event: &OutboxEvent) -> Result<(), PortError> {
+        if event.topic != event.event_type {
+            return Err(PortError::message(format!(
+                "outbox event {} has topic {} but event type {}",
+                event.event_id, event.topic, event.event_type
+            )));
+        }
+        let payload = encode_outbox_payload(event)?;
+        self.sink
+            .send(kafka_record(
+                &event.topic,
+                Some(event.aggregate_id.as_bytes().to_vec()),
+                payload,
+                BTreeMap::from([(
+                    "event_id".to_string(),
+                    event.event_id.to_string().into_bytes(),
+                )]),
+            ))
+            .await
+    }
+}
+
+#[derive(Deserialize)]
+struct AlertOpenedOutboxPayload {
+    alert_id: String,
+    asset_id: String,
+    site_id: String,
+    severity: OutboxSeverity,
+    reason: String,
+    opened_at_utc: i64,
+    source_event_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AlertResolvedOutboxPayload {
+    alert_id: String,
+    asset_id: String,
+    site_id: String,
+    severity: OutboxSeverity,
+    reason: String,
+    opened_at_utc: i64,
+    resolved_at_utc: i64,
+    resolution_note: String,
+    resolved_by: String,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+enum OutboxSeverity {
+    #[serde(rename = "SEVERITY_UNSPECIFIED")]
+    Unspecified,
+    #[serde(rename = "SEVERITY_INFO")]
+    Info,
+    #[serde(rename = "SEVERITY_WARNING")]
+    Warning,
+    #[serde(rename = "SEVERITY_CRITICAL")]
+    Critical,
+}
+
+impl OutboxSeverity {
+    fn as_proto(self) -> i32 {
+        (match self {
+            Self::Unspecified => proto::Severity::Unspecified,
+            Self::Info => proto::Severity::Info,
+            Self::Warning => proto::Severity::Warning,
+            Self::Critical => proto::Severity::Critical,
+        }) as i32
+    }
+}
+
+fn encode_outbox_payload(event: &OutboxEvent) -> Result<Vec<u8>, PortError> {
+    match event.event_type.as_str() {
+        "alert.opened" => {
+            let payload: AlertOpenedOutboxPayload = serde_json::from_slice(&event.payload)
+                .map_err(|err| invalid_outbox_payload(event, err))?;
+            Ok(proto::AlertOpened {
+                alert_id: payload.alert_id,
+                asset_id: payload.asset_id,
+                site_id: payload.site_id,
+                severity: payload.severity.as_proto(),
+                reason: payload.reason,
+                opened_at_utc: payload.opened_at_utc,
+                source_event_id: payload.source_event_id,
+            }
+            .encode_to_vec())
+        }
+        "alert.resolved" => {
+            let payload: AlertResolvedOutboxPayload = serde_json::from_slice(&event.payload)
+                .map_err(|err| invalid_outbox_payload(event, err))?;
+            Ok(proto::AlertResolved {
+                alert_id: payload.alert_id,
+                asset_id: payload.asset_id,
+                site_id: payload.site_id,
+                severity: payload.severity.as_proto(),
+                reason: payload.reason,
+                opened_at_utc: payload.opened_at_utc,
+                resolved_at_utc: payload.resolved_at_utc,
+                resolution_note: payload.resolution_note,
+                resolved_by: payload.resolved_by,
+            }
+            .encode_to_vec())
+        }
+        event_type => Err(PortError::message(format!(
+            "unsupported outbox event type {event_type} for event {}",
+            event.event_id
+        ))),
+    }
+}
+
+fn invalid_outbox_payload(event: &OutboxEvent, error: serde_json::Error) -> PortError {
+    PortError::message(format!(
+        "invalid {} outbox payload for event {}: {error}",
+        event.event_type, event.event_id
+    ))
 }
 
 fn kafka_record(
@@ -179,64 +254,14 @@ fn dead_letter_record(topic: &str, entry: &DeadLetter) -> KafkaRecord {
     )
 }
 
-fn to_proto_severity(severity: Severity) -> proto::Severity {
-    match severity {
-        Severity::Info => proto::Severity::Info,
-        Severity::Warning => proto::Severity::Warning,
-        Severity::Critical => proto::Severity::Critical,
-    }
-}
-
-fn alert_opened_event(alert: &Alert) -> proto::AlertOpened {
-    proto::AlertOpened {
-        alert_id: alert.alert_id.to_string(),
-        asset_id: alert.asset_id.clone(),
-        site_id: alert.site_id.clone(),
-        severity: to_proto_severity(alert.severity) as i32,
-        reason: alert.reason.clone(),
-        opened_at_utc: alert.opened_at.timestamp(),
-        source_event_id: alert.source_event_id.clone(),
-    }
-}
-
-fn alert_resolved_event(alert: &Alert) -> Result<proto::AlertResolved, PortError> {
-    let resolved_at = alert.resolved_at.ok_or_else(|| {
-        PortError::message(format!(
-            "resolved alert {} is missing resolved_at",
-            alert.alert_id
-        ))
-    })?;
-
-    Ok(proto::AlertResolved {
-        alert_id: alert.alert_id.to_string(),
-        asset_id: alert.asset_id.clone(),
-        site_id: alert.site_id.clone(),
-        severity: to_proto_severity(alert.severity) as i32,
-        reason: alert.reason.clone(),
-        opened_at_utc: alert.opened_at.timestamp(),
-        resolved_at_utc: resolved_at.timestamp(),
-        resolution_note: alert.resolution_note.clone().unwrap_or_default(),
-        resolved_by: alert
-            .resolved_by
-            .as_ref()
-            .map(|actor| actor.as_str().to_string())
-            .unwrap_or_default(),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
 
-    use chrono::{Duration, Utc};
     use prost::Message;
     use uuid::Uuid;
 
     use super::*;
-    use crate::domain::{
-        alert::{AlertKind, AlertStatus, Severity},
-        operator::ResolutionActor,
-    };
     use crate::ports::DeadLetterStage;
 
     #[derive(Default)]
@@ -249,50 +274,6 @@ mod tests {
             self.sent.lock().unwrap().push(record);
             Ok(())
         }
-    }
-
-    fn open_alert() -> Alert {
-        Alert {
-            alert_id: Uuid::new_v4(),
-            asset_id: "met-0101".to_string(),
-            site_id: "ng-kaji-01".to_string(),
-            kind: AlertKind::from("internal_temperature"),
-            severity: Severity::Critical,
-            status: AlertStatus::Open,
-            reason: "internal_temperature_high:72.4C>=threshold:70.0C".to_string(),
-            opened_at: Utc::now(),
-            source_event_id: Some("telemetry-evt-0101".to_string()),
-            resolved_at: None,
-            resolution_note: None,
-            resolved_by: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn alert_opened_publishes_only_to_the_opened_topic_sink() {
-        let publisher = KafkaAlertEventPublisher {
-            sink: FakeSink::default(),
-            alert_opened_topic: "alert.opened".to_string(),
-            alert_resolved_topic: "alert.resolved".to_string(),
-        };
-        let alert = open_alert();
-
-        publisher.alert_opened(&alert).await.unwrap();
-
-        let sent = publisher.sink.sent.lock().unwrap();
-        assert_eq!(sent.len(), 1);
-        assert_eq!(sent[0].topic, "alert.opened");
-        assert!(sent[0].key.is_none());
-        assert!(sent[0].headers.is_empty());
-
-        let event = proto::AlertOpened::decode(sent[0].payload.as_slice()).unwrap();
-        assert_eq!(event.alert_id, alert.alert_id.to_string());
-        assert_eq!(event.asset_id, "met-0101");
-        assert_eq!(event.site_id, "ng-kaji-01");
-        assert_eq!(event.severity, proto::Severity::Critical as i32);
-        assert_eq!(event.reason, alert.reason);
-        assert_eq!(event.opened_at_utc, alert.opened_at.timestamp());
-        assert_eq!(event.source_event_id.as_deref(), Some("telemetry-evt-0101"));
     }
 
     #[tokio::test]
@@ -345,64 +326,125 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn alert_resolved_publishes_only_to_the_resolved_topic_sink() {
-        let publisher = KafkaAlertEventPublisher {
+    async fn outbox_publisher_encodes_alert_resolved_json_as_protobuf() {
+        let publisher = KafkaOutboxEventPublisher {
             sink: FakeSink::default(),
-            alert_opened_topic: "alert.opened".to_string(),
-            alert_resolved_topic: "alert.resolved".to_string(),
         };
-        let mut alert = open_alert();
-        alert.status = AlertStatus::Resolved;
-        alert.resolved_at = Some(alert.opened_at + Duration::minutes(5));
-        alert.resolution_note =
-            Some("internal_temperature_recovered:65.0C<threshold:65.0C".to_string());
-        alert.resolved_by = Some(ResolutionActor::System);
+        let event = OutboxEvent {
+            event_id: Uuid::parse_str("5f1b98a9-7ab4-4bb7-8f24-90ae8b09a76c").unwrap(),
+            claim_id: Uuid::new_v4(),
+            topic: "alert.resolved".to_string(),
+            event_type: "alert.resolved".to_string(),
+            aggregate_id: "0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b".to_string(),
+            payload: include_bytes!(
+                "../../../../../proto/fixtures/alert_resolved_outbox_payload.json"
+            )
+            .to_vec(),
+        };
 
-        publisher.alert_resolved(&alert).await.unwrap();
+        publisher.publish(&event).await.unwrap();
 
         let sent = publisher.sink.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].topic, "alert.resolved");
-        assert!(sent[0].key.is_none());
-        assert!(sent[0].headers.is_empty());
-
-        let event = proto::AlertResolved::decode(sent[0].payload.as_slice()).unwrap();
-        assert_eq!(event.alert_id, alert.alert_id.to_string());
         assert_eq!(
-            event.resolved_at_utc,
-            alert.resolved_at.unwrap().timestamp()
+            sent[0].key.as_deref(),
+            Some(b"0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b".as_slice())
         );
-        assert_eq!(event.resolution_note, alert.resolution_note.unwrap());
-        assert_eq!(event.resolved_by, "system");
-    }
-
-    #[test]
-    fn alert_resolved_event_rejects_missing_resolved_at() {
-        let alert = Alert {
-            status: AlertStatus::Resolved,
-            resolved_at: None,
-            ..open_alert()
-        };
-
-        let err = alert_resolved_event(&alert).unwrap_err();
-
+        let payload = proto::AlertResolved::decode(sent[0].payload.as_slice()).unwrap();
+        assert_eq!(payload.alert_id, "0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b");
+        assert_eq!(payload.asset_id, "battery-01");
+        assert_eq!(payload.site_id, "site-01");
+        assert_eq!(payload.severity, proto::Severity::Critical as i32);
+        assert_eq!(payload.reason, "temperature exceeded threshold");
+        assert_eq!(payload.opened_at_utc, 1789383600);
+        assert_eq!(payload.resolved_at_utc, 1789387200);
+        assert_eq!(payload.resolution_note, "fan cleaned");
+        assert_eq!(payload.resolved_by, "operator-0101");
         assert_eq!(
-            err.to_string(),
-            format!("resolved alert {} is missing resolved_at", alert.alert_id)
+            sent[0].headers.get("event_id").map(Vec::as_slice),
+            Some(event.event_id.to_string().as_bytes())
         );
     }
 
-    #[test]
-    fn alert_resolved_event_uses_the_alert_resolved_at_when_present() {
-        let resolved_at = Utc::now() - Duration::minutes(5);
-        let alert = Alert {
-            status: AlertStatus::Resolved,
-            resolved_at: Some(resolved_at),
-            ..open_alert()
+    #[tokio::test]
+    async fn outbox_publisher_encodes_alert_opened_json_as_protobuf() {
+        let publisher = KafkaOutboxEventPublisher {
+            sink: FakeSink::default(),
+        };
+        let event = OutboxEvent {
+            event_id: Uuid::new_v4(),
+            claim_id: Uuid::new_v4(),
+            topic: "alert.opened".to_string(),
+            event_type: "alert.opened".to_string(),
+            aggregate_id: "alert-0101".to_string(),
+            payload: br#"{
+                "alert_id":"2f1b98a9-7ab4-4bb7-8f24-90ae8b09a76c",
+                "asset_id":"met-0101",
+                "site_id":"ng-kaji-01",
+                "severity":"SEVERITY_WARNING",
+                "reason":"battery_soc_low",
+                "opened_at_utc":1789351200,
+                "source_event_id":"telemetry.ingested:2:17"
+            }"#
+            .to_vec(),
         };
 
-        let event = alert_resolved_event(&alert).unwrap();
+        publisher.publish(&event).await.unwrap();
 
-        assert_eq!(event.resolved_at_utc, resolved_at.timestamp());
+        let sent = publisher.sink.sent.lock().unwrap();
+        let payload = proto::AlertOpened::decode(sent[0].payload.as_slice()).unwrap();
+        assert_eq!(payload.asset_id, "met-0101");
+        assert_eq!(payload.severity, proto::Severity::Warning as i32);
+        assert_eq!(
+            payload.source_event_id.as_deref(),
+            Some("telemetry.ingested:2:17")
+        );
+    }
+
+    #[tokio::test]
+    async fn outbox_publisher_rejects_unknown_event_types() {
+        let publisher = KafkaOutboxEventPublisher {
+            sink: FakeSink::default(),
+        };
+        let event = OutboxEvent {
+            event_id: Uuid::new_v4(),
+            claim_id: Uuid::new_v4(),
+            topic: "payment.failed".to_string(),
+            event_type: "payment.failed".to_string(),
+            aggregate_id: "payment-0101".to_string(),
+            payload: b"{}".to_vec(),
+        };
+
+        let err = publisher.publish(&event).await.unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("unsupported outbox event type payment.failed")
+        );
+        assert!(publisher.sink.sent.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn outbox_publisher_rejects_a_topic_event_type_mismatch() {
+        let publisher = KafkaOutboxEventPublisher {
+            sink: FakeSink::default(),
+        };
+        let event = OutboxEvent {
+            event_id: Uuid::new_v4(),
+            claim_id: Uuid::new_v4(),
+            topic: "alert.resolved".to_string(),
+            event_type: "alert.opened".to_string(),
+            aggregate_id: "alert-0101".to_string(),
+            payload: b"{}".to_vec(),
+        };
+
+        let err = publisher.publish(&event).await.unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("has topic alert.resolved but event type alert.opened")
+        );
+        assert!(publisher.sink.sent.lock().unwrap().is_empty());
     }
 }

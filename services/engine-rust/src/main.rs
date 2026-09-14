@@ -6,10 +6,15 @@ mod ports;
 mod serve;
 mod telemetry;
 
-use actions::resolve_alert::{AllowedResolveOperators, ResolveAlert, ResolveAlertInput};
+use std::time::Duration;
+
+use actions::{
+    publish_outbox::PublishOutbox,
+    resolve_alert::{AllowedResolveOperators, ResolveAlert, ResolveAlertInput},
+};
 use adapters::{
-    kafka::producer::{KafkaAlertEventPublisher, ProducerConfig},
-    postgres::PostgresIngestRepository,
+    kafka::producer::KafkaOutboxEventPublisher,
+    postgres::{PostgresIngestRepository, PostgresOutboxRepository},
 };
 use config::Config;
 use domain::operator::OperatorId;
@@ -30,6 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match command.as_str() {
         "migrate" => run_migrations().await,
         "serve" => serve().await,
+        "publish-outbox" => publish_outbox().await,
         "resolve-alert" => resolve_alert(std::env::args().skip(2).collect()).await,
         "-h" | "--help" | "help" => {
             print_usage();
@@ -59,12 +65,7 @@ async fn resolve_alert(args: Vec<String>) -> Result<(), Box<dyn std::error::Erro
         .await?;
     let store = PostgresIngestRepository::new(pool);
     let permissions = AllowedResolveOperators::new(cfg.alert_resolve_operators.clone());
-    let events = KafkaAlertEventPublisher::connect(ProducerConfig {
-        brokers: cfg.kafka_brokers,
-        alert_opened_topic: cfg.alert_opened_topic,
-        alert_resolved_topic: cfg.alert_resolved_topic,
-    })?;
-    let action = ResolveAlert::new(&store, &events, &permissions);
+    let action = ResolveAlert::new(&store, &permissions);
 
     let alert = action
         .execute(ResolveAlertInput {
@@ -76,6 +77,72 @@ async fn resolve_alert(args: Vec<String>) -> Result<(), Box<dyn std::error::Erro
 
     tracing::info!(alert_id = %alert.alert_id, "alert resolved");
     Ok(())
+}
+
+async fn publish_outbox() -> Result<(), Box<dyn std::error::Error>> {
+    const BATCH_SIZE: i64 = 50;
+    const IDLE_DELAY: Duration = Duration::from_secs(1);
+    const MAX_FAILURE_DELAY: Duration = Duration::from_secs(30);
+    const CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
+    const PUBLISHED_RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
+    let cfg = Config::from_env()?;
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&cfg.database_url)
+        .await?;
+    let store = PostgresOutboxRepository::new(pool);
+    let events = KafkaOutboxEventPublisher::connect(cfg.kafka_brokers)?;
+    let publisher = PublishOutbox::new(&store, &events, BATCH_SIZE);
+    let mut consecutive_failures = 0;
+    let mut cleanup = tokio::time::interval(CLEANUP_INTERVAL);
+    cleanup.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    tracing::info!(batch_size = BATCH_SIZE, "outbox publisher started");
+    loop {
+        tokio::select! {
+            result = publisher.publish_once() => {
+                match result {
+                    Ok(0) => {
+                        consecutive_failures = 0;
+                        tokio::time::sleep(IDLE_DELAY).await;
+                    }
+                    Ok(count) => {
+                        consecutive_failures = 0;
+                        tracing::info!(count, "published outbox events");
+                    }
+                    Err(err) => {
+                        let delay = failure_backoff(consecutive_failures, MAX_FAILURE_DELAY);
+                        consecutive_failures = consecutive_failures.saturating_add(1);
+                        tracing::warn!(
+                            error = %err,
+                            retry_in_seconds = delay.as_secs(),
+                            "outbox publish attempt failed"
+                        );
+                        tokio::time::sleep(delay).await;
+                    }
+                }
+            }
+            _ = cleanup.tick() => {
+                match publisher.prune_published(PUBLISHED_RETENTION).await {
+                    Ok(0) => {}
+                    Ok(count) => tracing::info!(count, "pruned published outbox events"),
+                    Err(err) => tracing::warn!(error = %err, "failed to prune published outbox events"),
+                }
+            }
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("outbox publisher stopping");
+                return Ok(());
+            }
+        }
+    }
+}
+
+fn failure_backoff(consecutive_failures: u32, maximum: Duration) -> Duration {
+    let multiplier = 2u32.saturating_pow(consecutive_failures.min(31));
+    Duration::from_secs(1)
+        .saturating_mul(multiplier)
+        .min(maximum)
 }
 
 async fn run_migrations() -> Result<(), Box<dyn std::error::Error>> {
@@ -97,7 +164,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
 fn print_usage() {
     eprintln!(
-        "usage: engine-rust <migrate|serve|resolve-alert <alert_id> <resolved_by> <resolution_note>>"
+        "usage: engine-rust <migrate|serve|publish-outbox|resolve-alert <alert_id> <resolved_by> <resolution_note>>"
     );
 }
 
@@ -119,5 +186,21 @@ fn init_logging() {
             .with_target(false)
             .with_env_filter(filter)
             .init();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn outbox_failure_backoff_is_exponential_and_capped() {
+        let maximum = Duration::from_secs(30);
+
+        assert_eq!(failure_backoff(0, maximum), Duration::from_secs(1));
+        assert_eq!(failure_backoff(1, maximum), Duration::from_secs(2));
+        assert_eq!(failure_backoff(4, maximum), Duration::from_secs(16));
+        assert_eq!(failure_backoff(5, maximum), maximum);
+        assert_eq!(failure_backoff(u32::MAX, maximum), maximum);
     }
 }
