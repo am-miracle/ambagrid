@@ -592,7 +592,12 @@ mod tests {
     #[test]
     fn alert_opened_outbox_payload_matches_the_protobuf_json_shape() {
         let payload = alert_opened_payload(&alert());
+        let fixture: Value = serde_json::from_slice(include_bytes!(
+            "../../../../../proto/fixtures/alert_opened_outbox_payload.json"
+        ))
+        .unwrap();
 
+        assert_eq!(payload, fixture);
         assert_eq!(payload["severity"], "SEVERITY_CRITICAL");
         assert_eq!(payload["opened_at_utc"], 1_789_351_200);
         assert_eq!(payload["source_event_id"], "telemetry.ingested:2:17");

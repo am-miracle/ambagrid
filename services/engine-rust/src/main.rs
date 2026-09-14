@@ -104,14 +104,21 @@ async fn publish_outbox() -> Result<(), Box<dyn std::error::Error>> {
         tokio::select! {
             result = publisher.publish_once() => {
                 match result {
-                    Ok(0) => {
+                    Ok(stats) if stats.claimed == 0 => {
                         tokio::time::sleep(IDLE_DELAY).await;
                     }
-                    Ok(count) => {
+                    Ok(stats) => {
                         consecutive_failures =
-                            failure_count_after_success(consecutive_failures, count);
-                        tracing::info!(count, "published outbox events");
-                        if full_batch_delay(count, BATCH_SIZE, FULL_BATCH_DELAY).is_some() {
+                            failure_count_after_success(consecutive_failures, stats.published);
+                        tracing::info!(
+                            claimed = stats.claimed,
+                            published = stats.published,
+                            publish_failed = stats.publish_failed,
+                            mark_failed = stats.mark_failed,
+                            claim_lost = stats.claim_lost,
+                            "published outbox batch"
+                        );
+                        if full_batch_delay(stats.claimed, BATCH_SIZE, FULL_BATCH_DELAY).is_some() {
                             tokio::time::sleep(FULL_BATCH_DELAY).await;
                         }
                     }

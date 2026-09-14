@@ -2,6 +2,15 @@ use std::time::Duration;
 
 use crate::ports::{MarkPublishedOutcome, OutboxEvents, OutboxRepository, PortError};
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PublishOutboxStats {
+    pub claimed: usize,
+    pub published: usize,
+    pub publish_failed: usize,
+    pub mark_failed: usize,
+    pub claim_lost: usize,
+}
+
 pub struct PublishOutbox<'a, R, E> {
     pub store: &'a R,
     pub events: &'a E,
@@ -21,18 +30,24 @@ where
         }
     }
 
-    pub async fn publish_once(&self) -> Result<usize, PortError> {
+    pub async fn publish_once(&self) -> Result<PublishOutboxStats, PortError> {
         if self.batch_size < 1 {
             return Err(PortError::message("batch_size must be greater than zero"));
         }
 
         let events = self.store.claim_unpublished(self.batch_size).await?;
-        let mut published = 0;
+        let mut stats = PublishOutboxStats {
+            claimed: events.len(),
+            ..Default::default()
+        };
         let mut first_error = None;
         for event in events {
             if let Err(error) = self.events.publish(&event).await {
+                stats.publish_failed += 1;
                 tracing::warn!(
                     event_id = %event.event_id,
+                    event_type = %event.event_type,
+                    aggregate_id = %event.aggregate_id,
                     error = %error,
                     "failed to publish outbox event"
                 );
@@ -48,8 +63,11 @@ where
             {
                 Ok(outcome) => outcome,
                 Err(error) => {
+                    stats.mark_failed += 1;
                     tracing::warn!(
                         event_id = %event.event_id,
+                        event_type = %event.event_type,
+                        aggregate_id = %event.aggregate_id,
                         error = %error,
                         "failed to mark outbox event as published"
                     );
@@ -60,18 +78,31 @@ where
                 }
             };
             if outcome == MarkPublishedOutcome::ClaimLost {
+                stats.claim_lost += 1;
                 tracing::info!(
                     event_id = %event.event_id,
+                    event_type = %event.event_type,
+                    aggregate_id = %event.aggregate_id,
                     "outbox event was published after its claim expired"
                 );
                 continue;
             }
-            published += 1;
+            stats.published += 1;
+        }
+        if stats.claimed > 0 {
+            tracing::info!(
+                claimed = stats.claimed,
+                published = stats.published,
+                publish_failed = stats.publish_failed,
+                mark_failed = stats.mark_failed,
+                claim_lost = stats.claim_lost,
+                "outbox batch completed"
+            );
         }
         if let Some(error) = first_error {
             return Err(error);
         }
-        Ok(published)
+        Ok(stats)
     }
 
     pub async fn prune_published(&self, retention: Duration) -> Result<u64, PortError> {
@@ -160,9 +191,16 @@ mod tests {
         let events = FakeOutboxEvents::default();
         let action = PublishOutbox::new(&store, &events, 25);
 
-        let published = action.publish_once().await.unwrap();
+        let stats = action.publish_once().await.unwrap();
 
-        assert_eq!(published, 2);
+        assert_eq!(
+            stats,
+            PublishOutboxStats {
+                claimed: 2,
+                published: 2,
+                ..Default::default()
+            }
+        );
         assert_eq!(*store.seen_limit.lock().unwrap(), Some(25));
         assert_eq!(
             *events.published.lock().unwrap(),
@@ -224,9 +262,16 @@ mod tests {
         let events = FakeOutboxEvents::default();
         let action = PublishOutbox::new(&store, &events, 25);
 
-        let published = action.publish_once().await.unwrap();
+        let stats = action.publish_once().await.unwrap();
 
-        assert_eq!(published, 0);
+        assert_eq!(
+            stats,
+            PublishOutboxStats {
+                claimed: 1,
+                claim_lost: 1,
+                ..Default::default()
+            }
+        );
         assert_eq!(events.published.lock().unwrap().len(), 1);
         assert!(store.marked.lock().unwrap().is_empty());
     }

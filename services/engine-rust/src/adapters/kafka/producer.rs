@@ -11,6 +11,31 @@ use serde::Deserialize;
 use super::proto;
 use crate::ports::{DeadLetter, DeadLetterSink, OutboxEvent, OutboxEvents, PortError};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutboxEventType {
+    AlertOpened,
+    AlertResolved,
+}
+
+impl OutboxEventType {
+    fn parse(raw: &str, event_id: uuid::Uuid) -> Result<Self, PortError> {
+        match raw {
+            "alert.opened" => Ok(Self::AlertOpened),
+            "alert.resolved" => Ok(Self::AlertResolved),
+            event_type => Err(PortError::message(format!(
+                "unsupported outbox event type {event_type} for event {event_id}"
+            ))),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::AlertOpened => "alert.opened",
+            Self::AlertResolved => "alert.resolved",
+        }
+    }
+}
+
 // A single-record producer, kept as a trait so tests can substitute a fake
 // and assert on topic routing/payloads without a live broker.
 pub(crate) trait RecordSink: Send + Sync {
@@ -93,13 +118,14 @@ impl<S: RecordSink> DeadLetterSink for KafkaDeadLetterPublisher<S> {
 
 impl<S: RecordSink> OutboxEvents for KafkaOutboxEventPublisher<S> {
     async fn publish(&self, event: &OutboxEvent) -> Result<(), PortError> {
-        if event.topic != event.event_type {
+        let event_type = OutboxEventType::parse(&event.event_type, event.event_id)?;
+        if event.topic != event_type.as_str() {
             return Err(PortError::message(format!(
                 "outbox event {} has topic {} but event type {}",
                 event.event_id, event.topic, event.event_type
             )));
         }
-        let payload = encode_outbox_payload(event)?;
+        let payload = encode_outbox_payload(event, event_type)?;
         self.sink
             .send(kafka_record(
                 &event.topic,
@@ -161,9 +187,12 @@ impl OutboxSeverity {
     }
 }
 
-fn encode_outbox_payload(event: &OutboxEvent) -> Result<Vec<u8>, PortError> {
-    match event.event_type.as_str() {
-        "alert.opened" => {
+fn encode_outbox_payload(
+    event: &OutboxEvent,
+    event_type: OutboxEventType,
+) -> Result<Vec<u8>, PortError> {
+    match event_type {
+        OutboxEventType::AlertOpened => {
             let payload: AlertOpenedOutboxPayload = serde_json::from_slice(&event.payload)
                 .map_err(|err| invalid_outbox_payload(event, err))?;
             Ok(proto::AlertOpened {
@@ -177,7 +206,7 @@ fn encode_outbox_payload(event: &OutboxEvent) -> Result<Vec<u8>, PortError> {
             }
             .encode_to_vec())
         }
-        "alert.resolved" => {
+        OutboxEventType::AlertResolved => {
             let payload: AlertResolvedOutboxPayload = serde_json::from_slice(&event.payload)
                 .map_err(|err| invalid_outbox_payload(event, err))?;
             Ok(proto::AlertResolved {
@@ -193,10 +222,6 @@ fn encode_outbox_payload(event: &OutboxEvent) -> Result<Vec<u8>, PortError> {
             }
             .encode_to_vec())
         }
-        event_type => Err(PortError::message(format!(
-            "unsupported outbox event type {event_type} for event {}",
-            event.event_id
-        ))),
     }
 }
 
@@ -378,15 +403,9 @@ mod tests {
             topic: "alert.opened".to_string(),
             event_type: "alert.opened".to_string(),
             aggregate_id: "alert-0101".to_string(),
-            payload: br#"{
-                "alert_id":"2f1b98a9-7ab4-4bb7-8f24-90ae8b09a76c",
-                "asset_id":"met-0101",
-                "site_id":"ng-kaji-01",
-                "severity":"SEVERITY_WARNING",
-                "reason":"battery_soc_low",
-                "opened_at_utc":1789351200,
-                "source_event_id":"telemetry.ingested:2:17"
-            }"#
+            payload: include_bytes!(
+                "../../../../../proto/fixtures/alert_opened_outbox_payload.json"
+            )
             .to_vec(),
         };
 
@@ -395,7 +414,7 @@ mod tests {
         let sent = publisher.sink.sent.lock().unwrap();
         let payload = proto::AlertOpened::decode(sent[0].payload.as_slice()).unwrap();
         assert_eq!(payload.asset_id, "met-0101");
-        assert_eq!(payload.severity, proto::Severity::Warning as i32);
+        assert_eq!(payload.severity, proto::Severity::Critical as i32);
         assert_eq!(
             payload.source_event_id.as_deref(),
             Some("telemetry.ingested:2:17")

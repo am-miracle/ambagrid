@@ -1,10 +1,12 @@
-use std::time::Duration;
+use std::{future::Future, time::Duration};
 
 use sqlx::{PgPool, Row, query};
+use tokio::time::timeout;
 use uuid::Uuid;
 
 use crate::ports::{MarkPublishedOutcome, OutboxEvent, OutboxRepository, PortError};
 
+const DB_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 const PRUNE_BATCH_SIZE: i64 = 1_000;
 
 const MARK_PUBLISHED_SQL: &str = r#"
@@ -30,8 +32,9 @@ impl PostgresOutboxRepository {
 impl OutboxRepository for PostgresOutboxRepository {
     async fn claim_unpublished(&self, limit: i64) -> Result<Vec<OutboxEvent>, PortError> {
         let claim_id = Uuid::new_v4();
-        let rows = query(
-            r#"
+        let rows = with_db_timeout(
+            query(
+                r#"
             WITH claim AS (
                 SELECT event_id
                 FROM command_event_outbox
@@ -50,10 +53,11 @@ impl OutboxRepository for PostgresOutboxRepository {
                 outbox.aggregate_id,
                 outbox.payload::text AS payload
             "#,
+            )
+            .bind(limit)
+            .bind(claim_id)
+            .fetch_all(&self.pool),
         )
-        .bind(limit)
-        .bind(claim_id)
-        .fetch_all(&self.pool)
         .await
         .map_err(PortError::storage)?;
 
@@ -75,12 +79,14 @@ impl OutboxRepository for PostgresOutboxRepository {
         event_id: Uuid,
         claim_id: Uuid,
     ) -> Result<MarkPublishedOutcome, PortError> {
-        let result = query(MARK_PUBLISHED_SQL)
-            .bind(event_id)
-            .bind(claim_id)
-            .execute(&self.pool)
-            .await
-            .map_err(PortError::storage)?;
+        let result = with_db_timeout(
+            query(MARK_PUBLISHED_SQL)
+                .bind(event_id)
+                .bind(claim_id)
+                .execute(&self.pool),
+        )
+        .await
+        .map_err(PortError::storage)?;
 
         if result.rows_affected() != 1 {
             return Ok(MarkPublishedOutcome::ClaimLost);
@@ -92,8 +98,9 @@ impl OutboxRepository for PostgresOutboxRepository {
     async fn prune_published(&self, retention: Duration) -> Result<u64, PortError> {
         let retention_seconds = i64::try_from(retention.as_secs())
             .map_err(|_| PortError::message("outbox retention is too large"))?;
-        let result = query(
-            r#"
+        let result = with_db_timeout(
+            query(
+                r#"
             DELETE FROM command_event_outbox
             WHERE event_id IN (
                 SELECT event_id
@@ -103,15 +110,22 @@ impl OutboxRepository for PostgresOutboxRepository {
                 LIMIT $2
             )
             "#,
+            )
+            .bind(retention_seconds)
+            .bind(PRUNE_BATCH_SIZE)
+            .execute(&self.pool),
         )
-        .bind(retention_seconds)
-        .bind(PRUNE_BATCH_SIZE)
-        .execute(&self.pool)
         .await
         .map_err(PortError::storage)?;
 
         Ok(result.rows_affected())
     }
+}
+
+async fn with_db_timeout<T>(operation: impl Future<Output = sqlx::Result<T>>) -> sqlx::Result<T> {
+    timeout(DB_OPERATION_TIMEOUT, operation)
+        .await
+        .map_err(|_| sqlx::Error::PoolTimedOut)?
 }
 
 #[cfg(test)]
