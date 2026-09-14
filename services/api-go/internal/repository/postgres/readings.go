@@ -1,4 +1,4 @@
-// Reads bounded, downsampled telemetry series from TimescaleDB hypertables.
+// reads bounded, downsampled telemetry series from TimescaleDB hypertables.
 package postgres
 
 import (
@@ -9,8 +9,24 @@ import (
 	"api-go/internal/domain"
 )
 
+type readingTable string
+
+const (
+	smartMeterReadingsTable    readingTable = "smart_meter_readings"
+	batteryBMSReadingsTable    readingTable = "battery_bms_readings"
+	solarInverterReadingsTable readingTable = "solar_inverter_readings"
+)
+
+// readingTables is the only place a device's hypertable name lives; which
+// metrics it reports and how each is aggregated comes from domain.AggregationFor.
+var readingTables = map[domain.AssetType]readingTable{
+	domain.AssetTypeSmartMeter:    smartMeterReadingsTable,
+	domain.AssetTypeBatteryBMS:    batteryBMSReadingsTable,
+	domain.AssetTypeSolarInverter: solarInverterReadingsTable,
+}
+
 type readingSource struct {
-	table       string
+	table       readingTable
 	column      string
 	aggregation domain.ReadingAggregation
 }
@@ -71,40 +87,15 @@ var readingIntervalSQL = map[domain.ReadingInterval]string{
 }
 
 func readingSourceFor(assetType domain.AssetType, metric domain.ReadingMetric) (readingSource, bool) {
-	base := readingSource{aggregation: domain.ReadingAggregationAverage}
-
-	switch assetType {
-	case domain.AssetTypeSmartMeter:
-		base.table = "smart_meter_readings"
-		switch metric {
-		case domain.ReadingMetricInternalTemperature,
-			domain.ReadingMetricVoltage,
-			domain.ReadingMetricCurrent,
-			domain.ReadingMetricActivePower,
-			domain.ReadingMetricFrequency:
-			base.column = string(metric)
-		case domain.ReadingMetricTotalKWh:
-			base.column = string(metric)
-			base.aggregation = domain.ReadingAggregationMaximum
-		}
-	case domain.AssetTypeBatteryBMS:
-		base.table = "battery_bms_readings"
-		switch metric {
-		case domain.ReadingMetricInternalTemperature, domain.ReadingMetricBatterySOCPct:
-			base.column = string(metric)
-		}
-	case domain.AssetTypeSolarInverter:
-		base.table = "solar_inverter_readings"
-		switch metric {
-		case domain.ReadingMetricInternalTemperature, domain.ReadingMetricSolarIrradiance:
-			base.column = string(metric)
-		}
-	}
-
-	if base.column == "" {
+	table, ok := readingTables[assetType]
+	if !ok {
 		return readingSource{}, false
 	}
-	return base, true
+	aggregation, ok := domain.AggregationFor(assetType, metric)
+	if !ok {
+		return readingSource{}, false
+	}
+	return readingSource{table: table, column: string(metric), aggregation: aggregation}, true
 }
 
 func readingPoint(bucket time.Time, value *float64) (domain.ReadingPoint, bool) {

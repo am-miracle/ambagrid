@@ -4,6 +4,7 @@ package page
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestEncodeDecodeRoundTrip(t *testing.T) {
@@ -102,5 +103,43 @@ func TestBuildReportsNoNextPageWhenRowsAreExhausted(t *testing.T) {
 
 	if result.NextCursor != "" {
 		t.Fatalf("NextCursor = %q, want empty", result.NextCursor)
+	}
+}
+
+func acceptAnyID(string) error { return nil }
+
+func TestTimeIDCursorRoundTrip(t *testing.T) {
+	want := TimeIDCursor{Time: time.Date(2026, 9, 3, 10, 0, 0, 0, time.UTC), ID: "alert-1"}
+
+	got, err := DecodeTimeIDCursor(want.Encode(), acceptAnyID)
+	if err != nil {
+		t.Fatalf("DecodeTimeIDCursor() error = %v", err)
+	}
+	if !got.Time.Equal(want.Time) || got.ID != want.ID {
+		t.Fatalf("DecodeTimeIDCursor() = %+v, want %+v", got, want)
+	}
+}
+
+func TestDecodeTimeIDCursorReturnsNilForEmptyCursor(t *testing.T) {
+	got, err := DecodeTimeIDCursor("", acceptAnyID)
+	if err != nil || got != nil {
+		t.Fatalf("DecodeTimeIDCursor(\"\") = (%v, %v), want (nil, nil)", got, err)
+	}
+}
+
+func TestDecodeTimeIDCursorRejectsUnparsableTime(t *testing.T) {
+	token := Encode("not-a-time", "alert-1")
+
+	if _, err := DecodeTimeIDCursor(token, acceptAnyID); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("DecodeTimeIDCursor() error = %v, want ErrInvalidCursor", err)
+	}
+}
+
+func TestDecodeTimeIDCursorRejectsInvalidID(t *testing.T) {
+	token := TimeIDCursor{Time: time.Now(), ID: "bad-id"}.Encode()
+	rejectAll := func(string) error { return errors.New("invalid") }
+
+	if _, err := DecodeTimeIDCursor(token, rejectAll); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("DecodeTimeIDCursor() error = %v, want ErrInvalidCursor", err)
 	}
 }

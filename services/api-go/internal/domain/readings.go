@@ -21,28 +21,64 @@ const (
 
 func ParseReadingMetric(value string) (ReadingMetric, error) {
 	metric := ReadingMetric(value)
-	if _, ok := readingMetricAssetTypes[metric]; !ok {
+	if _, ok := readingMetricNames[metric]; !ok {
 		return "", fmt.Errorf("unknown metric: %q", value)
 	}
 	return metric, nil
 }
 
-var readingMetricAssetTypes = map[ReadingMetric]map[AssetType]struct{}{
-	ReadingMetricInternalTemperature: {
-		AssetTypeSmartMeter: {}, AssetTypeBatteryBMS: {}, AssetTypeSolarInverter: {},
-	},
-	ReadingMetricVoltage:         {AssetTypeSmartMeter: {}},
-	ReadingMetricCurrent:         {AssetTypeSmartMeter: {}},
-	ReadingMetricActivePower:     {AssetTypeSmartMeter: {}},
-	ReadingMetricFrequency:       {AssetTypeSmartMeter: {}},
-	ReadingMetricTotalKWh:        {AssetTypeSmartMeter: {}},
-	ReadingMetricBatterySOCPct:   {AssetTypeBatteryBMS: {}},
-	ReadingMetricSolarIrradiance: {AssetTypeSolarInverter: {}},
+type assetTypeMetric struct {
+	Metric      ReadingMetric
+	Aggregation ReadingAggregation
 }
 
+// assetTypeMetrics is the single source of truth for which metrics an asset
+// type reports and how each is downsampled. Adding a metric or a device type
+// means editing this table only; Supports, AggregationFor, and
+// ParseReadingMetric all derive from it.
+var assetTypeMetrics = map[AssetType][]assetTypeMetric{
+	AssetTypeSmartMeter: {
+		{ReadingMetricInternalTemperature, ReadingAggregationAverage},
+		{ReadingMetricVoltage, ReadingAggregationAverage},
+		{ReadingMetricCurrent, ReadingAggregationAverage},
+		{ReadingMetricActivePower, ReadingAggregationAverage},
+		{ReadingMetricFrequency, ReadingAggregationAverage},
+		{ReadingMetricTotalKWh, ReadingAggregationMaximum},
+	},
+	AssetTypeBatteryBMS: {
+		{ReadingMetricInternalTemperature, ReadingAggregationAverage},
+		{ReadingMetricBatterySOCPct, ReadingAggregationAverage},
+	},
+	AssetTypeSolarInverter: {
+		{ReadingMetricInternalTemperature, ReadingAggregationAverage},
+		{ReadingMetricSolarIrradiance, ReadingAggregationAverage},
+	},
+}
+
+var readingMetricNames = func() map[ReadingMetric]struct{} {
+	names := make(map[ReadingMetric]struct{})
+	for _, metrics := range assetTypeMetrics {
+		for _, m := range metrics {
+			names[m.Metric] = struct{}{}
+		}
+	}
+	return names
+}()
+
 func (m ReadingMetric) Supports(assetType AssetType) bool {
-	_, ok := readingMetricAssetTypes[m][assetType]
+	_, ok := AggregationFor(assetType, m)
 	return ok
+}
+
+// AggregationFor reports how a metric is downsampled for an asset type, and
+// whether that asset type reports the metric at all.
+func AggregationFor(assetType AssetType, metric ReadingMetric) (ReadingAggregation, bool) {
+	for _, m := range assetTypeMetrics[assetType] {
+		if m.Metric == metric {
+			return m.Aggregation, true
+		}
+	}
+	return "", false
 }
 
 type ReadingInterval string
