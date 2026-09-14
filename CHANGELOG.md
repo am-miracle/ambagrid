@@ -21,6 +21,10 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - Add open source project foundations
 - Add ontology and roadmap docs
 
+### Fixed
+
+- **api:** Validate enum values scanned from Postgres
+
 ### Maintenance
 
 - **github:** Add issue forms (#3)
