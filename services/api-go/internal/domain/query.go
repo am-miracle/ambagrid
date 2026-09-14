@@ -6,6 +6,8 @@ import "errors"
 // ErrNotFound marks a missing domain object.
 var ErrNotFound = errors.New("not found")
 
+var ErrInvalidData = errors.New("invalid data")
+
 // Query carries filters and pagination for a repository listing.
 type Query[F any] struct {
 	Filter F

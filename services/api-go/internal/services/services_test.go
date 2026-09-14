@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"api-go/internal/domain"
 	"api-go/internal/page"
@@ -186,8 +187,12 @@ func TestAlertServiceGetReturnsMissingAlertError(t *testing.T) {
 }
 
 type fakeAssetRepository struct {
-	gotQuery domain.AssetQuery
-	calls    int
+	gotQuery     domain.AssetQuery
+	calls        int
+	asset        domain.Asset
+	getErr       error
+	readingQuery domain.ReadingQuery
+	readingCalls int
 }
 
 func (f *fakeAssetRepository) ListAssets(_ context.Context, query domain.AssetQuery) (page.Page[domain.Asset], error) {
@@ -197,7 +202,13 @@ func (f *fakeAssetRepository) ListAssets(_ context.Context, query domain.AssetQu
 
 func (f *fakeAssetRepository) GetAsset(context.Context, string) (domain.Asset, error) {
 	f.calls++
-	return domain.Asset{}, nil
+	return f.asset, f.getErr
+}
+
+func (f *fakeAssetRepository) GetReadingSeries(_ context.Context, query domain.ReadingQuery) (domain.ReadingSeries, error) {
+	f.readingCalls++
+	f.readingQuery = query
+	return domain.ReadingSeries{}, nil
 }
 
 func TestAssetServiceGetRejectsAnEmptyID(t *testing.T) {
@@ -228,5 +239,69 @@ func TestAssetServiceListPassesFiltersThrough(t *testing.T) {
 
 	if got := repo.gotQuery.Filter; got.SiteID == nil || *got.SiteID != siteID || got.AssetType == nil || *got.AssetType != assetType {
 		t.Fatalf("repository saw filter %+v, want the requested one", got)
+	}
+}
+
+func TestAssetServiceReadingsPassesABoundedSeriesQueryThrough(t *testing.T) {
+	repo := &fakeAssetRepository{asset: domain.Asset{AssetType: domain.AssetTypeSmartMeter}}
+	from := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
+	to := from.Add(24 * time.Hour)
+
+	_, err := NewAssetService(repo, testLimits()).Readings(context.Background(), "met-0104", GetReadingSeriesRequest{
+		From:     from,
+		To:       to,
+		Metric:   domain.ReadingMetricVoltage,
+		Interval: domain.ReadingIntervalOneMinute,
+	})
+	if err != nil {
+		t.Fatalf("Readings() error = %v", err)
+	}
+	if repo.readingCalls != 1 || repo.readingQuery.AssetID != "met-0104" || repo.readingQuery.AssetType != domain.AssetTypeSmartMeter || repo.readingQuery.From != from || repo.readingQuery.To != to {
+		t.Fatalf("repository query = %+v", repo.readingQuery)
+	}
+}
+
+func TestAssetServiceReadingsRejectsInvalidWindowsBeforeQuerying(t *testing.T) {
+	from := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
+	tests := map[string]time.Time{
+		"equal endpoints":    from,
+		"reversed endpoints": from.Add(-time.Minute),
+		"window over limit":  from.Add(24*time.Hour + time.Nanosecond),
+	}
+
+	for name, to := range tests {
+		t.Run(name, func(t *testing.T) {
+			repo := &fakeAssetRepository{}
+			_, err := NewAssetService(repo, testLimits()).Readings(context.Background(), "met-0104", GetReadingSeriesRequest{
+				From:     from,
+				To:       to,
+				Metric:   domain.ReadingMetricVoltage,
+				Interval: domain.ReadingIntervalOneMinute,
+			})
+			if !errors.Is(err, ErrInvalidRequest) {
+				t.Fatalf("Readings() error = %v, want ErrInvalidRequest", err)
+			}
+			if repo.calls != 0 || repo.readingCalls != 0 {
+				t.Fatalf("repository calls = asset:%d readings:%d, want none", repo.calls, repo.readingCalls)
+			}
+		})
+	}
+}
+
+func TestAssetServiceReadingsRejectsMetricOutsideTheAssetSchema(t *testing.T) {
+	repo := &fakeAssetRepository{asset: domain.Asset{AssetType: domain.AssetTypeBatteryBMS}}
+	from := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
+
+	_, err := NewAssetService(repo, testLimits()).Readings(context.Background(), "bat-0104", GetReadingSeriesRequest{
+		From:     from,
+		To:       from.Add(time.Hour),
+		Metric:   domain.ReadingMetricVoltage,
+		Interval: domain.ReadingIntervalFiveMinutes,
+	})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("Readings() error = %v, want ErrInvalidRequest", err)
+	}
+	if repo.calls != 1 || repo.readingCalls != 0 {
+		t.Fatalf("repository calls = asset:%d readings:%d, want 1/0", repo.calls, repo.readingCalls)
 	}
 }

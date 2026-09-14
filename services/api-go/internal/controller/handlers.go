@@ -8,26 +8,34 @@ import (
 	"api-go/internal/services"
 )
 
-func (a API) handleListAssets(w http.ResponseWriter, r *http.Request) {
+func parseListAssetsRequest(r *http.Request) (services.ListAssetsRequest, error) {
 	limit, err := limitParam(r)
 	if err != nil {
-		writeError(w, r, a.logger(), err)
-		return
+		return services.ListAssetsRequest{}, err
 	}
 	assetType, err := enumParam(r, "asset_type", domain.ParseAssetType)
 	if err != nil {
-		writeError(w, r, a.logger(), err)
-		return
+		return services.ListAssetsRequest{}, err
 	}
 
-	result, err := a.Assets.List(r.Context(), services.ListAssetsRequest{
+	return services.ListAssetsRequest{
 		Filter: domain.AssetFilter{
 			SiteID:    optionalParam(r, "site_id"),
 			AssetType: assetType,
 		},
 		Limit:  limit,
 		Cursor: cursorParam(r),
-	})
+	}, nil
+}
+
+func (a API) handleListAssets(w http.ResponseWriter, r *http.Request) {
+	request, err := parseListAssetsRequest(r)
+	if err != nil {
+		writeError(w, r, a.logger(), err)
+		return
+	}
+
+	result, err := a.Assets.List(r.Context(), request)
 	if err != nil {
 		writeError(w, r, a.logger(), err)
 		return
@@ -46,24 +54,63 @@ func (a API) handleGetAsset(w http.ResponseWriter, r *http.Request) {
 	writeObject(w, r, a.logger(), toAssetDTO(asset))
 }
 
-func (a API) handleListAlerts(w http.ResponseWriter, r *http.Request) {
-	limit, err := limitParam(r)
+func parseGetAssetReadingsRequest(r *http.Request) (services.GetReadingSeriesRequest, error) {
+	from, err := requiredTimeParam(r, "from")
 	if err != nil {
-		writeError(w, r, a.logger(), err)
-		return
+		return services.GetReadingSeriesRequest{}, err
 	}
-	status, err := enumParam(r, "status", domain.ParseAlertStatus)
+	to, err := requiredTimeParam(r, "to")
 	if err != nil {
-		writeError(w, r, a.logger(), err)
-		return
+		return services.GetReadingSeriesRequest{}, err
 	}
-	severity, err := enumParam(r, "severity", domain.ParseSeverity)
+	metric, err := requiredEnumParam(r, "metric", domain.ParseReadingMetric)
+	if err != nil {
+		return services.GetReadingSeriesRequest{}, err
+	}
+	interval, err := requiredEnumParam(r, "interval", domain.ParseReadingInterval)
+	if err != nil {
+		return services.GetReadingSeriesRequest{}, err
+	}
+
+	return services.GetReadingSeriesRequest{
+		From:     from,
+		To:       to,
+		Metric:   metric,
+		Interval: interval,
+	}, nil
+}
+
+func (a API) handleGetAssetReadings(w http.ResponseWriter, r *http.Request) {
+	request, err := parseGetAssetReadingsRequest(r)
 	if err != nil {
 		writeError(w, r, a.logger(), err)
 		return
 	}
 
-	result, err := a.Alerts.List(r.Context(), services.ListAlertsRequest{
+	series, err := a.Assets.Readings(r.Context(), r.PathValue("asset_id"), request)
+	if err != nil {
+		writeError(w, r, a.logger(), err)
+		return
+	}
+
+	writeObject(w, r, a.logger(), toReadingSeriesDTO(series))
+}
+
+func parseListAlertsRequest(r *http.Request) (services.ListAlertsRequest, error) {
+	limit, err := limitParam(r)
+	if err != nil {
+		return services.ListAlertsRequest{}, err
+	}
+	status, err := enumParam(r, "status", domain.ParseAlertStatus)
+	if err != nil {
+		return services.ListAlertsRequest{}, err
+	}
+	severity, err := enumParam(r, "severity", domain.ParseSeverity)
+	if err != nil {
+		return services.ListAlertsRequest{}, err
+	}
+
+	return services.ListAlertsRequest{
 		Filter: domain.AlertFilter{
 			SiteID:   optionalParam(r, "site_id"),
 			AssetID:  optionalParam(r, "asset_id"),
@@ -74,7 +121,17 @@ func (a API) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 		},
 		Limit:  limit,
 		Cursor: cursorParam(r),
-	})
+	}, nil
+}
+
+func (a API) handleListAlerts(w http.ResponseWriter, r *http.Request) {
+	request, err := parseListAlertsRequest(r)
+	if err != nil {
+		writeError(w, r, a.logger(), err)
+		return
+	}
+
+	result, err := a.Alerts.List(r.Context(), request)
 	if err != nil {
 		writeError(w, r, a.logger(), err)
 		return

@@ -107,6 +107,9 @@ func writeError(w http.ResponseWriter, r *http.Request, logger *slog.Logger, err
 	case errors.Is(err, context.Canceled):
 		// The client disconnected, so log without writing a response.
 		logger.Debug("request canceled by client", "request_id", requestID, "path", r.URL.Path)
+	case errors.Is(err, domain.ErrInvalidData):
+		logger.Error("corrupt data read from store", "error", err, "request_id", requestID, "path", r.URL.Path)
+		writeErrorBody(w, logger, http.StatusInternalServerError, codeInternal, "internal error", requestID)
 	default:
 		logger.Error("request failed", "error", err, "request_id", requestID, "path", r.URL.Path)
 		writeErrorBody(w, logger, http.StatusInternalServerError, codeInternal, "internal error", requestID)

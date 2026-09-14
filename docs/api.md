@@ -180,6 +180,48 @@ that does not exist yet.
 
 The same object for one asset. 404 if it has never reported.
 
+### `GET /v1/assets/{asset_id}/readings`
+
+Historical chart data for one numeric metric. This endpoint returns aggregated
+time buckets, never raw hypertable rows.
+
+| Parameter | Required | Values |
+|---|---|---|
+| `from`, `to` | yes | RFC 3339 timestamps; `from` must be before `to` |
+| `metric` | yes | depends on the asset type; see below |
+| `interval` | yes | `1m`, `5m`, `15m`, `1h` |
+
+Smart meters support `internal_temperature`, `voltage`, `current`,
+`active_power`, `frequency`, and `total_kwh`. Battery BMS assets support
+`internal_temperature` and `battery_soc_pct`. Solar inverters support
+`internal_temperature` and `solar_irradiance`.
+
+The largest permitted windows are 24 hours for `1m`, 7 days for `5m`, 30 days
+for `15m`, and 366 days for `1h`. A metric that does not belong to the asset's
+type, an invalid range, or a window over its limit returns 400. An unknown asset
+returns 404; an asset with no readings returns an empty `points` array.
+
+```json
+{
+  "data": {
+    "asset_id": "met-0104",
+    "asset_type": "smart_meter",
+    "from": "2026-09-14T10:00:00Z",
+    "to": "2026-09-14T11:00:00Z",
+    "metric": "voltage",
+    "interval": "5m",
+    "aggregation": "avg",
+    "points": [
+      { "time": "2026-09-14T10:00:00Z", "value": 231.2 }
+    ]
+  },
+  "request_id": "e4d66d7f5bf091ef024fedbab53d14ea"
+}
+```
+
+Most metrics use an average for each bucket. `total_kwh` is a cumulative meter
+counter, so it uses the maximum value in each bucket.
+
 ### `GET /v1/alerts`
 
 Alerts newest first.
@@ -295,9 +337,6 @@ and pins the connection that cancelling it was meant to free.
 
 - **Authentication.** There is none. Run it behind a gateway that terminates
   TLS and authenticates callers; do not expose it to the internet as is.
-- **Time-series readings.** `/v1/assets` serves latest state only. Hypertable
-  reads (a meter's voltage over a day) need their own downsampling and
-  windowing design rather than a `limit` on raw rows.
 - **Customers, balances, payments, commands.** Those ontology objects have no
   tables yet. When they land, they are new `/v1` collections, not changes to
   these.

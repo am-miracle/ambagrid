@@ -14,6 +14,7 @@ import (
 type AssetService interface {
 	List(ctx context.Context, request services.ListAssetsRequest) (page.Page[domain.Asset], error)
 	Get(ctx context.Context, assetID string) (domain.Asset, error)
+	Readings(ctx context.Context, assetID string, request services.GetReadingSeriesRequest) (domain.ReadingSeries, error)
 }
 
 type AlertService interface {

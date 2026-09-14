@@ -46,20 +46,13 @@ func (s *Store) ListAlerts(ctx context.Context, query domain.AlertQuery) (page.P
 		afterOpenedAt *time.Time
 		afterAlertID  *string
 	)
-	if query.Cursor != "" {
-		fields, err := page.Decode(query.Cursor, 2)
-		if err != nil {
-			return page.Page[domain.Alert]{}, err
-		}
-		openedAt, err := time.Parse(time.RFC3339Nano, fields[0])
-		if err != nil {
-			return page.Page[domain.Alert]{}, fmt.Errorf("%w: opened_at", page.ErrInvalidCursor)
-		}
-		if err := domain.ValidateAlertID(fields[1]); err != nil {
-			return page.Page[domain.Alert]{}, fmt.Errorf("%w: alert_id", page.ErrInvalidCursor)
-		}
-		afterOpenedAt = &openedAt
-		afterAlertID = &fields[1]
+	cursor, err := page.DecodeTimeIDCursor(query.Cursor, domain.ValidateAlertID)
+	if err != nil {
+		return page.Page[domain.Alert]{}, err
+	}
+	if cursor != nil {
+		afterOpenedAt = &cursor.Time
+		afterAlertID = &cursor.ID
 	}
 
 	ctx, cancel := s.withTimeout(ctx)
@@ -86,7 +79,7 @@ func (s *Store) ListAlerts(ctx context.Context, query domain.AlertQuery) (page.P
 	}
 
 	return page.Build(alerts, query.Limit, func(a domain.Alert) string {
-		return page.Encode(a.OpenedAt.UTC().Format(time.RFC3339Nano), a.AlertID)
+		return page.TimeIDCursor{Time: a.OpenedAt, ID: a.AlertID}.Encode()
 	}), nil
 }
 
@@ -138,7 +131,7 @@ func (s *Store) GetAlertWithResolutions(ctx context.Context, alertID string) (do
 
 	alert, err := scanAlert(tx.QueryRow(ctx, getAlertSQL, alertID))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return domain.Alert{}, nil, fmt.Errorf("alert %q: %w", alertID, domain.ErrNotFound)
+		return domain.Alert{}, nil, fmt.Errorf("%w: alert %q", domain.ErrNotFound, alertID)
 	}
 	if err != nil {
 		return domain.Alert{}, nil, err
@@ -209,7 +202,13 @@ func scanAlert(row scanner) (domain.Alert, error) {
 		return domain.Alert{}, err
 	}
 
-	alert.Severity = domain.Severity(severity)
-	alert.Status = domain.AlertStatus(status)
+	alert.Severity, err = parseEnum(alert.AlertID, domain.ParseSeverity, severity)
+	if err != nil {
+		return domain.Alert{}, err
+	}
+	alert.Status, err = parseEnum(alert.AlertID, domain.ParseAlertStatus, status)
+	if err != nil {
+		return domain.Alert{}, err
+	}
 	return alert, nil
 }

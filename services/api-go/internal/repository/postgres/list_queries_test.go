@@ -84,3 +84,59 @@ func TestBuildListSitesQueryAddsOnlyTheCursorPredicateWhenPresent(t *testing.T) 
 		t.Fatalf("args = %#v, want cursor and limit", args)
 	}
 }
+
+func TestBuildReadingSeriesQueryRoutesEveryAssetType(t *testing.T) {
+	tests := map[string]struct {
+		assetType     domain.AssetType
+		metric        domain.ReadingMetric
+		wantTable     string
+		wantAggregate string
+	}{
+		"smart meter":             {domain.AssetTypeSmartMeter, domain.ReadingMetricVoltage, "smart_meter_readings", "avg(voltage)"},
+		"battery":                 {domain.AssetTypeBatteryBMS, domain.ReadingMetricBatterySOCPct, "battery_bms_readings", "avg(battery_soc_pct)"},
+		"solar inverter":          {domain.AssetTypeSolarInverter, domain.ReadingMetricSolarIrradiance, "solar_inverter_readings", "avg(solar_irradiance)"},
+		"cumulative meter energy": {domain.AssetTypeSmartMeter, domain.ReadingMetricTotalKWh, "smart_meter_readings", "max(total_kwh)"},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			source, ok := readingSourceFor(test.assetType, test.metric)
+			if !ok {
+				t.Fatal("readingSourceFor() rejected a supported metric")
+			}
+			sql := buildReadingSeriesQuery(source)
+			for _, want := range []string{
+				"time_bucket($1::interval, time)",
+				test.wantAggregate + "::double precision",
+				"FROM " + test.wantTable,
+				"asset_id = $2",
+				"time >= $3",
+				"time < $4",
+				string(test.metric) + " IS NOT NULL",
+				"GROUP BY 1",
+				"ORDER BY 1",
+			} {
+				if !strings.Contains(sql, want) {
+					t.Fatalf("query missing %q: %s", want, sql)
+				}
+			}
+		})
+	}
+}
+
+func TestReadingSourceForRejectsAMetricOutsideTheAssetSchema(t *testing.T) {
+	if _, ok := readingSourceFor(domain.AssetTypeBatteryBMS, domain.ReadingMetricVoltage); ok {
+		t.Fatal("readingSourceFor() accepted voltage for a battery")
+	}
+}
+
+func TestReadingPointSkipsANullAggregate(t *testing.T) {
+	if _, ok := readingPoint(time.Now(), nil); ok {
+		t.Fatal("readingPoint() returned a point for a null aggregate")
+	}
+	value := 231.2
+	point, ok := readingPoint(time.Unix(0, 0), &value)
+	if !ok || point.Value != value {
+		t.Fatalf("readingPoint() = %+v, %t", point, ok)
+	}
+}

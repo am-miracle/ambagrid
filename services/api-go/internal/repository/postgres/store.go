@@ -3,11 +3,14 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"api-go/internal/domain"
 )
 
 // Store reads the operational database with bounded query time.
@@ -33,6 +36,15 @@ func (s *Store) withTimeout(ctx context.Context) (context.Context, context.Cance
 
 type scanner interface {
 	Scan(dest ...any) error
+}
+
+// parseEnum rejects a stored enum value that no domain Parse* function recognizes.
+func parseEnum[T any](id string, parse func(string) (T, error), value string) (T, error) {
+	parsed, err := parse(value)
+	if err != nil {
+		return parsed, fmt.Errorf("%w: %q: %s", domain.ErrInvalidData, id, err)
+	}
+	return parsed, nil
 }
 
 // predicates builds indexed WHERE clauses with bound parameters.

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // ErrInvalidCursor marks a cursor that cannot be decoded or applied.
@@ -96,4 +97,35 @@ func Build[T any](rows []T, limit int, key func(T) string) Page[T] {
 	}
 	items := rows[:limit]
 	return Page[T]{Items: items, Limit: limit, NextCursor: key(items[limit-1])}
+}
+
+// TimeIDCursor keys a listing sorted newest first, ID breaking ties between
+// rows with the same timestamp.
+type TimeIDCursor struct {
+	Time time.Time
+	ID   string
+}
+
+// Encode packs the cursor in the field order DecodeTimeIDCursor expects.
+func (c TimeIDCursor) Encode() string {
+	return Encode(c.Time.UTC().Format(time.RFC3339Nano), c.ID)
+}
+
+func DecodeTimeIDCursor(cursor string, validateID func(string) error) (*TimeIDCursor, error) {
+	if cursor == "" {
+		return nil, nil
+	}
+
+	fields, err := Decode(cursor, 2)
+	if err != nil {
+		return nil, err
+	}
+	t, err := time.Parse(time.RFC3339Nano, fields[0])
+	if err != nil {
+		return nil, fmt.Errorf("%w: time", ErrInvalidCursor)
+	}
+	if err := validateID(fields[1]); err != nil {
+		return nil, fmt.Errorf("%w: id", ErrInvalidCursor)
+	}
+	return &TimeIDCursor{Time: t, ID: fields[1]}, nil
 }

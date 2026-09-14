@@ -18,11 +18,14 @@ import (
 )
 
 type fakeAssets struct {
-	listResult page.Page[domain.Asset]
-	listErr    error
-	asset      domain.Asset
-	getErr     error
-	gotRequest services.ListAssetsRequest
+	listResult         page.Page[domain.Asset]
+	listErr            error
+	asset              domain.Asset
+	getErr             error
+	series             domain.ReadingSeries
+	readingsErr        error
+	gotRequest         services.ListAssetsRequest
+	gotReadingsRequest services.GetReadingSeriesRequest
 }
 
 func (f *fakeAssets) List(_ context.Context, request services.ListAssetsRequest) (page.Page[domain.Asset], error) {
@@ -32,6 +35,11 @@ func (f *fakeAssets) List(_ context.Context, request services.ListAssetsRequest)
 
 func (f *fakeAssets) Get(context.Context, string) (domain.Asset, error) {
 	return f.asset, f.getErr
+}
+
+func (f *fakeAssets) Readings(_ context.Context, _ string, request services.GetReadingSeriesRequest) (domain.ReadingSeries, error) {
+	f.gotReadingsRequest = request
+	return f.series, f.readingsErr
 }
 
 type fakeAlerts struct {
@@ -184,6 +192,58 @@ func TestListAssetsPassesFiltersAndPagingToTheService(t *testing.T) {
 	}
 }
 
+func TestGetAssetReadingsReturnsChartReadyPoints(t *testing.T) {
+	api := newTestAPI()
+	from := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
+	api.assets.series = domain.ReadingSeries{
+		AssetID:     "met-0104",
+		AssetType:   domain.AssetTypeSmartMeter,
+		From:        from,
+		To:          from.Add(time.Hour),
+		Metric:      domain.ReadingMetricVoltage,
+		Interval:    domain.ReadingIntervalFiveMinutes,
+		Aggregation: domain.ReadingAggregationAverage,
+		Points: []domain.ReadingPoint{{
+			Time:  from,
+			Value: 231.2,
+		}},
+	}
+
+	body := decodeBody(t, api.get(t, "/v1/assets/met-0104/readings?from=2026-09-14T10:00:00Z&to=2026-09-14T11:00:00Z&metric=voltage&interval=5m"))
+	data := body["data"].(map[string]any)
+	if data["metric"] != "voltage" || data["interval"] != "5m" || data["aggregation"] != "avg" {
+		t.Fatalf("series metadata = %v", data)
+	}
+	points := data["points"].([]any)
+	if len(points) != 1 || points[0].(map[string]any)["value"] != 231.2 {
+		t.Fatalf("points = %v", points)
+	}
+	request := api.assets.gotReadingsRequest
+	if request.From != from || request.To != from.Add(time.Hour) || request.Metric != domain.ReadingMetricVoltage || request.Interval != domain.ReadingIntervalFiveMinutes {
+		t.Fatalf("request = %+v", request)
+	}
+}
+
+func TestGetAssetReadingsEncodesNoPointsAsAnArray(t *testing.T) {
+	api := newTestAPI()
+	from := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
+	api.assets.series = domain.ReadingSeries{
+		AssetID:     "met-0104",
+		AssetType:   domain.AssetTypeSmartMeter,
+		From:        from,
+		To:          from.Add(time.Hour),
+		Metric:      domain.ReadingMetricVoltage,
+		Interval:    domain.ReadingIntervalFiveMinutes,
+		Aggregation: domain.ReadingAggregationAverage,
+	}
+
+	body := decodeBody(t, api.get(t, "/v1/assets/met-0104/readings?from=2026-09-14T10:00:00Z&to=2026-09-14T11:00:00Z&metric=voltage&interval=5m"))
+	points, ok := body["data"].(map[string]any)["points"].([]any)
+	if !ok || len(points) != 0 {
+		t.Fatalf("points = %v, want []", body["data"].(map[string]any)["points"])
+	}
+}
+
 func TestGetAlertIncludesResolutionHistory(t *testing.T) {
 	api := newTestAPI()
 	api.alerts.detail = services.AlertDetail{
@@ -263,11 +323,16 @@ func TestAnInternalErrorDoesNotLeakItsCause(t *testing.T) {
 
 func TestInvalidQueryParametersAreRejectedBeforeTheService(t *testing.T) {
 	tests := map[string]string{
-		"unknown asset type": "/v1/assets?asset_type=hydro_turbine",
-		"unknown severity":   "/v1/alerts?severity=catastrophic",
-		"unknown status":     "/v1/alerts?status=acknowledged",
-		"limit is words":     "/v1/assets?limit=all",
-		"limit is zero":      "/v1/assets?limit=0",
+		"unknown asset type":                  "/v1/assets?asset_type=hydro_turbine",
+		"unknown severity":                    "/v1/alerts?severity=catastrophic",
+		"unknown status":                      "/v1/alerts?status=acknowledged",
+		"limit is words":                      "/v1/assets?limit=all",
+		"limit is zero":                       "/v1/assets?limit=0",
+		"readings needs from":                 "/v1/assets/met-0104/readings?to=2026-09-14T11:00:00Z&metric=voltage&interval=5m",
+		"readings needs a valid timestamp":    "/v1/assets/met-0104/readings?from=yesterday&to=2026-09-14T11:00:00Z&metric=voltage&interval=5m",
+		"readings needs a metric":             "/v1/assets/met-0104/readings?from=2026-09-14T10:00:00Z&to=2026-09-14T11:00:00Z&interval=5m",
+		"readings rejects an unknown metric":  "/v1/assets/met-0104/readings?from=2026-09-14T10:00:00Z&to=2026-09-14T11:00:00Z&metric=phase_angle&interval=5m",
+		"readings needs a supported interval": "/v1/assets/met-0104/readings?from=2026-09-14T10:00:00Z&to=2026-09-14T11:00:00Z&metric=voltage&interval=2m",
 	}
 
 	for name, target := range tests {
