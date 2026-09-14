@@ -24,6 +24,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 ### Maintenance
 
 - **github:** Add issue forms (#3)
+- **dev:** Add pre-push hook to catch a stale CHANGELOG.md locally
 
 ### Other
 
