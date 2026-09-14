@@ -64,6 +64,7 @@ where
                     event_id = %event.event_id,
                     "outbox event was published after its claim expired"
                 );
+                continue;
             }
             published += 1;
         }
@@ -225,7 +226,7 @@ mod tests {
 
         let published = action.publish_once().await.unwrap();
 
-        assert_eq!(published, 1);
+        assert_eq!(published, 0);
         assert_eq!(events.published.lock().unwrap().len(), 1);
         assert!(store.marked.lock().unwrap().is_empty());
     }

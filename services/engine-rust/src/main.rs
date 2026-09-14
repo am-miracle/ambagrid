@@ -82,6 +82,7 @@ async fn resolve_alert(args: Vec<String>) -> Result<(), Box<dyn std::error::Erro
 async fn publish_outbox() -> Result<(), Box<dyn std::error::Error>> {
     const BATCH_SIZE: i64 = 50;
     const IDLE_DELAY: Duration = Duration::from_secs(1);
+    const FULL_BATCH_DELAY: Duration = Duration::from_millis(10);
     const MAX_FAILURE_DELAY: Duration = Duration::from_secs(30);
     const CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
     const PUBLISHED_RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
@@ -104,12 +105,15 @@ async fn publish_outbox() -> Result<(), Box<dyn std::error::Error>> {
             result = publisher.publish_once() => {
                 match result {
                     Ok(0) => {
-                        consecutive_failures = 0;
                         tokio::time::sleep(IDLE_DELAY).await;
                     }
                     Ok(count) => {
-                        consecutive_failures = 0;
+                        consecutive_failures =
+                            failure_count_after_success(consecutive_failures, count);
                         tracing::info!(count, "published outbox events");
+                        if full_batch_delay(count, BATCH_SIZE, FULL_BATCH_DELAY).is_some() {
+                            tokio::time::sleep(FULL_BATCH_DELAY).await;
+                        }
                     }
                     Err(err) => {
                         let delay = failure_backoff(consecutive_failures, MAX_FAILURE_DELAY);
@@ -143,6 +147,22 @@ fn failure_backoff(consecutive_failures: u32, maximum: Duration) -> Duration {
     Duration::from_secs(1)
         .saturating_mul(multiplier)
         .min(maximum)
+}
+
+fn failure_count_after_success(previous_failures: u32, published_count: usize) -> u32 {
+    if published_count > 0 {
+        0
+    } else {
+        previous_failures
+    }
+}
+
+fn full_batch_delay(published_count: usize, batch_size: i64, delay: Duration) -> Option<Duration> {
+    if i64::try_from(published_count).ok()? >= batch_size {
+        Some(delay)
+    } else {
+        None
+    }
 }
 
 async fn run_migrations() -> Result<(), Box<dyn std::error::Error>> {
@@ -202,5 +222,19 @@ mod tests {
         assert_eq!(failure_backoff(4, maximum), Duration::from_secs(16));
         assert_eq!(failure_backoff(5, maximum), maximum);
         assert_eq!(failure_backoff(u32::MAX, maximum), maximum);
+    }
+
+    #[test]
+    fn idle_outbox_attempt_does_not_reset_failure_count() {
+        assert_eq!(failure_count_after_success(2, 0), 2);
+        assert_eq!(failure_count_after_success(2, 1), 0);
+    }
+
+    #[test]
+    fn full_outbox_batches_get_a_small_fairness_delay() {
+        let delay = Duration::from_millis(10);
+
+        assert_eq!(full_batch_delay(49, 50, delay), None);
+        assert_eq!(full_batch_delay(50, 50, delay), Some(delay));
     }
 }
