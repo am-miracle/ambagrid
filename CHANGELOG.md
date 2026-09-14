@@ -39,4 +39,5 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - Harden ingestion bridge package split
 
 Move ingestion bridge internals into dedicated packages with focused config, telemetry, stats, and bridge tests. Validate MQTT topic filters before deriving constraints, cover queue shutdown/resubscribe behavior, and document simulator payload fields. Harden the virtual meter simulator state model and add tests for generated readings.
+- Clean up readings domain rules
 
