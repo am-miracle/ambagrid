@@ -214,6 +214,11 @@ make changelog
 ```
 
 CI runs `make changelog-check` to make sure `CHANGELOG.md` matches the generated output.
+Catch this locally before it reaches CI by enabling the repo's pre-push hook once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
 
 ## Security
 

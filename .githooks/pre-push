@@ -1,0 +1,13 @@
+#!/bin/sh
+# Mirrors CI's `make changelog-check` so a stale CHANGELOG.md never leaves your machine.
+# Enable once per clone: git config core.hooksPath .githooks
+
+if ! command -v git-cliff >/dev/null 2>&1; then
+	echo "pre-push: git-cliff not installed, skipping changelog check (CI will still enforce it)" >&2
+	exit 0
+fi
+
+if ! make changelog-check >/dev/null 2>&1; then
+	echo "pre-push: CHANGELOG.md is out of date. Run 'make changelog', review the diff, and commit it." >&2
+	exit 1
+fi
