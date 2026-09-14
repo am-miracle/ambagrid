@@ -101,7 +101,7 @@ func (s *Store) GetAsset(ctx context.Context, assetID string) (domain.Asset, err
 
 	asset, err := scanAsset(s.pool.QueryRow(ctx, getAssetSQL, assetID))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return domain.Asset{}, fmt.Errorf("asset %q: %w", assetID, domain.ErrNotFound)
+		return domain.Asset{}, fmt.Errorf("%w: asset %q", domain.ErrNotFound, assetID)
 	}
 	if err != nil {
 		return domain.Asset{}, err
@@ -145,7 +145,10 @@ func scanAsset(row scanner) (domain.Asset, error) {
 		return domain.Asset{}, err
 	}
 
-	asset.AssetType = domain.AssetType(assetType)
+	asset.AssetType, err = parseEnum(asset.AssetID, domain.ParseAssetType, assetType)
+	if err != nil {
+		return domain.Asset{}, err
+	}
 
 	// Leave the state block nil until that asset type has reported metrics.
 	switch {

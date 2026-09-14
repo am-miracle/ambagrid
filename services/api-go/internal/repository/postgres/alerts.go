@@ -138,7 +138,7 @@ func (s *Store) GetAlertWithResolutions(ctx context.Context, alertID string) (do
 
 	alert, err := scanAlert(tx.QueryRow(ctx, getAlertSQL, alertID))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return domain.Alert{}, nil, fmt.Errorf("alert %q: %w", alertID, domain.ErrNotFound)
+		return domain.Alert{}, nil, fmt.Errorf("%w: alert %q", domain.ErrNotFound, alertID)
 	}
 	if err != nil {
 		return domain.Alert{}, nil, err
@@ -209,7 +209,13 @@ func scanAlert(row scanner) (domain.Alert, error) {
 		return domain.Alert{}, err
 	}
 
-	alert.Severity = domain.Severity(severity)
-	alert.Status = domain.AlertStatus(status)
+	alert.Severity, err = parseEnum(alert.AlertID, domain.ParseSeverity, severity)
+	if err != nil {
+		return domain.Alert{}, err
+	}
+	alert.Status, err = parseEnum(alert.AlertID, domain.ParseAlertStatus, status)
+	if err != nil {
+		return domain.Alert{}, err
+	}
 	return alert, nil
 }
