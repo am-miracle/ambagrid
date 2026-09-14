@@ -1,0 +1,9 @@
+{
+  "alert_id": "2f1b98a9-7ab4-4bb7-8f24-90ae8b09a76c",
+  "asset_id": "met-0101",
+  "site_id": "ng-kaji-01",
+  "severity": "SEVERITY_CRITICAL",
+  "reason": "internal_temperature_high",
+  "opened_at_utc": 1789351200,
+  "source_event_id": "telemetry.ingested:2:17"
+}

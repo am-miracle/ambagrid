@@ -33,6 +33,9 @@ func TestFromEnvAppliesDefaults(t *testing.T) {
 	if cfg.DefaultPageSize != 50 || cfg.MaxPageSize != 200 {
 		t.Fatalf("page sizes = %d/%d", cfg.DefaultPageSize, cfg.MaxPageSize)
 	}
+	if cfg.AlertResolvedTopic != "alert.resolved" {
+		t.Fatalf("AlertResolvedTopic = %q", cfg.AlertResolvedTopic)
+	}
 	// Postgres must allow the API time to return its own timeout response.
 	if cfg.DBStatementTimeout <= cfg.DBQueryTimeout {
 		t.Fatalf("DBStatementTimeout %s must exceed DBQueryTimeout %s", cfg.DBStatementTimeout, cfg.DBQueryTimeout)
@@ -45,6 +48,7 @@ func TestFromEnvReadsOverrides(t *testing.T) {
 	t.Setenv("API_REQUEST_TIMEOUT", "15s")
 	t.Setenv("DB_MAX_CONNS", "40")
 	t.Setenv("API_CORS_ALLOWED_ORIGINS", " https://ops.example , ")
+	t.Setenv("ALERT_RESOLVED_TOPIC", "custom.alert.resolved")
 
 	cfg, err := FromEnv()
 	if err != nil {
@@ -56,6 +60,9 @@ func TestFromEnvReadsOverrides(t *testing.T) {
 	}
 	if len(cfg.CORSAllowedOrigins) != 1 || cfg.CORSAllowedOrigins[0] != "https://ops.example" {
 		t.Fatalf("CORSAllowedOrigins = %v, want the blank entry dropped", cfg.CORSAllowedOrigins)
+	}
+	if cfg.AlertResolvedTopic != "custom.alert.resolved" {
+		t.Fatalf("AlertResolvedTopic = %q", cfg.AlertResolvedTopic)
 	}
 }
 

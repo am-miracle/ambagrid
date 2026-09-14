@@ -143,10 +143,10 @@ services:
     networks:
       - ambagrid-network
 
-  # 7. Read API (HTTP view of asset state and alerts)
+  # 7. Operator API (HTTP view of asset state, alerts, and narrow commands)
   #
-  # Stateless and read-only, so replicas scale horizontally behind a load
-  # balancer. DB_MAX_CONNS is the cap on the load one replica can put on
+  # Stateless, so replicas scale horizontally behind a load balancer.
+  # DB_MAX_CONNS is the cap on the load one replica can put on
   # Postgres: multiply by replica count before raising it, and expect a
   # connection pooler rather than a bigger number once that product grows.
   #
@@ -166,6 +166,29 @@ services:
     depends_on:
       database:
         condition: service_healthy
+    networks:
+      - ambagrid-network
+
+  # 8. Transactional outbox publisher
+  #
+  # Operator commands and engine alert transitions write business events into
+  # Postgres inside the same transaction as the state change. This worker
+  # encodes and drains those durable rows to Redpanda, then marks them published.
+  outbox-publisher:
+    build:
+      context: .
+      dockerfile: ./services/engine-rust/Dockerfile
+    restart: unless-stopped
+    command: ["publish-outbox"]
+    environment:
+      DATABASE_URL: postgres://ambagrid_admin:ambagrid_secure_pass@database:5432/ambagrid_operational
+      KAFKA_BROKERS: redpanda:29092
+      LOG_FORMAT: json
+    depends_on:
+      database:
+        condition: service_healthy
+      redpanda-topics:
+        condition: service_completed_successfully
     networks:
       - ambagrid-network
 

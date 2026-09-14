@@ -1,4 +1,4 @@
-// starts the read API and wires its dependencies.
+// starts the operator API and wires its dependencies.
 package main
 
 import (
@@ -33,7 +33,9 @@ func main() {
 	}
 	defer pool.Close()
 
-	store := postgres.NewStore(pool, cfg.DBQueryTimeout)
+	store := postgres.NewStoreWithOutboxTopics(pool, cfg.DBQueryTimeout, postgres.OutboxTopics{
+		AlertResolved: cfg.AlertResolvedTopic,
+	})
 	limits := services.PageLimits{
 		DefaultSize: cfg.DefaultPageSize,
 		MaxSize:     cfg.MaxPageSize,

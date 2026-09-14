@@ -1,4 +1,4 @@
-use std::future::Future;
+use std::{future::Future, time::Duration};
 
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -82,14 +82,6 @@ pub trait ResolveAlertPermission: Send + Sync {
     ) -> impl Future<Output = Result<(), PortError>> + Send;
 }
 
-// The ontology's business-event stream (see docs/ontology.md's Event
-// Topics section): alert.opened and alert.resolved, published alongside
-// the Postgres writes that make those states durable.
-pub trait AlertEvents: Send + Sync {
-    fn alert_opened(&self, alert: &Alert) -> impl Future<Output = Result<(), PortError>> + Send;
-    fn alert_resolved(&self, alert: &Alert) -> impl Future<Output = Result<(), PortError>> + Send;
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeadLetterStage {
     Decode,
@@ -116,4 +108,43 @@ pub struct DeadLetter {
 
 pub trait DeadLetterSink: Send + Sync {
     fn park(&self, entry: &DeadLetter) -> impl Future<Output = Result<(), PortError>> + Send;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutboxEvent {
+    pub event_id: Uuid,
+    pub claim_id: Uuid,
+    pub topic: String,
+    pub event_type: String,
+    pub aggregate_id: String,
+    pub payload: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MarkPublishedOutcome {
+    #[default]
+    Marked,
+    ClaimLost,
+}
+
+pub trait OutboxRepository: Send + Sync {
+    fn claim_unpublished(
+        &self,
+        limit: i64,
+    ) -> impl Future<Output = Result<Vec<OutboxEvent>, PortError>> + Send;
+
+    fn mark_published(
+        &self,
+        event_id: Uuid,
+        claim_id: Uuid,
+    ) -> impl Future<Output = Result<MarkPublishedOutcome, PortError>> + Send;
+
+    fn prune_published(
+        &self,
+        retention: Duration,
+    ) -> impl Future<Output = Result<u64, PortError>> + Send;
+}
+
+pub trait OutboxEvents: Send + Sync {
+    fn publish(&self, event: &OutboxEvent) -> impl Future<Output = Result<(), PortError>> + Send;
 }
