@@ -13,21 +13,17 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **engine:** Add database migrations (#2)
 - **telemetry:** Ingest protobuf readings (#6)
 - Telemetry ingestion pipeline with alert lifecycle and horizontal scaling (#9)
-- **api:** Add read API with alert query safeguards
+- **api:** Add read API with alert query safeguards (#10)
+- **api:** Add asset readings endpoint for chart-ready telemetry
 
 ### Documentation
 
 - Add open source project foundations
 - Add ontology and roadmap docs
 
-### Fixed
-
-- **db:** Make alert index migration transactional
-
 ### Maintenance
 
 - **github:** Add issue forms (#3)
-- **go:** Update toolchain to 1.27
 
 ### Other
 
