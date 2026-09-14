@@ -17,6 +17,11 @@ import (
 type Store struct {
 	pool         databasePool
 	queryTimeout time.Duration
+	outboxTopics OutboxTopics
+}
+
+type OutboxTopics struct {
+	AlertResolved string
 }
 
 type databasePool interface {
@@ -27,7 +32,20 @@ type databasePool interface {
 }
 
 func NewStore(pool databasePool, queryTimeout time.Duration) *Store {
-	return &Store{pool: pool, queryTimeout: queryTimeout}
+	return NewStoreWithOutboxTopics(pool, queryTimeout, OutboxTopics{
+		AlertResolved: "alert.resolved",
+	})
+}
+
+func NewStoreWithOutboxTopics(
+	pool databasePool,
+	queryTimeout time.Duration,
+	outboxTopics OutboxTopics,
+) *Store {
+	if outboxTopics.AlertResolved == "" {
+		outboxTopics.AlertResolved = "alert.resolved"
+	}
+	return &Store{pool: pool, queryTimeout: queryTimeout, outboxTopics: outboxTopics}
 }
 
 // Ping checks database readiness.

@@ -33,7 +33,9 @@ func main() {
 	}
 	defer pool.Close()
 
-	store := postgres.NewStore(pool, cfg.DBQueryTimeout)
+	store := postgres.NewStoreWithOutboxTopics(pool, cfg.DBQueryTimeout, postgres.OutboxTopics{
+		AlertResolved: cfg.AlertResolvedTopic,
+	})
 	limits := services.PageLimits{
 		DefaultSize: cfg.DefaultPageSize,
 		MaxSize:     cfg.MaxPageSize,

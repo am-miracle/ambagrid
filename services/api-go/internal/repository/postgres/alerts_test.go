@@ -120,8 +120,11 @@ func TestResolveAlertUpdatesAndRecordsHistoryAtomically(t *testing.T) {
 	}
 	tx := &fakeTransaction{rows: []pgx.Row{resolvedAlertRow(command)}}
 	pool := &fakeDatabasePool{tx: tx}
+	store := NewStoreWithOutboxTopics(pool, time.Second, OutboxTopics{
+		AlertResolved: "custom.alert.resolved",
+	})
 
-	alert, err := NewStore(pool, time.Second).ResolveAlert(context.Background(), command)
+	alert, err := store.ResolveAlert(context.Background(), command)
 	if err != nil {
 		t.Fatalf("ResolveAlert() error = %v", err)
 	}
@@ -145,7 +148,7 @@ func TestResolveAlertUpdatesAndRecordsHistoryAtomically(t *testing.T) {
 	if outbox.sql != insertCommandEventSQL {
 		t.Fatalf("outbox SQL = %q, want insertCommandEventSQL", outbox.sql)
 	}
-	if len(outbox.args) != 5 || outbox.args[0] != alertResolvedEventType || outbox.args[1] != alertResolvedEventType || outbox.args[2] != "alert" || outbox.args[3] != command.AlertID {
+	if len(outbox.args) != 5 || outbox.args[0] != "custom.alert.resolved" || outbox.args[1] != alertResolvedEventType || outbox.args[2] != "alert" || outbox.args[3] != command.AlertID {
 		t.Fatalf("outbox args = %#v", outbox.args)
 	}
 	var payload map[string]any

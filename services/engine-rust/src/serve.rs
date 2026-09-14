@@ -22,7 +22,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .connect(&cfg.database_url)
         .await?;
 
-    let store = PostgresIngestRepository::new(pool.clone());
+    let store = PostgresIngestRepository::with_alert_topics(
+        pool.clone(),
+        cfg.alert_opened_topic.clone(),
+        cfg.alert_resolved_topic.clone(),
+    );
     let dead_letters =
         KafkaDeadLetterPublisher::connect(cfg.kafka_brokers.clone(), cfg.telemetry_dlq_topic)?;
     let mut ingest = IngestReading::new(&store);

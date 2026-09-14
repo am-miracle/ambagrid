@@ -27,13 +27,6 @@ impl OutboxEventType {
             ))),
         }
     }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::AlertOpened => "alert.opened",
-            Self::AlertResolved => "alert.resolved",
-        }
-    }
 }
 
 // A single-record producer, kept as a trait so tests can substitute a fake
@@ -90,28 +83,40 @@ impl KafkaDeadLetterPublisher<FutureProducer> {
         brokers: Vec<String>,
         topic: String,
     ) -> Result<Self, rdkafka::error::KafkaError> {
-        let sink = ClientConfig::new()
-            .set("bootstrap.servers", brokers.join(","))
-            .set("message.timeout.ms", "5000")
-            .create()?;
-
-        Ok(Self { topic, sink })
+        Ok(Self {
+            topic,
+            sink: future_producer(brokers)?,
+        })
     }
 }
 
 impl KafkaOutboxEventPublisher<FutureProducer> {
     pub fn connect(brokers: Vec<String>) -> Result<Self, rdkafka::error::KafkaError> {
-        let sink = ClientConfig::new()
-            .set("bootstrap.servers", brokers.join(","))
-            .set("message.timeout.ms", "5000")
-            .create()?;
-
-        Ok(Self { sink })
+        Ok(Self {
+            sink: future_producer(brokers)?,
+        })
     }
+}
+
+fn future_producer(brokers: Vec<String>) -> Result<FutureProducer, rdkafka::error::KafkaError> {
+    ClientConfig::new()
+        .set("bootstrap.servers", brokers.join(","))
+        .set("message.timeout.ms", "5000")
+        .create()
 }
 
 impl<S: RecordSink> DeadLetterSink for KafkaDeadLetterPublisher<S> {
     async fn park(&self, entry: &DeadLetter) -> Result<(), PortError> {
+        crate::metrics::DLQ_PARKED_TOTAL.inc();
+        if crate::metrics::DLQ_PARKED_TOTAL.get() % 1.0 == 1.0 {
+            tracing::warn!(
+                topic = %entry.kafka_topic,
+                partition = entry.kafka_partition,
+                offset = entry.kafka_offset,
+                stage = %entry.stage.as_str(),
+                "dlq parked — alert threshold check"
+            );
+        }
         self.sink.send(dead_letter_record(&self.topic, entry)).await
     }
 }
@@ -119,12 +124,6 @@ impl<S: RecordSink> DeadLetterSink for KafkaDeadLetterPublisher<S> {
 impl<S: RecordSink> OutboxEvents for KafkaOutboxEventPublisher<S> {
     async fn publish(&self, event: &OutboxEvent) -> Result<(), PortError> {
         let event_type = OutboxEventType::parse(&event.event_type, event.event_id)?;
-        if event.topic != event_type.as_str() {
-            return Err(PortError::message(format!(
-                "outbox event {} has topic {} but event type {}",
-                event.event_id, event.topic, event.event_type
-            )));
-        }
         let payload = encode_outbox_payload(event, event_type)?;
         self.sink
             .send(kafka_record(
@@ -445,25 +444,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn outbox_publisher_rejects_a_topic_event_type_mismatch() {
+    async fn outbox_publisher_allows_custom_topics_for_known_event_types() {
         let publisher = KafkaOutboxEventPublisher {
             sink: FakeSink::default(),
         };
         let event = OutboxEvent {
             event_id: Uuid::new_v4(),
             claim_id: Uuid::new_v4(),
-            topic: "alert.resolved".to_string(),
+            topic: "custom.alert.opened".to_string(),
             event_type: "alert.opened".to_string(),
             aggregate_id: "alert-0101".to_string(),
-            payload: b"{}".to_vec(),
+            payload: include_bytes!(
+                "../../../../../proto/fixtures/alert_opened_outbox_payload.json"
+            )
+            .to_vec(),
         };
 
-        let err = publisher.publish(&event).await.unwrap_err();
+        publisher.publish(&event).await.unwrap();
 
-        assert!(
-            err.to_string()
-                .contains("has topic alert.resolved but event type alert.opened")
-        );
-        assert!(publisher.sink.sent.lock().unwrap().is_empty());
+        let sent = publisher.sink.sent.lock().unwrap();
+        assert_eq!(sent[0].topic, "custom.alert.opened");
     }
 }

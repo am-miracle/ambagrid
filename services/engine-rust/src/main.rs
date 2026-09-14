@@ -2,6 +2,7 @@ mod actions;
 mod adapters;
 mod config;
 mod domain;
+mod metrics;
 mod ports;
 mod serve;
 mod telemetry;
@@ -63,7 +64,11 @@ async fn resolve_alert(args: Vec<String>) -> Result<(), Box<dyn std::error::Erro
         .max_connections(5)
         .connect(&cfg.database_url)
         .await?;
-    let store = PostgresIngestRepository::new(pool);
+    let store = PostgresIngestRepository::with_alert_topics(
+        pool,
+        cfg.alert_opened_topic.clone(),
+        cfg.alert_resolved_topic.clone(),
+    );
     let permissions = AllowedResolveOperators::new(cfg.alert_resolve_operators.clone());
     let action = ResolveAlert::new(&store, &permissions);
 

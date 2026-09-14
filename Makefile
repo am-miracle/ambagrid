@@ -5,7 +5,7 @@ DATABASE_URL ?= postgres://ambagrid_admin:ambagrid_secure_pass@localhost:5432/am
 KAFKA_BROKERS ?= localhost:9092
 TELEMETRY_PARTITIONS ?= 12
 
-.PHONY: api-serve changelog changelog-check db-migrate engine-serve kafka-topics outbox-publish proto-gen-go
+.PHONY: api-serve changelog changelog-check db-migrate engine-integration-test engine-serve kafka-topics outbox-publish proto-gen-go
 
 api-serve:
 	cd services/api-go && DATABASE_URL="$(DATABASE_URL)" go run .
@@ -21,6 +21,9 @@ changelog-check:
 
 db-migrate:
 	cd services/engine-rust && DATABASE_URL="$(DATABASE_URL)" cargo run -- migrate
+
+engine-integration-test:
+	cd services/engine-rust && DATABASE_URL="$(DATABASE_URL)" cargo test -- --ignored
 
 engine-serve:
 	cd services/engine-rust && DATABASE_URL="$(DATABASE_URL)" cargo run -- serve

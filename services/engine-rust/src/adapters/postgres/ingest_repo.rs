@@ -17,11 +17,21 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct PostgresIngestRepository {
     pool: PgPool,
+    alert_opened_topic: String,
+    alert_resolved_topic: String,
 }
 
 impl PostgresIngestRepository {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub fn with_alert_topics(
+        pool: PgPool,
+        alert_opened_topic: impl Into<String>,
+        alert_resolved_topic: impl Into<String>,
+    ) -> Self {
+        Self {
+            pool,
+            alert_opened_topic: alert_opened_topic.into(),
+            alert_resolved_topic: alert_resolved_topic.into(),
+        }
     }
 }
 
@@ -49,7 +59,7 @@ impl IngestRepository for PostgresIngestRepository {
                     {
                         None
                     } else {
-                        Some(open_alert(&mut tx, &decision).await?)
+                        Some(open_alert(&mut tx, &decision, &self.alert_opened_topic).await?)
                     };
                 IngestWrite {
                     alert_opened,
@@ -70,6 +80,7 @@ impl IngestRepository for PostgresIngestRepository {
                                 reading.observed_at,
                                 &resolution_note,
                                 &resolved_by,
+                                &self.alert_resolved_topic,
                             )
                             .await?,
                         ),
@@ -104,6 +115,7 @@ impl AlertRepository for PostgresIngestRepository {
             resolved_at,
             resolution_note,
             &resolved_by,
+            &self.alert_resolved_topic,
         )
         .await?;
         tx.commit().await.map_err(PortError::storage)?;
@@ -329,6 +341,7 @@ async fn append_solar_inverter_reading(
 async fn open_alert(
     tx: &mut Transaction<'_, Postgres>,
     decision: &AlertDecision,
+    topic: &str,
 ) -> Result<Alert, PortError> {
     let row = query(
         r#"
@@ -352,7 +365,7 @@ async fn open_alert(
     .map_err(PortError::storage)?;
 
     let alert = row_to_alert(row)?;
-    insert_alert_event(tx, "alert.opened", alert_opened_payload(&alert)).await?;
+    insert_alert_event(tx, topic, "alert.opened", alert_opened_payload(&alert)).await?;
     Ok(alert)
 }
 
@@ -389,6 +402,7 @@ async fn resolve_alert(
     resolved_at: DateTime<Utc>,
     resolution_note: &str,
     resolved_by: &ResolutionActor,
+    topic: &str,
 ) -> Result<Alert, PortError> {
     let row = query(
         r#"
@@ -412,12 +426,13 @@ async fn resolve_alert(
         .await?;
 
     let alert = row_to_alert(row)?;
-    insert_alert_event(tx, "alert.resolved", alert_resolved_payload(&alert)?).await?;
+    insert_alert_event(tx, topic, "alert.resolved", alert_resolved_payload(&alert)?).await?;
     Ok(alert)
 }
 
 async fn insert_alert_event(
     tx: &mut Transaction<'_, Postgres>,
+    topic: &str,
     event_type: &str,
     payload: Value,
 ) -> Result<(), PortError> {
@@ -431,9 +446,10 @@ async fn insert_alert_event(
         INSERT INTO command_event_outbox (
             topic, event_type, aggregate_type, aggregate_id, payload
         )
-        VALUES ($1, $1, 'alert', $2, $3::jsonb)
+        VALUES ($1, $2, 'alert', $3, $4::jsonb)
         "#,
     )
+    .bind(topic)
     .bind(event_type)
     .bind(aggregate_id)
     .bind(payload)

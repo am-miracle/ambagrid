@@ -1,6 +1,12 @@
 use std::time::Duration;
 
-use crate::ports::{MarkPublishedOutcome, OutboxEvents, OutboxRepository, PortError};
+use crate::{
+    metrics::{
+        OUTBOX_CLAIM_LOST_TOTAL, OUTBOX_CLAIMED_TOTAL, OUTBOX_MARK_FAILED_TOTAL,
+        OUTBOX_PUBLISH_FAILED_TOTAL, OUTBOX_PUBLISHED_TOTAL,
+    },
+    ports::{MarkPublishedOutcome, OutboxEvents, OutboxRepository, PortError},
+};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PublishOutboxStats {
@@ -36,6 +42,7 @@ where
         }
 
         let events = self.store.claim_unpublished(self.batch_size).await?;
+        OUTBOX_CLAIMED_TOTAL.inc_by(events.len() as u64);
         let mut stats = PublishOutboxStats {
             claimed: events.len(),
             ..Default::default()
@@ -44,6 +51,7 @@ where
         for event in events {
             if let Err(error) = self.events.publish(&event).await {
                 stats.publish_failed += 1;
+                OUTBOX_PUBLISH_FAILED_TOTAL.inc();
                 tracing::warn!(
                     event_id = %event.event_id,
                     event_type = %event.event_type,
@@ -64,6 +72,7 @@ where
                 Ok(outcome) => outcome,
                 Err(error) => {
                     stats.mark_failed += 1;
+                    OUTBOX_MARK_FAILED_TOTAL.inc();
                     tracing::warn!(
                         event_id = %event.event_id,
                         event_type = %event.event_type,
@@ -79,6 +88,7 @@ where
             };
             if outcome == MarkPublishedOutcome::ClaimLost {
                 stats.claim_lost += 1;
+                OUTBOX_CLAIM_LOST_TOTAL.inc();
                 tracing::info!(
                     event_id = %event.event_id,
                     event_type = %event.event_type,
@@ -88,6 +98,7 @@ where
                 continue;
             }
             stats.published += 1;
+            OUTBOX_PUBLISHED_TOTAL.inc();
         }
         if stats.claimed > 0 {
             tracing::info!(

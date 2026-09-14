@@ -220,7 +220,7 @@ func (s *Store) ResolveAlert(ctx context.Context, command domain.ResolveAlertCom
 	if _, err := tx.Exec(ctx, insertAlertResolutionSQL, command.AlertID, resolvedAt, command.ResolutionNote, command.ResolvedBy); err != nil {
 		return domain.Alert{}, fmt.Errorf("insert alert resolution history: %w", err)
 	}
-	if err := insertAlertResolvedEvent(ctx, tx, alert); err != nil {
+	if err := s.insertAlertResolvedEvent(ctx, tx, alert); err != nil {
 		return domain.Alert{}, err
 	}
 
@@ -230,12 +230,12 @@ func (s *Store) ResolveAlert(ctx context.Context, command domain.ResolveAlertCom
 	return alert, nil
 }
 
-func insertAlertResolvedEvent(ctx context.Context, tx pgx.Tx, alert domain.Alert) error {
+func (s *Store) insertAlertResolvedEvent(ctx context.Context, tx pgx.Tx, alert domain.Alert) error {
 	payload, err := alertResolvedPayload(alert)
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, insertCommandEventSQL, alertResolvedEventType, alertResolvedEventType, "alert", alert.AlertID, payload); err != nil {
+	if _, err := tx.Exec(ctx, insertCommandEventSQL, s.outboxTopics.AlertResolved, alertResolvedEventType, "alert", alert.AlertID, payload); err != nil {
 		return fmt.Errorf("insert alert resolved event: %w", err)
 	}
 	return nil
