@@ -16,6 +16,10 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **api:** Add read API with alert query safeguards (#10)
 - **api:** Add asset readings endpoint for chart-ready telemetry
 
+### Changed
+
+- **api:** Extract request parsing from multi-param handlers
+
 ### Documentation
 
 - Add open source project foundations
