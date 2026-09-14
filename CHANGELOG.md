@@ -14,27 +14,22 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **telemetry:** Ingest protobuf readings (#6)
 - Telemetry ingestion pipeline with alert lifecycle and horizontal scaling (#9)
 - **api:** Add read API with alert query safeguards (#10)
-- **api:** Add asset readings endpoint for chart-ready telemetry
-
-### Changed
-
-- **api:** Extract request parsing from multi-param handlers
+- **api:** Add asset readings endpoint for chart-ready telemetry (#11)
+- **api:** Add alert resolution command
 
 ### Documentation
 
 - Add open source project foundations
 - Add ontology and roadmap docs
-
-### Fixed
-
-- **api:** Validate enum values scanned from Postgres
+- Regenerate changelog
 
 ### Maintenance
 
 - **github:** Add issue forms (#3)
-- **dev:** Add pre-push hook to catch a stale CHANGELOG.md locally
 
 ### Other
 
 - Harden ingestion bridge package split
-- Clean up readings domain rules
+
+Move ingestion bridge internals into dedicated packages with focused config, telemetry, stats, and bridge tests. Validate MQTT topic filters before deriving constraints, cover queue shutdown/resubscribe behavior, and document simulator payload fields. Harden the virtual meter simulator state model and add tests for generated readings.
+
