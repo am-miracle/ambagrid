@@ -23,9 +23,16 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - Add ontology and roadmap docs
 - Regenerate changelog
 
+### Fixed
+
+- **outbox:** Publish alert events durably
+- **outbox:** Harden publisher under load
+- **outbox:** Tighten publisher standards
+
 ### Maintenance
 
 - **github:** Add issue forms (#3)
+- Update changelog
 
 ### Other
 
