@@ -72,8 +72,10 @@ func TestBuildListSitesQueryAddsOnlyTheCursorPredicateWhenPresent(t *testing.T) 
 	sql, args := buildListSitesQuery(&afterSiteID, 51)
 
 	for _, want := range []string{
-		"WHERE a.site_id > $1",
-		"ORDER BY a.site_id",
+		"FROM sites s",
+		"LEFT JOIN asset_rollup a ON a.site_id = s.site_id",
+		"WHERE s.site_id > $1",
+		"ORDER BY s.site_id",
 		"LIMIT $2",
 	} {
 		if !strings.Contains(sql, want) {

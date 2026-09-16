@@ -1,4 +1,4 @@
-use crate::domain::{operator::OperatorId, rules::ThresholdPolicy};
+use crate::domain::{actor::ActorId, rules::ThresholdPolicy};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -9,7 +9,7 @@ pub struct Config {
     pub telemetry_group_id: String,
     pub alert_opened_topic: String,
     pub alert_resolved_topic: String,
-    pub alert_resolve_operators: Vec<OperatorId>,
+    pub alert_resolve_actors: Vec<ActorId>,
     pub threshold_policy: ThresholdPolicy,
 }
 
@@ -31,9 +31,9 @@ impl Config {
         let alert_opened_topic = env_string(&lookup, "ALERT_OPENED_TOPIC", Some("alert.opened"))?;
         let alert_resolved_topic =
             env_string(&lookup, "ALERT_RESOLVED_TOPIC", Some("alert.resolved"))?;
-        let alert_resolve_operators = env_csv(&lookup, "ALERT_RESOLVE_OPERATORS", "")
+        let alert_resolve_actors = env_csv(&lookup, "ALERT_RESOLVE_ACTORS", "")
             .into_iter()
-            .map(OperatorId::new)
+            .map(ActorId::new)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|err| ConfigError::Invalid(err.to_string()))?;
 
@@ -75,7 +75,7 @@ impl Config {
             telemetry_group_id,
             alert_opened_topic,
             alert_resolved_topic,
-            alert_resolve_operators,
+            alert_resolve_actors,
             threshold_policy,
         })
     }
@@ -206,15 +206,15 @@ mod tests {
     }
 
     #[test]
-    fn from_lookup_rejects_reserved_system_operator() {
+    fn from_lookup_rejects_reserved_system_actor() {
         let mut vars = required_vars();
-        vars.insert("ALERT_RESOLVE_OPERATORS", "system");
+        vars.insert("ALERT_RESOLVE_ACTORS", "system");
 
         let err = Config::from_lookup(lookup_fn(vars)).unwrap_err();
 
         assert_eq!(
             err,
-            ConfigError::Invalid("operator_id must not be the reserved system actor".to_string())
+            ConfigError::Invalid("actor_id must not be the reserved system actor".to_string())
         );
     }
 
@@ -228,7 +228,7 @@ mod tests {
         assert_eq!(cfg.telemetry_group_id, "engine-rust");
         assert_eq!(cfg.alert_opened_topic, "alert.opened");
         assert_eq!(cfg.alert_resolved_topic, "alert.resolved");
-        assert!(cfg.alert_resolve_operators.is_empty());
+        assert!(cfg.alert_resolve_actors.is_empty());
         assert_eq!(cfg.threshold_policy, ThresholdPolicy::default());
     }
 
@@ -238,7 +238,7 @@ mod tests {
         vars.insert("TELEMETRY_DLQ_TOPIC", "telemetry.custom.dlq");
         vars.insert("ALERT_OPENED_TOPIC", "custom.alert.opened");
         vars.insert("ALERT_RESOLVED_TOPIC", "custom.alert.resolved");
-        vars.insert("ALERT_RESOLVE_OPERATORS", " operator-0101,operator-0102 ");
+        vars.insert("ALERT_RESOLVE_ACTORS", " actor-0101,actor-0102 ");
         vars.insert("SMART_METER_CRITICAL_TEMP_C", "80.0");
         vars.insert("BATTERY_BMS_CRITICAL_TEMP_C", "50.0");
         vars.insert("SOLAR_INVERTER_CRITICAL_TEMP_C", "90.0");
@@ -250,11 +250,11 @@ mod tests {
         assert_eq!(cfg.alert_opened_topic, "custom.alert.opened");
         assert_eq!(cfg.alert_resolved_topic, "custom.alert.resolved");
         assert_eq!(
-            cfg.alert_resolve_operators
+            cfg.alert_resolve_actors
                 .iter()
-                .map(OperatorId::as_str)
+                .map(ActorId::as_str)
                 .collect::<Vec<_>>(),
-            vec!["operator-0101", "operator-0102"]
+            vec!["actor-0101", "actor-0102"]
         );
         assert_eq!(
             cfg.threshold_policy,

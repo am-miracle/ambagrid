@@ -7,9 +7,9 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
+        actor::{ActorId, ResolutionActor},
         alert::{Alert, AlertDecision, AlertKind},
         asset::{AssetState, BatteryBmsState, Reading, SmartMeterState, SolarInverterState},
-        operator::{OperatorId, ResolutionActor},
     },
     ports::{AlertRepository, IngestRepository, IngestWrite, PolicyOutcome, PortError},
 };
@@ -580,8 +580,8 @@ fn parse_resolution_actor(value: String) -> Result<ResolutionActor, PortError> {
     if value == "system" {
         Ok(ResolutionActor::System)
     } else {
-        OperatorId::new(value)
-            .map(ResolutionActor::Operator)
+        ActorId::new(value)
+            .map(ResolutionActor::Human)
             .map_err(|err| PortError::message(err.to_string()))
     }
 }

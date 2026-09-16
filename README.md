@@ -49,6 +49,19 @@ Apply database migrations explicitly:
 make db-migrate
 ```
 
+For local development or bootstrap only, provision the simulator's first
+GridOperator and site directly in SQL before accepting telemetry:
+
+```bash
+docker compose exec database psql -U ambagrid_admin -d ambagrid_operational \
+  -c "INSERT INTO grid_operators (operator_id, name) VALUES ('operator-0101', 'Demo Operator') ON CONFLICT (operator_id) DO NOTHING; INSERT INTO sites (site_id, name, country, region, operator_id) VALUES ('ng-kaji-01', 'Kajiado 1', 'KE', 'Kajiado', 'operator-0101') ON CONFLICT (site_id) DO NOTHING"
+```
+
+Repeat that insert for each site ID you intend to simulate. Unknown site IDs
+are rejected by the asset foreign key instead of silently becoming sites.
+Production provisioning must use the authenticated provisioning workflow when
+it is available; direct SQL is not a production interface.
+
 Start the Rust engine without applying migrations:
 
 ```bash

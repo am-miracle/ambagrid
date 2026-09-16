@@ -184,6 +184,45 @@ func TestListAssetsReturnsAnEnvelopeWithPageMetadata(t *testing.T) {
 	}
 }
 
+func TestListSitesReturnsMetadataAndOperationalRollups(t *testing.T) {
+	api := newTestAPI()
+	country := "NG"
+	region := "Nasarawa"
+	gridOperatorID := "operator-0101"
+	lat := 8.4917
+	lng := 8.5153
+	lastSeenAt := time.Date(2026, 9, 16, 10, 0, 0, 0, time.UTC)
+	api.sites.listResult = page.Page[domain.Site]{
+		Items: []domain.Site{{
+			SiteID:         "nasarawa-duduguru",
+			Name:           "Duduguru Mini-grid",
+			Country:        &country,
+			Region:         &region,
+			GridOperatorID: &gridOperatorID,
+			Lat:            &lat,
+			Lng:            &lng,
+			Status:         "active",
+			AssetCount:     3,
+			LastSeenAt:     &lastSeenAt,
+			OpenAlerts:     domain.AlertCounts{Total: 1, Critical: 1},
+		}},
+		Limit: 50,
+	}
+
+	body := decodeBody(t, api.get(t, "/v1/sites"))
+	site := body["data"].([]any)[0].(map[string]any)
+
+	if site["name"] != "Duduguru Mini-grid" || site["country"] != "NG" || site["region"] != "Nasarawa" {
+		t.Fatalf("site metadata = %v", site)
+	}
+	if site["operator_id"] != "operator-0101" || site["lat"] != lat || site["lng"] != lng || site["status"] != "active" {
+		t.Fatalf("site operational metadata = %v", site)
+	}
+	if site["asset_count"] != float64(3) || site["open_alerts"].(map[string]any)["critical"] != float64(1) {
+		t.Fatalf("site rollups = %v", site)
+	}
+}
+
 func TestListAssetsEncodesAnEmptyPageAsAnArray(t *testing.T) {
 	api := newTestAPI()
 
@@ -275,7 +314,7 @@ func TestGetAlertIncludesResolutionHistory(t *testing.T) {
 			Severity: domain.SeverityCritical,
 			Status:   domain.AlertStatusResolved,
 		},
-		Resolutions: []domain.AlertResolution{{ResolvedBy: "operator-0101", ResolutionNote: "fan cleaned"}},
+		Resolutions: []domain.AlertResolution{{ResolvedBy: "actor-0101", ResolutionNote: "fan cleaned"}},
 	}
 
 	recorder := api.get(t, "/v1/alerts/0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b")
@@ -289,7 +328,7 @@ func TestGetAlertIncludesResolutionHistory(t *testing.T) {
 	if !ok || len(resolutions) != 1 {
 		t.Fatalf("resolutions = %v, want one entry", data["resolutions"])
 	}
-	if resolutions[0].(map[string]any)["resolved_by"] != "operator-0101" {
+	if resolutions[0].(map[string]any)["resolved_by"] != "actor-0101" {
 		t.Fatalf("resolution = %v", resolutions[0])
 	}
 	if body["request_id"] == "" || body["request_id"] != recorder.Header().Get(requestIDHeader) {
@@ -297,11 +336,11 @@ func TestGetAlertIncludesResolutionHistory(t *testing.T) {
 	}
 }
 
-func TestResolveAlertUsesTheTrustedOperatorHeader(t *testing.T) {
+func TestResolveAlertUsesTheTrustedActorHeader(t *testing.T) {
 	api := newTestAPI()
 	resolvedAt := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
 	note := "fan cleaned"
-	resolvedBy := "operator-0101"
+	resolvedBy := "actor-0101"
 	api.alerts.resolved = domain.Alert{
 		AlertID:        "0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b",
 		Severity:       domain.SeverityCritical,
@@ -312,7 +351,7 @@ func TestResolveAlertUsesTheTrustedOperatorHeader(t *testing.T) {
 	}
 
 	recorder := api.post(t, "/v1/alerts/0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b/resolve", `{"resolution_note":"fan cleaned"}`, map[string]string{
-		operatorIDHeader: "operator-0101",
+		actorIDHeader: "actor-0101",
 	})
 
 	if recorder.Code != http.StatusOK {
@@ -321,16 +360,16 @@ func TestResolveAlertUsesTheTrustedOperatorHeader(t *testing.T) {
 	if api.alerts.gotResolveAlertID != "0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b" {
 		t.Fatalf("alert id = %q", api.alerts.gotResolveAlertID)
 	}
-	if got := api.alerts.gotResolveRequest; got.ResolutionNote != "fan cleaned" || got.ResolvedBy != "operator-0101" {
+	if got := api.alerts.gotResolveRequest; got.ResolutionNote != "fan cleaned" || got.ResolvedBy != "actor-0101" {
 		t.Fatalf("resolve request = %+v", got)
 	}
 	data := decodeBody(t, recorder)["data"].(map[string]any)
-	if data["status"] != "resolved" || data["resolved_by"] != "operator-0101" || data["resolution_note"] != "fan cleaned" {
+	if data["status"] != "resolved" || data["resolved_by"] != "actor-0101" || data["resolution_note"] != "fan cleaned" {
 		t.Fatalf("data = %v", data)
 	}
 }
 
-func TestResolveAlertRequiresTrustedOperatorIdentity(t *testing.T) {
+func TestResolveAlertRequiresTrustedActorIdentity(t *testing.T) {
 	api := newTestAPI()
 
 	recorder := api.post(t, "/v1/alerts/0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b/resolve", `{"resolution_note":"fan cleaned"}`, nil)
@@ -346,12 +385,12 @@ func TestResolveAlertRequiresTrustedOperatorIdentity(t *testing.T) {
 	}
 }
 
-func TestResolveAlertRejectsAnEmptyTrustedOperatorIdentity(t *testing.T) {
+func TestResolveAlertRejectsAnEmptyTrustedActorIdentity(t *testing.T) {
 	api := newTestAPI()
 	api.alerts.resolveErr = domain.ErrInvalidID
 
 	recorder := api.post(t, "/v1/alerts/0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b/resolve", `{"resolution_note":"fan cleaned"}`, map[string]string{
-		operatorIDHeader: "",
+		actorIDHeader: "",
 	})
 
 	if recorder.Code != http.StatusBadRequest {
@@ -366,7 +405,7 @@ func TestResolveAlertRejectsInvalidJSON(t *testing.T) {
 	api := newTestAPI()
 
 	recorder := api.post(t, "/v1/alerts/0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b/resolve", `{"resolution_note":`, map[string]string{
-		operatorIDHeader: "operator-0101",
+		actorIDHeader: "actor-0101",
 	})
 
 	if recorder.Code != http.StatusBadRequest {

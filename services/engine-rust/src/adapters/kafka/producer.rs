@@ -384,7 +384,7 @@ mod tests {
         assert_eq!(payload.opened_at_utc, 1789383600);
         assert_eq!(payload.resolved_at_utc, 1789387200);
         assert_eq!(payload.resolution_note, "fan cleaned");
-        assert_eq!(payload.resolved_by, "operator-0101");
+        assert_eq!(payload.resolved_by, "actor-0101");
         assert_eq!(
             sent[0].headers.get("event_id").map(Vec::as_slice),
             Some(event.event_id.to_string().as_bytes())

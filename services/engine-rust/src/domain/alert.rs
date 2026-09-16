@@ -3,7 +3,7 @@ use std::str::FromStr;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use crate::domain::operator::ResolutionActor;
+use crate::domain::actor::ResolutionActor;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlertKind(String);

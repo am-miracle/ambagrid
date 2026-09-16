@@ -43,6 +43,26 @@ These are the first ontology objects AmbaGrid should standardize.
 
 ### Grid Operations
 
+**GridOperator**
+
+The organization responsible for operating one or more sites. A GridOperator
+owns operational scope; it is not the identity of a human taking an action.
+
+Useful properties:
+
+- `operator_id`
+- `name`
+
+**Actor**
+
+An authenticated human whose identity is recorded for an audited action. An
+Actor may act for a GridOperator, but their identity is independent of that
+organization.
+
+Useful properties:
+
+- `actor_id`
+
 **Site**
 
 The physical mini-grid location. A site groups equipment, customers, telemetry, outages, alerts, and revenue.
@@ -353,7 +373,7 @@ Inputs:
 
 - `alert_id`
 - `resolution_note`
-- `resolved_by` (`OperatorId` for operator actions)
+- `resolved_by` (`ActorId` for human actions)
 
 Effects:
 
@@ -361,9 +381,9 @@ Effects:
 - records resolution history
 - records an `alert.resolved` business event
 
-Operator-triggered resolution must authorize `resolved_by` as an `OperatorId`
+Human-triggered resolution must authorize `resolved_by` as an `ActorId`
 before mutating alert state. Automatic recovery uses the reserved internal
-`"system"` actor instead of this operator action.
+`"system"` actor instead.
 
 ## Revenue Protection Model
 

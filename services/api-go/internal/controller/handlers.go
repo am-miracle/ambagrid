@@ -158,13 +158,13 @@ type resolveAlertBody struct {
 }
 
 func (a API) handleResolveAlert(w http.ResponseWriter, r *http.Request) {
-	operatorHeaders := r.Header.Values(operatorIDHeader)
-	if len(operatorHeaders) == 0 {
-		writeErrorBody(w, a.logger(), http.StatusUnauthorized, codeUnauthenticated, "missing trusted operator identity", RequestIDFrom(r.Context()))
+	actorHeaders := r.Header.Values(actorIDHeader)
+	if len(actorHeaders) == 0 {
+		writeErrorBody(w, a.logger(), http.StatusUnauthorized, codeUnauthenticated, "missing trusted actor identity", RequestIDFrom(r.Context()))
 		return
 	}
 
-	resolvedBy := r.Header.Get(operatorIDHeader)
+	resolvedBy := r.Header.Get(actorIDHeader)
 
 	var body resolveAlertBody
 	decoder := json.NewDecoder(r.Body)
