@@ -365,7 +365,7 @@ async fn open_alert(
     .map_err(PortError::storage)?;
 
     let alert = row_to_alert(row)?;
-    insert_alert_event(tx, topic, "alert.opened", alert_opened_payload(&alert)).await?;
+    insert_alert_event(tx, topic, "alert.opened", alert_opened_payload(&alert)?).await?;
     Ok(alert)
 }
 
@@ -460,16 +460,20 @@ async fn insert_alert_event(
     Ok(())
 }
 
-fn alert_opened_payload(alert: &Alert) -> Value {
-    json!({
+fn alert_opened_payload(alert: &Alert) -> Result<Value, PortError> {
+    let asset_id = required_alert_text(alert.alert_id, "asset_id", &alert.asset_id)?;
+    let site_id = required_alert_text(alert.alert_id, "site_id", &alert.site_id)?;
+    let reason = required_alert_text(alert.alert_id, "reason", &alert.reason)?;
+
+    Ok(json!({
         "alert_id": alert.alert_id.to_string(),
-        "asset_id": alert.asset_id,
-        "site_id": alert.site_id,
+        "asset_id": asset_id,
+        "site_id": site_id,
         "severity": proto_severity(alert.severity),
-        "reason": alert.reason,
+        "reason": reason,
         "opened_at_utc": alert.opened_at.timestamp(),
         "source_event_id": alert.source_event_id,
-    })
+    }))
 }
 
 fn alert_resolved_payload(alert: &Alert) -> Result<Value, PortError> {
@@ -511,6 +515,19 @@ fn proto_severity(severity: crate::domain::alert::Severity) -> &'static str {
         crate::domain::alert::Severity::Warning => "SEVERITY_WARNING",
         crate::domain::alert::Severity::Critical => "SEVERITY_CRITICAL",
     }
+}
+
+fn required_alert_text<'a>(
+    alert_id: Uuid,
+    field: &'static str,
+    value: &'a str,
+) -> Result<&'a str, PortError> {
+    if value.trim().is_empty() {
+        return Err(PortError::message(format!(
+            "alert {alert_id} is missing {field}"
+        )));
+    }
+    Ok(value)
 }
 
 async fn insert_alert_resolution_history(
@@ -607,7 +624,7 @@ mod tests {
 
     #[test]
     fn alert_opened_outbox_payload_matches_the_protobuf_json_shape() {
-        let payload = alert_opened_payload(&alert());
+        let payload = alert_opened_payload(&alert()).unwrap();
         let fixture: Value = serde_json::from_slice(include_bytes!(
             "../../../../../proto/fixtures/alert_opened_outbox_payload.json"
         ))
@@ -617,6 +634,39 @@ mod tests {
         assert_eq!(payload["severity"], "SEVERITY_CRITICAL");
         assert_eq!(payload["opened_at_utc"], 1_789_351_200);
         assert_eq!(payload["source_event_id"], "telemetry.ingested:2:17");
+    }
+
+    #[test]
+    fn alert_opened_outbox_payload_rejects_missing_required_text() {
+        for (field, malformed) in [
+            (
+                "asset_id",
+                Alert {
+                    asset_id: " ".to_string(),
+                    ..alert()
+                },
+            ),
+            (
+                "site_id",
+                Alert {
+                    site_id: "".to_string(),
+                    ..alert()
+                },
+            ),
+            (
+                "reason",
+                Alert {
+                    reason: "\t".to_string(),
+                    ..alert()
+                },
+            ),
+        ] {
+            let err = alert_opened_payload(&malformed).unwrap_err();
+            assert!(
+                err.to_string().contains(field),
+                "expected {err} to mention {field}"
+            );
+        }
     }
 
     #[test]
