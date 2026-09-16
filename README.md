@@ -55,6 +55,12 @@ Start the Rust engine without applying migrations:
 make engine-serve
 ```
 
+Drain durable alert events from Postgres to Redpanda:
+
+```bash
+make outbox-publish
+```
+
 ## Architecture
 
 ```text

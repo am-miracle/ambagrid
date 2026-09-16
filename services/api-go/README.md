@@ -42,6 +42,7 @@ the engine to give it something to serve:
 ```bash
 go run scripts/virtual_meter.go
 make engine-serve
+make outbox-publish
 ```
 
 ## Layout

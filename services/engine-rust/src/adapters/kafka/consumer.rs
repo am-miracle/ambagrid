@@ -12,9 +12,7 @@ use rdkafka::{
 use crate::{
     actions::ingest_reading::IngestReading,
     domain::asset::Reading,
-    ports::{
-        AlertEvents, DeadLetter, DeadLetterSink, DeadLetterStage, IngestRepository, PortError,
-    },
+    ports::{DeadLetter, DeadLetterSink, DeadLetterStage, IngestRepository, PortError},
     telemetry::decode::decode_metric_payload,
 };
 
@@ -65,14 +63,13 @@ impl ConsumerStats {
     }
 }
 
-pub async fn run<S, E, D>(
+pub async fn run<S, D>(
     config: ConsumerConfig,
-    ingest: &IngestReading<'_, S, E>,
+    ingest: &IngestReading<'_, S>,
     dead_letters: &D,
 ) -> Result<(), ConsumerError>
 where
     S: IngestRepository,
-    E: AlertEvents,
     D: DeadLetterSink,
 {
     let consumer: StreamConsumer = ClientConfig::new()
@@ -150,8 +147,8 @@ where
     }
 }
 
-async fn handle_payload<S, E, D>(
-    ingest: &IngestReading<'_, S, E>,
+async fn handle_payload<S, D>(
+    ingest: &IngestReading<'_, S>,
     dead_letters: &D,
     stats: &ConsumerStats,
     topic: &str,
@@ -161,7 +158,6 @@ async fn handle_payload<S, E, D>(
 ) -> bool
 where
     S: IngestRepository,
-    E: AlertEvents,
     D: DeadLetterSink,
 {
     match decode_metric_payload(&bytes) {
@@ -207,13 +203,12 @@ fn source_event_id(topic: &str, partition: i32, offset: i64) -> String {
 // Retries only PortError::Storage (assumed transient); a data-shape error
 // (PortError::Message) won't be fixed by retrying, so it's returned
 // immediately.
-async fn ingest_with_retry<S, E>(
-    ingest: &IngestReading<'_, S, E>,
+async fn ingest_with_retry<S>(
+    ingest: &IngestReading<'_, S>,
     reading: &Reading,
 ) -> Result<(), PortError>
 where
     S: IngestRepository,
-    E: AlertEvents,
 {
     let mut attempt = 1;
     loop {
@@ -283,10 +278,7 @@ mod tests {
     use prost::Message as _;
 
     use crate::{
-        domain::{
-            alert::Alert,
-            asset::{Asset, AssetState, SmartMeterState},
-        },
+        domain::asset::{Asset, AssetState, SmartMeterState},
         ports::{IngestWrite, PolicyOutcome},
         telemetry::{
             decode::DecodeError,
@@ -330,18 +322,6 @@ mod tests {
             source_event_id("telemetry.ingested", 3, 918),
             "telemetry.ingested:3:918"
         );
-    }
-
-    struct NoopEvents;
-
-    impl AlertEvents for NoopEvents {
-        async fn alert_opened(&self, _alert: &Alert) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        async fn alert_resolved(&self, _alert: &Alert) -> Result<(), PortError> {
-            Ok(())
-        }
     }
 
     // Fails with a storage (transient) error on every attempt below
@@ -415,8 +395,7 @@ mod tests {
             attempts: AtomicU32::new(0),
             fail_until: 1,
         };
-        let events = NoopEvents;
-        let ingest = IngestReading::new(&store, &events);
+        let ingest = IngestReading::new(&store);
 
         let result = ingest_with_retry(&ingest, &sample_reading()).await;
 
@@ -430,8 +409,7 @@ mod tests {
             attempts: AtomicU32::new(0),
             fail_until: u32::MAX,
         };
-        let events = NoopEvents;
-        let ingest = IngestReading::new(&store, &events);
+        let ingest = IngestReading::new(&store);
 
         let result = ingest_with_retry(&ingest, &sample_reading()).await;
 
@@ -442,8 +420,7 @@ mod tests {
     #[tokio::test]
     async fn ingest_with_retry_does_not_retry_data_shape_errors() {
         let store = DataShapeErrorStore::default();
-        let events = NoopEvents;
-        let ingest = IngestReading::new(&store, &events);
+        let ingest = IngestReading::new(&store);
 
         let result = ingest_with_retry(&ingest, &sample_reading()).await;
 
@@ -479,8 +456,7 @@ mod tests {
             attempts: AtomicU32::new(0),
             fail_until: u32::MAX,
         };
-        let events = NoopEvents;
-        let ingest = IngestReading::new(&store, &events);
+        let ingest = IngestReading::new(&store);
         let sink = RecordingDeadLetterSink::default();
         let stats = ConsumerStats::default();
 

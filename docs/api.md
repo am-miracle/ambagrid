@@ -7,7 +7,8 @@ and act on it without `psql` or `rpk`.
 Most endpoints are read-model queries. Operator commands are intentionally
 narrow and audit-oriented: they validate the request, use the trusted operator
 identity supplied by the deployment gateway, then make the operational state
-change durable.
+change durable. State-changing commands also write a business event to the
+command outbox in the same transaction.
 
 ## Shape of the Service
 
@@ -290,6 +291,10 @@ authenticates the caller and injects `X-Operator-Id`; the API treats that header
 as trusted deployment metadata and records it as `resolved_by`. Do not expose
 this endpoint directly to the internet.
 
+Use this endpoint only when the operator is closing that alert instance. If the
+asset is still violating the same policy, the next telemetry tick can open a
+new alert for the same `asset_id` and `kind`.
+
 ```bash
 curl -X POST "http://localhost:8081/v1/alerts/0bb99171-6d9a-42d4-8124-a5d995b10fd4/resolve" \
   -H "Content-Type: application/json" \
@@ -357,6 +362,13 @@ behind a load balancer. What does not scale automatically:
 - **Read replicas.** The service now includes operator commands, so the primary
   `DATABASE_URL` must point at a writable database. Split read/write pools
   before pointing listings at replicas.
+- **Outbox publisher.** State-changing operator commands and engine alert
+  transitions write business events into `command_event_outbox`. Run
+  `engine-rust publish-outbox` to lease unpublished rows, encode their internal
+  JSON payloads as the topic's protobuf message, publish them to Redpanda, and
+  mark them published. Delivery is at least once, so consumers should treat the
+  outbox event ID as an idempotency key. The publisher backs off on broker
+  failures and removes published rows after 30 days.
 
 Every request carries a deadline into Postgres, and `DB_STATEMENT_TIMEOUT` is
 the server-side backstop: without it a query whose client gave up keeps running
@@ -372,6 +384,3 @@ and pins the connection that cancelling it was meant to free.
   these.
 - **General writes.** Alert resolution is the only operator command exposed
   here. Meter commands, payments, credits, and customer changes are not here yet.
-- **Command event publishing.** The Go alert-resolution endpoint updates
-  Postgres and resolution history. Publishing `alert.resolved` from this path
-  still needs a command-event publisher or an engine command bridge.

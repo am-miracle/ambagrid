@@ -26,6 +26,8 @@ type Config struct {
 	DefaultPageSize       int
 	MaxPageSize           int
 	GlobalHistoryPageSize int
+
+	AlertResolvedTopic string
 }
 
 // FromEnv loads defaults and rejects missing or invalid values.
@@ -93,6 +95,7 @@ func FromEnv() (Config, error) {
 		DefaultPageSize:       defaultPageSize,
 		MaxPageSize:           maxPageSize,
 		GlobalHistoryPageSize: globalHistoryPageSize,
+		AlertResolvedTopic:    envString("ALERT_RESOLVED_TOPIC", "alert.resolved"),
 	}
 
 	if cfg.HTTPAddr == "" {
@@ -121,6 +124,9 @@ func FromEnv() (Config, error) {
 	}
 	if cfg.GlobalHistoryPageSize < 1 || cfg.GlobalHistoryPageSize > cfg.MaxPageSize {
 		return Config{}, fmt.Errorf("API_GLOBAL_HISTORY_PAGE_SIZE must be between one and API_MAX_PAGE_SIZE")
+	}
+	if cfg.AlertResolvedTopic == "" {
+		return Config{}, fmt.Errorf("ALERT_RESOLVED_TOPIC must not be empty")
 	}
 
 	return cfg, nil

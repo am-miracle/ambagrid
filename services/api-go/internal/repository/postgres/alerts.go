@@ -3,6 +3,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -69,10 +70,18 @@ INSERT INTO alert_resolution_history (
 )
 VALUES ($1::uuid, $2, $3, $4)`
 
+const insertCommandEventSQL = `
+INSERT INTO command_event_outbox (
+    topic, event_type, aggregate_type, aggregate_id, payload
+)
+VALUES ($1, $2, $3, $4, $5::jsonb)`
+
 const alertExistsSQL = `
 SELECT EXISTS (
     SELECT 1 FROM alerts WHERE alert_id = $1::uuid
 )`
+
+const alertResolvedEventType = "alert.resolved"
 
 func (s *Store) ListAlerts(ctx context.Context, query domain.AlertQuery) (page.Page[domain.Alert], error) {
 	var (
@@ -211,11 +220,63 @@ func (s *Store) ResolveAlert(ctx context.Context, command domain.ResolveAlertCom
 	if _, err := tx.Exec(ctx, insertAlertResolutionSQL, command.AlertID, resolvedAt, command.ResolutionNote, command.ResolvedBy); err != nil {
 		return domain.Alert{}, fmt.Errorf("insert alert resolution history: %w", err)
 	}
+	if err := s.insertAlertResolvedEvent(ctx, tx, alert); err != nil {
+		return domain.Alert{}, err
+	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return domain.Alert{}, fmt.Errorf("commit alert resolution transaction: %w", err)
 	}
 	return alert, nil
+}
+
+func (s *Store) insertAlertResolvedEvent(ctx context.Context, tx pgx.Tx, alert domain.Alert) error {
+	payload, err := alertResolvedPayload(alert)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, insertCommandEventSQL, s.outboxTopics.AlertResolved, alertResolvedEventType, "alert", alert.AlertID, payload); err != nil {
+		return fmt.Errorf("insert alert resolved event: %w", err)
+	}
+	return nil
+}
+
+func alertResolvedPayload(alert domain.Alert) ([]byte, error) {
+	if alert.ResolvedAt == nil {
+		return nil, fmt.Errorf("%w: resolved alert %q is missing resolved_at", domain.ErrInvalidData, alert.AlertID)
+	}
+	if alert.ResolutionNote == nil {
+		return nil, fmt.Errorf("%w: resolved alert %q is missing resolution_note", domain.ErrInvalidData, alert.AlertID)
+	}
+	if alert.ResolvedBy == nil {
+		return nil, fmt.Errorf("%w: resolved alert %q is missing resolved_by", domain.ErrInvalidData, alert.AlertID)
+	}
+
+	payload := map[string]any{
+		"alert_id":        alert.AlertID,
+		"asset_id":        alert.AssetID,
+		"site_id":         alert.SiteID,
+		"severity":        protoSeverity(alert.Severity),
+		"reason":          alert.Reason,
+		"opened_at_utc":   alert.OpenedAt.Unix(),
+		"resolved_at_utc": alert.ResolvedAt.Unix(),
+		"resolution_note": *alert.ResolutionNote,
+		"resolved_by":     *alert.ResolvedBy,
+	}
+	return json.Marshal(payload)
+}
+
+func protoSeverity(severity domain.Severity) string {
+	switch severity {
+	case domain.SeverityInfo:
+		return "SEVERITY_INFO"
+	case domain.SeverityWarning:
+		return "SEVERITY_WARNING"
+	case domain.SeverityCritical:
+		return "SEVERITY_CRITICAL"
+	default:
+		return "SEVERITY_UNSPECIFIED"
+	}
 }
 
 func queryAlertResolutions(ctx context.Context, tx pgx.Tx, alertID string) ([]domain.AlertResolution, error) {

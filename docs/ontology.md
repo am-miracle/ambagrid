@@ -344,7 +344,10 @@ Effects:
 
 ### ResolveAlert
 
-Used when the problem has been handled.
+Used when the problem has been handled or the alert condition has recovered.
+It closes one alert instance. If the same asset and alert kind are still in a
+failing state, the next policy evaluation may open a new alert row with a new
+`alert_id`; alerts are not flipped back from `resolved` to `open`.
 
 Inputs:
 
@@ -356,6 +359,7 @@ Effects:
 
 - updates `Alert`
 - records resolution history
+- records an `alert.resolved` business event
 
 Operator-triggered resolution must authorize `resolved_by` as an `OperatorId`
 before mutating alert state. Automatic recovery uses the reserved internal
@@ -483,9 +487,17 @@ The names should describe business events, not service internals.
 
 ### Sample alert.opened / alert.resolved payloads
 
-Both are protobuf (`proto/alerts.proto`); shown here as their JSON
-equivalent for readability, published by the Rust engine after the
-corresponding Postgres write commits.
+Both are protobuf (`proto/alerts.proto`); shown here as their JSON equivalent
+for readability. Every alert state transition writes this shape to the command
+outbox in the same Postgres transaction, whether the transition comes from the
+Rust engine or an operator command. The outbox publisher converts the internal
+JSON representation to protobuf before sending it to Redpanda.
+
+Delivery is at least once. Consumers must use the `event_id` Kafka header as
+their idempotency key and tolerate duplicate delivery. Events for the same
+aggregate are keyed by that aggregate, but consumers should still handle
+out-of-order arrival because multiple publishers can claim independent batches
+and claim expiry can cause a row to be republished.
 
 `alert.opened`:
 
