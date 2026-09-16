@@ -157,7 +157,7 @@ func TestAlertServiceListLetsScopedHistoryUseTheNormalLimit(t *testing.T) {
 func TestAlertServiceGetReturnsResolutionHistoryWithTheAlert(t *testing.T) {
 	repo := &fakeAlertRepository{
 		alert:       domain.Alert{AlertID: "0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b"},
-		resolutions: []domain.AlertResolution{{ResolvedBy: "operator-0101"}},
+		resolutions: []domain.AlertResolution{{ResolvedBy: "actor-0101"}},
 	}
 
 	detail, err := newTestAlertService(repo).Get(context.Background(), "0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b")
@@ -165,7 +165,7 @@ func TestAlertServiceGetReturnsResolutionHistoryWithTheAlert(t *testing.T) {
 		t.Fatalf("Get() error = %v", err)
 	}
 
-	if len(detail.Resolutions) != 1 || detail.Resolutions[0].ResolvedBy != "operator-0101" {
+	if len(detail.Resolutions) != 1 || detail.Resolutions[0].ResolvedBy != "actor-0101" {
 		t.Fatalf("Resolutions = %v, want the repository's history", detail.Resolutions)
 	}
 }
@@ -202,7 +202,7 @@ func TestAlertServiceResolveValidatesAndPassesACommandThrough(t *testing.T) {
 
 	alert, err := newTestAlertService(repo).Resolve(context.Background(), "0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b", ResolveAlertRequest{
 		ResolutionNote: "  fan cleaned  ",
-		ResolvedBy:     " operator-0101 ",
+		ResolvedBy:     " actor-0101 ",
 	})
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
@@ -211,14 +211,14 @@ func TestAlertServiceResolveValidatesAndPassesACommandThrough(t *testing.T) {
 	if alert.Status != domain.AlertStatusResolved {
 		t.Fatalf("alert status = %v, want resolved", alert.Status)
 	}
-	if got := repo.gotResolveCommand; got.AlertID != "0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b" || got.ResolutionNote != "fan cleaned" || got.ResolvedBy != "operator-0101" {
+	if got := repo.gotResolveCommand; got.AlertID != "0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b" || got.ResolutionNote != "fan cleaned" || got.ResolvedBy != "actor-0101" {
 		t.Fatalf("resolve command = %+v", got)
 	}
 }
 
 func TestAlertServiceResolveRejectsBadInputBeforeQuerying(t *testing.T) {
 	tests := map[string]ResolveAlertRequest{
-		"empty note":      {ResolutionNote: " ", ResolvedBy: "operator-0101"},
+		"empty note":      {ResolutionNote: " ", ResolvedBy: "actor-0101"},
 		"empty operator":  {ResolutionNote: "fan cleaned", ResolvedBy: " "},
 		"system operator": {ResolutionNote: "fan cleaned", ResolvedBy: "system"},
 	}

@@ -3,12 +3,19 @@ package domain
 
 import "time"
 
-// Site summarizes assets and open alerts for one site.
+// Site carries provisioned metadata and operational rollups for one site.
 type Site struct {
-	SiteID     string
-	AssetCount int64
-	LastSeenAt *time.Time
-	OpenAlerts AlertCounts
+	SiteID         string
+	Name           string
+	Country        *string
+	Region         *string
+	GridOperatorID *string
+	Lat            *float64
+	Lng            *float64
+	Status         string
+	AssetCount     int64
+	LastSeenAt     *time.Time
+	OpenAlerts     AlertCounts
 }
 
 type AlertCounts struct {

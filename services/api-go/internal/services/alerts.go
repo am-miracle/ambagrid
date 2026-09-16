@@ -88,7 +88,7 @@ func (s *AlertService) Resolve(ctx context.Context, alertID string, request Reso
 		return domain.Alert{}, fmt.Errorf("%w: resolution_note must not be empty", ErrInvalidRequest)
 	}
 
-	resolvedBy, err := domain.ValidateOperatorID(request.ResolvedBy)
+	resolvedBy, err := domain.ValidateActorID(request.ResolvedBy)
 	if err != nil {
 		return domain.Alert{}, err
 	}

@@ -5,7 +5,7 @@ and the alert lifecycle — over HTTP, so operators and the control room can see
 and act on it without `psql` or `rpk`.
 
 Most endpoints are read-model queries. Operator commands are intentionally
-narrow and audit-oriented: they validate the request, use the trusted operator
+narrow and audit-oriented: they validate the request, use the trusted Actor
 identity supplied by the deployment gateway, then make the operational state
 change durable. State-changing commands also write a business event to the
 command outbox in the same transaction.
@@ -126,11 +126,23 @@ The response always reports the size actually applied in `page.limit`.
 
 Fleet rollup: asset count, most recent report, and open alerts by severity.
 
-Sites are derived from `assets.site_id`; there is no sites table yet.
+Sites are provisioned domain objects. A newly provisioned site is returned even
+before its first asset reports; asset and alert fields are live rollups.
+`operator_id` identifies the GridOperator organization responsible for the
+site. It does not identify a human caller. Sites backfilled by the migration
+may return `null` until ownership is assigned; production provisioning must
+supply a GridOperator.
 
 ```json
 {
   "site_id": "site-01",
+  "name": "Kajiado 1",
+  "country": "KE",
+  "region": "Kajiado",
+  "operator_id": "operator-0101",
+  "lat": -1.8504,
+  "lng": 36.7768,
+  "status": "active",
   "asset_count": 3,
   "last_seen_at": "2026-09-03T01:58:31.535397+01:00",
   "open_alerts": { "total": 1, "critical": 1, "warning": 0, "info": 0 }
@@ -263,13 +275,13 @@ One alert with its resolution history inline:
     "source_event_id": null,
     "resolved_at": "2026-09-02T02:58:31.546336+01:00",
     "resolution_note": "fan cleaned",
-    "resolved_by": "operator-0101",
+    "resolved_by": "actor-0101",
     "resolutions": [
       {
         "resolution_id": "1c4dff79-cb15-48e6-8a82-a93417fba80f",
         "resolved_at": "2026-09-02T02:58:31.546336+01:00",
         "resolution_note": "fan cleaned",
-        "resolved_by": "operator-0101",
+        "resolved_by": "actor-0101",
         "recorded_at": "2026-09-03T01:58:31.546336+01:00"
       }
     ]
@@ -287,7 +299,7 @@ an operator has resolved one alert, not by fleet size.
 Resolves one open alert as an operator action.
 
 The API does not authenticate users itself yet. Deploy it behind a gateway that
-authenticates the caller and injects `X-Operator-Id`; the API treats that header
+authenticates the caller and injects `X-Actor-Id`; the API treats that header
 as trusted deployment metadata and records it as `resolved_by`. Do not expose
 this endpoint directly to the internet.
 
@@ -298,7 +310,7 @@ new alert for the same `asset_id` and `kind`.
 ```bash
 curl -X POST "http://localhost:8081/v1/alerts/0bb99171-6d9a-42d4-8124-a5d995b10fd4/resolve" \
   -H "Content-Type: application/json" \
-  -H "X-Operator-Id: operator-0101" \
+  -H "X-Actor-Id: actor-0101" \
   -d '{"resolution_note":"fan cleaned"}'
 ```
 
@@ -311,8 +323,8 @@ Request body:
 ```
 
 Successful responses return the resolved alert in the normal object envelope.
-Missing `X-Operator-Id` returns 401. A malformed alert ID, empty
-`resolution_note`, empty operator ID, or reserved `system` operator ID returns
+Missing `X-Actor-Id` returns 401. A malformed alert ID, empty
+`resolution_note`, empty Actor ID, or reserved `system` Actor ID returns
 400. A missing alert returns 404. An alert that exists but is no longer open
 returns 409.
 
@@ -355,10 +367,11 @@ behind a load balancer. What does not scale automatically:
 - **Connections.** Each replica opens up to `DB_MAX_CONNS`. Multiply by replica
   count before raising it; past a few replicas the answer is a connection
   pooler, not a bigger pool.
-- **`GET /v1/sites`.** The only listing that aggregates rather than seeks: it
-  scans every asset and every open alert regardless of page. Acceptable while a
-  deployment is one operator's grid; the fix when it stops being acceptable is
-  a continuous aggregate or a real sites table, not a bigger query.
+- **Operator scope.** `/v1/sites` remains the fleet-wide read collection.
+  Organization-scoped reads and future provisioning use
+  `/v1/grid-operators/{grid_operator_id}/sites`, with the same prefix for other
+  organization-owned collections. The path ID is a GridOperator ID; human
+  identity continues to come from trusted Actor authentication metadata.
 - **Read replicas.** The service now includes operator commands, so the primary
   `DATABASE_URL` must point at a writable database. Split read/write pools
   before pointing listings at replicas.
@@ -377,7 +390,7 @@ and pins the connection that cancelling it was meant to free.
 ## Not Here Yet
 
 - **Built-in authentication.** There is none. Run it behind a gateway that
-  terminates TLS, authenticates callers, and injects `X-Operator-Id` for
+  terminates TLS, authenticates callers, and injects `X-Actor-Id` for
   operator commands; do not expose it to the internet as is.
 - **Customers, balances, payments, commands.** Those ontology objects have no
   tables yet. When they land, they are new `/v1` collections, not changes to

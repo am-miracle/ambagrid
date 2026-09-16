@@ -62,13 +62,13 @@ type ResolveAlertCommand struct {
 	ResolvedBy     string
 }
 
-func ValidateOperatorID(value string) (string, error) {
+func ValidateActorID(value string) (string, error) {
 	trimmed := strings.TrimSpace(value)
 	switch trimmed {
 	case "":
-		return "", fmt.Errorf("%w: operator_id must not be empty", ErrInvalidID)
+		return "", fmt.Errorf("%w: actor_id must not be empty", ErrInvalidID)
 	case "system":
-		return "", fmt.Errorf("%w: operator_id must not be the reserved system actor", ErrInvalidID)
+		return "", fmt.Errorf("%w: actor_id must not be the reserved system actor", ErrInvalidID)
 	default:
 		return trimmed, nil
 	}

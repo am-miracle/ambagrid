@@ -32,7 +32,7 @@ curl http://localhost:8081/v1/sites
 curl "http://localhost:8081/v1/alerts?status=open&severity=critical"
 curl -X POST http://localhost:8081/v1/alerts/0bb99171-6d9a-42d4-8124-a5d995b10fd4/resolve \
   -H "Content-Type: application/json" \
-  -H "X-Operator-Id: operator-0101" \
+  -H "X-Actor-Id: actor-0101" \
   -d '{"resolution_note":"fan cleaned"}'
 ```
 
@@ -40,10 +40,17 @@ With no telemetry ingested yet, every listing is empty. Run the simulator and
 the engine to give it something to serve:
 
 ```bash
-go run scripts/virtual_meter.go
+docker compose exec database psql -U ambagrid_admin -d ambagrid_operational \
+  -c "INSERT INTO grid_operators (operator_id, name) VALUES ('operator-0101', 'Demo Operator') ON CONFLICT (operator_id) DO NOTHING; INSERT INTO sites (site_id, name, country, region, operator_id) VALUES ('ng-kaji-01', 'Kajiado 1', 'KE', 'Kajiado', 'operator-0101') ON CONFLICT (site_id) DO NOTHING"
+go run scripts/virtual_meter.go -sites 1
 make engine-serve
 make outbox-publish
 ```
+
+This direct SQL path is limited to local development and initial bootstrap.
+Production provisioning must go through the authenticated provisioning
+workflow when it is available. Provision every site ID before its first
+telemetry arrives so a typo cannot create a ghost site.
 
 ## Layout
 

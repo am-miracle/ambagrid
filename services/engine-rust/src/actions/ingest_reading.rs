@@ -1,8 +1,8 @@
 use crate::{
     domain::{
+        actor::ResolutionActor,
         alert::{Alert, AlertKind},
         asset::Reading,
-        operator::ResolutionActor,
         rules::{INTERNAL_TEMPERATURE_ALERT_KIND, ThresholdPolicy},
     },
     ports::{IngestRepository, PolicyOutcome, PortError},

@@ -1,4 +1,4 @@
-// Builds site rollups from assets and open alerts.
+// lists site metadata with operational rollups from assets and open alerts.
 package postgres
 
 import (
@@ -27,22 +27,30 @@ open_alert_rollup AS (
     WHERE status = 'open'
     GROUP BY site_id
 )
-SELECT a.site_id,
-       a.asset_count,
+SELECT s.site_id,
+       s.name,
+       s.country,
+       s.region,
+       s.operator_id,
+       s.lat,
+       s.lng,
+       s.status,
+       coalesce(a.asset_count, 0),
        a.last_seen_at,
        coalesce(o.total, 0),
        coalesce(o.critical, 0),
        coalesce(o.warning, 0),
        coalesce(o.info, 0)
-FROM asset_rollup a
-LEFT JOIN open_alert_rollup o ON o.site_id = a.site_id`
+FROM sites s
+LEFT JOIN asset_rollup a ON a.site_id = s.site_id
+LEFT JOIN open_alert_rollup o ON o.site_id = s.site_id`
 
 func buildListSitesQuery(afterSiteID *string, limit int) (string, []any) {
 	b := newPredicates()
 	if afterSiteID != nil {
-		b.add("a.site_id > ", *afterSiteID)
+		b.add("s.site_id > ", *afterSiteID)
 	}
-	return b.finish(listSitesSQL, "ORDER BY a.site_id", limit)
+	return b.finish(listSitesSQL, "ORDER BY s.site_id", limit)
 }
 
 func (s *Store) ListSites(ctx context.Context, query domain.SiteQuery) (page.Page[domain.Site], error) {
@@ -70,6 +78,13 @@ func (s *Store) ListSites(ctx context.Context, query domain.SiteQuery) (page.Pag
 		var site domain.Site
 		if err := rows.Scan(
 			&site.SiteID,
+			&site.Name,
+			&site.Country,
+			&site.Region,
+			&site.GridOperatorID,
+			&site.Lat,
+			&site.Lng,
+			&site.Status,
 			&site.AssetCount,
 			&site.LastSeenAt,
 			&site.OpenAlerts.Total,

@@ -116,7 +116,7 @@ func TestResolveAlertUpdatesAndRecordsHistoryAtomically(t *testing.T) {
 	command := domain.ResolveAlertCommand{
 		AlertID:        "0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b",
 		ResolutionNote: "fan cleaned",
-		ResolvedBy:     "operator-0101",
+		ResolvedBy:     "actor-0101",
 	}
 	tx := &fakeTransaction{rows: []pgx.Row{resolvedAlertRow(command)}}
 	pool := &fakeDatabasePool{tx: tx}
@@ -166,7 +166,7 @@ func TestResolveAlertUpdatesAndRecordsHistoryAtomically(t *testing.T) {
 func TestAlertResolvedPayloadMatchesSharedOutboxFixture(t *testing.T) {
 	resolvedAt := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
 	resolutionNote := "fan cleaned"
-	resolvedBy := "operator-0101"
+	resolvedBy := "actor-0101"
 	alert := domain.Alert{
 		AlertID:        "0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b",
 		AssetID:        "battery-01",

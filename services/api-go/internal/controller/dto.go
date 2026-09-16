@@ -185,10 +185,17 @@ func toAlertResolutionDTO(resolution domain.AlertResolution) alertResolutionDTO 
 }
 
 type siteDTO struct {
-	SiteID     string         `json:"site_id"`
-	AssetCount int64          `json:"asset_count"`
-	LastSeenAt *time.Time     `json:"last_seen_at"`
-	OpenAlerts alertCountsDTO `json:"open_alerts"`
+	SiteID         string         `json:"site_id"`
+	Name           string         `json:"name"`
+	Country        *string        `json:"country"`
+	Region         *string        `json:"region"`
+	GridOperatorID *string        `json:"operator_id"`
+	Lat            *float64       `json:"lat"`
+	Lng            *float64       `json:"lng"`
+	Status         string         `json:"status"`
+	AssetCount     int64          `json:"asset_count"`
+	LastSeenAt     *time.Time     `json:"last_seen_at"`
+	OpenAlerts     alertCountsDTO `json:"open_alerts"`
 }
 
 type alertCountsDTO struct {
@@ -200,9 +207,16 @@ type alertCountsDTO struct {
 
 func toSiteDTO(site domain.Site) siteDTO {
 	return siteDTO{
-		SiteID:     site.SiteID,
-		AssetCount: site.AssetCount,
-		LastSeenAt: site.LastSeenAt,
+		SiteID:         site.SiteID,
+		Name:           site.Name,
+		Country:        site.Country,
+		Region:         site.Region,
+		GridOperatorID: site.GridOperatorID,
+		Lat:            site.Lat,
+		Lng:            site.Lng,
+		Status:         site.Status,
+		AssetCount:     site.AssetCount,
+		LastSeenAt:     site.LastSeenAt,
 		OpenAlerts: alertCountsDTO{
 			Total:    site.OpenAlerts.Total,
 			Critical: site.OpenAlerts.Critical,

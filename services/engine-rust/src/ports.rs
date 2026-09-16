@@ -4,9 +4,9 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::domain::{
+    actor::{ActorId, ResolutionActor},
     alert::{Alert, AlertDecision, AlertKind},
     asset::Reading,
-    operator::{OperatorId, ResolutionActor},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -78,7 +78,7 @@ pub trait AlertRepository: Send + Sync {
 pub trait ResolveAlertPermission: Send + Sync {
     fn authorize_resolve_alert(
         &self,
-        operator_id: &OperatorId,
+        actor_id: &ActorId,
     ) -> impl Future<Output = Result<(), PortError>> + Send;
 }
 

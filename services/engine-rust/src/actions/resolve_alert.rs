@@ -3,8 +3,8 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
+        actor::{ActorId, ResolutionActor},
         alert::Alert,
-        operator::{OperatorId, ResolutionActor},
     },
     ports::{AlertRepository, PortError, ResolveAlertPermission},
 };
@@ -13,34 +13,32 @@ use crate::{
 pub struct ResolveAlertInput {
     pub alert_id: Uuid,
     pub resolution_note: String,
-    pub resolved_by: OperatorId,
+    pub resolved_by: ActorId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AllowedResolveOperators {
-    allowed_operator_ids: Vec<OperatorId>,
+pub struct AllowedResolveActors {
+    allowed_actor_ids: Vec<ActorId>,
 }
 
-impl AllowedResolveOperators {
-    pub fn new(allowed_operator_ids: Vec<OperatorId>) -> Self {
-        Self {
-            allowed_operator_ids,
-        }
+impl AllowedResolveActors {
+    pub fn new(allowed_actor_ids: Vec<ActorId>) -> Self {
+        Self { allowed_actor_ids }
     }
 }
 
-impl ResolveAlertPermission for AllowedResolveOperators {
-    async fn authorize_resolve_alert(&self, operator_id: &OperatorId) -> Result<(), PortError> {
+impl ResolveAlertPermission for AllowedResolveActors {
+    async fn authorize_resolve_alert(&self, actor_id: &ActorId) -> Result<(), PortError> {
         if self
-            .allowed_operator_ids
+            .allowed_actor_ids
             .iter()
-            .any(|allowed| allowed == operator_id)
+            .any(|allowed| allowed == actor_id)
         {
             Ok(())
         } else {
             Err(PortError::message(format!(
-                "operator {} is not authorized to resolve alerts",
-                operator_id.as_str()
+                "actor {} is not authorized to resolve alerts",
+                actor_id.as_str()
             )))
         }
     }
@@ -81,7 +79,7 @@ where
                 input.alert_id,
                 resolved_at,
                 resolution_note.as_str(),
-                ResolutionActor::Operator(resolved_by),
+                ResolutionActor::Human(resolved_by),
             )
             .await
     }
@@ -143,13 +141,13 @@ mod tests {
     }
 
     impl ResolveAlertPermission for FakePermissions {
-        async fn authorize_resolve_alert(&self, operator_id: &OperatorId) -> Result<(), PortError> {
+        async fn authorize_resolve_alert(&self, actor_id: &ActorId) -> Result<(), PortError> {
             if self.allow {
                 Ok(())
             } else {
                 Err(PortError::message(format!(
-                    "operator {} is not authorized to resolve alerts",
-                    operator_id.as_str()
+                    "actor {} is not authorized to resolve alerts",
+                    actor_id.as_str()
                 )))
             }
         }
@@ -189,7 +187,7 @@ mod tests {
                 ResolveAlertInput {
                     alert_id,
                     resolution_note: "checked by field operator".to_string(),
-                    resolved_by: OperatorId::new("operator-0101").unwrap(),
+                    resolved_by: ActorId::new("actor-0101").unwrap(),
                 },
                 resolved_at,
             )
@@ -205,12 +203,12 @@ mod tests {
         );
         assert_eq!(
             resolved.resolved_by.as_ref().map(ResolutionActor::as_str),
-            Some("operator-0101")
+            Some("actor-0101")
         );
     }
 
     #[tokio::test]
-    async fn trims_operator_resolution_inputs() {
+    async fn trims_actor_resolution_inputs() {
         let alert = open_alert();
         let alert_id = alert.alert_id;
         let store = FakeAlertRepository {
@@ -225,7 +223,7 @@ mod tests {
                 ResolveAlertInput {
                     alert_id,
                     resolution_note: "  replaced cooling fan  ".to_string(),
-                    resolved_by: OperatorId::new("  operator-0101  ").unwrap(),
+                    resolved_by: ActorId::new("  actor-0101  ").unwrap(),
                 },
                 Utc::now(),
             )
@@ -238,7 +236,7 @@ mod tests {
         );
         assert_eq!(
             resolved.resolved_by.as_ref().map(ResolutionActor::as_str),
-            Some("operator-0101")
+            Some("actor-0101")
         );
     }
 
@@ -253,7 +251,7 @@ mod tests {
                 ResolveAlertInput {
                     alert_id: Uuid::new_v4(),
                     resolution_note: " ".to_string(),
-                    resolved_by: OperatorId::new("operator-0101").unwrap(),
+                    resolved_by: ActorId::new("actor-0101").unwrap(),
                 },
                 Utc::now(),
             )
@@ -264,7 +262,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_unauthorized_operator_before_mutating() {
+    async fn rejects_unauthorized_actor_before_mutating() {
         let alert = open_alert();
         let alert_id = alert.alert_id;
         let store = FakeAlertRepository {
@@ -279,7 +277,7 @@ mod tests {
                 ResolveAlertInput {
                     alert_id,
                     resolution_note: "handled manually".to_string(),
-                    resolved_by: OperatorId::new("operator-0101").unwrap(),
+                    resolved_by: ActorId::new("actor-0101").unwrap(),
                 },
                 Utc::now(),
             )
@@ -288,28 +286,27 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "operator operator-0101 is not authorized to resolve alerts"
+            "actor actor-0101 is not authorized to resolve alerts"
         );
         assert!(store.resolve_calls.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
-    async fn configured_permission_allows_only_listed_operators() {
-        let permissions =
-            AllowedResolveOperators::new(vec![OperatorId::new("operator-0101").unwrap()]);
+    async fn configured_permission_allows_only_listed_actors() {
+        let permissions = AllowedResolveActors::new(vec![ActorId::new("actor-0101").unwrap()]);
 
         permissions
-            .authorize_resolve_alert(&OperatorId::new("operator-0101").unwrap())
+            .authorize_resolve_alert(&ActorId::new("actor-0101").unwrap())
             .await
             .unwrap();
         let err = permissions
-            .authorize_resolve_alert(&OperatorId::new("operator-9999").unwrap())
+            .authorize_resolve_alert(&ActorId::new("actor-9999").unwrap())
             .await
             .unwrap_err();
 
         assert_eq!(
             err.to_string(),
-            "operator operator-9999 is not authorized to resolve alerts"
+            "actor actor-9999 is not authorized to resolve alerts"
         );
     }
 }

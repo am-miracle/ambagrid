@@ -11,14 +11,14 @@ use std::time::Duration;
 
 use actions::{
     publish_outbox::PublishOutbox,
-    resolve_alert::{AllowedResolveOperators, ResolveAlert, ResolveAlertInput},
+    resolve_alert::{AllowedResolveActors, ResolveAlert, ResolveAlertInput},
 };
 use adapters::{
     kafka::producer::KafkaOutboxEventPublisher,
     postgres::{PostgresIngestRepository, PostgresOutboxRepository},
 };
 use config::Config;
-use domain::operator::OperatorId;
+use domain::actor::ActorId;
 use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
@@ -56,7 +56,7 @@ async fn resolve_alert(args: Vec<String>) -> Result<(), Box<dyn std::error::Erro
     }
 
     let alert_id = Uuid::parse_str(&args[0])?;
-    let resolved_by = OperatorId::new(args[1].clone())?;
+    let resolved_by = ActorId::new(args[1].clone())?;
     let resolution_note = args[2..].join(" ");
 
     let cfg = Config::from_env()?;
@@ -69,7 +69,7 @@ async fn resolve_alert(args: Vec<String>) -> Result<(), Box<dyn std::error::Erro
         cfg.alert_opened_topic.clone(),
         cfg.alert_resolved_topic.clone(),
     );
-    let permissions = AllowedResolveOperators::new(cfg.alert_resolve_operators.clone());
+    let permissions = AllowedResolveActors::new(cfg.alert_resolve_actors.clone());
     let action = ResolveAlert::new(&store, &permissions);
 
     let alert = action

@@ -1,0 +1,3 @@
+# Separate GridOperators from Actors
+
+AmbaGrid identifies the organization responsible for a site as a `GridOperator` and the human performing an audited action as an `Actor`. Operator-owned resources use `/v1/grid-operators/{grid_operator_id}/...`; audited commands receive a trusted Actor identity. `sites.operator_id` remains nullable while legacy sites are backfilled without trustworthy ownership, but production provisioning must supply it. This avoids treating an organization and one of its staff members as the same security principal while allowing the existing site migration to preserve data.
