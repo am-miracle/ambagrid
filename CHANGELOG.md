@@ -31,6 +31,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **outbox:** Tighten publisher standards
 - **outbox:** Preserve topic compatibility
 - **outbox:** Validate opened alert payloads
+- **outbox:** Publish alert events durably (#12)
 
 ### Maintenance
 
