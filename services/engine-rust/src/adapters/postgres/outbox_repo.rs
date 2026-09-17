@@ -4,7 +4,9 @@ use sqlx::{PgPool, Row, query};
 use tokio::time::timeout;
 use uuid::Uuid;
 
-use crate::ports::{MarkPublishedOutcome, OutboxEvent, OutboxRepository, PortError};
+use crate::ports::{
+    MarkPublishedOutcome, OutboxEvent, OutboxEventType, OutboxRepository, PortError,
+};
 
 const DB_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 const PRUNE_BATCH_SIZE: i64 = 1_000;
@@ -67,7 +69,7 @@ impl OutboxRepository for PostgresOutboxRepository {
                 event_id: row.get::<Uuid, _>("event_id"),
                 claim_id: row.get::<Uuid, _>("claim_id"),
                 topic: row.get("topic"),
-                event_type: row.get("event_type"),
+                event_type: OutboxEventType::from_persisted(row.get("event_type")),
                 aggregate_id: row.get("aggregate_id"),
                 payload: row.get::<String, _>("payload").into_bytes(),
             })

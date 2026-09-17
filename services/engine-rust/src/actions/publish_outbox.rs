@@ -1,10 +1,7 @@
 use std::time::Duration;
 
 use crate::{
-    metrics::{
-        OUTBOX_CLAIM_LOST_TOTAL, OUTBOX_CLAIMED_TOTAL, OUTBOX_MARK_FAILED_TOTAL,
-        OUTBOX_PUBLISH_FAILED_TOTAL, OUTBOX_PUBLISHED_TOTAL,
-    },
+    metrics::Metrics,
     ports::{MarkPublishedOutcome, OutboxEvents, OutboxRepository, PortError},
 };
 
@@ -21,6 +18,7 @@ pub struct PublishOutbox<'a, R, E> {
     pub store: &'a R,
     pub events: &'a E,
     pub batch_size: i64,
+    metrics: Metrics,
 }
 
 impl<'a, R, E> PublishOutbox<'a, R, E>
@@ -28,11 +26,12 @@ where
     R: OutboxRepository,
     E: OutboxEvents,
 {
-    pub fn new(store: &'a R, events: &'a E, batch_size: i64) -> Self {
+    pub fn new(store: &'a R, events: &'a E, batch_size: i64, metrics: Metrics) -> Self {
         Self {
             store,
             events,
             batch_size,
+            metrics,
         }
     }
 
@@ -42,7 +41,7 @@ where
         }
 
         let events = self.store.claim_unpublished(self.batch_size).await?;
-        OUTBOX_CLAIMED_TOTAL.inc_by(events.len() as u64);
+        self.metrics.record_outbox_claimed(events.len());
         let mut stats = PublishOutboxStats {
             claimed: events.len(),
             ..Default::default()
@@ -51,7 +50,7 @@ where
         for event in events {
             if let Err(error) = self.events.publish(&event).await {
                 stats.publish_failed += 1;
-                OUTBOX_PUBLISH_FAILED_TOTAL.inc();
+                self.metrics.record_outbox_publish_failed();
                 tracing::warn!(
                     event_id = %event.event_id,
                     event_type = %event.event_type,
@@ -72,7 +71,7 @@ where
                 Ok(outcome) => outcome,
                 Err(error) => {
                     stats.mark_failed += 1;
-                    OUTBOX_MARK_FAILED_TOTAL.inc();
+                    self.metrics.record_outbox_mark_failed();
                     tracing::warn!(
                         event_id = %event.event_id,
                         event_type = %event.event_type,
@@ -88,7 +87,7 @@ where
             };
             if outcome == MarkPublishedOutcome::ClaimLost {
                 stats.claim_lost += 1;
-                OUTBOX_CLAIM_LOST_TOTAL.inc();
+                self.metrics.record_outbox_claim_lost();
                 tracing::info!(
                     event_id = %event.event_id,
                     event_type = %event.event_type,
@@ -98,7 +97,7 @@ where
                 continue;
             }
             stats.published += 1;
-            OUTBOX_PUBLISHED_TOTAL.inc();
+            self.metrics.record_outbox_published();
         }
         if stats.claimed > 0 {
             tracing::info!(
@@ -128,7 +127,8 @@ mod tests {
     use uuid::Uuid;
 
     use crate::ports::{
-        MarkPublishedOutcome, OutboxEvent, OutboxEvents, OutboxRepository, PortError,
+        MarkPublishedOutcome, OutboxEvent, OutboxEventType, OutboxEvents, OutboxRepository,
+        PortError,
     };
 
     use super::*;
@@ -185,7 +185,7 @@ mod tests {
             event_id: Uuid::new_v4(),
             claim_id: Uuid::new_v4(),
             topic: "alert.resolved".to_string(),
-            event_type: "alert.resolved".to_string(),
+            event_type: OutboxEventType::AlertResolved,
             aggregate_id: "alert-1".to_string(),
             payload: br#"{"alert_id":"alert-1"}"#.to_vec(),
         }
@@ -200,7 +200,8 @@ mod tests {
             ..Default::default()
         };
         let events = FakeOutboxEvents::default();
-        let action = PublishOutbox::new(&store, &events, 25);
+        let metrics = Metrics::default();
+        let action = PublishOutbox::new(&store, &events, 25, metrics.clone());
 
         let stats = action.publish_once().await.unwrap();
 
@@ -221,6 +222,8 @@ mod tests {
             *store.marked.lock().unwrap(),
             vec![first.event_id, second.event_id]
         );
+        assert_eq!(metrics.snapshot().outbox_claimed, 2);
+        assert_eq!(metrics.snapshot().outbox_published, 2);
     }
 
     #[tokio::test]
@@ -234,7 +237,7 @@ mod tests {
             published: Mutex::default(),
             fail: Mutex::new(vec![event.event_id]),
         };
-        let action = PublishOutbox::new(&store, &events, 25);
+        let action = PublishOutbox::new(&store, &events, 25, Metrics::default());
 
         let err = action.publish_once().await.unwrap_err();
 
@@ -254,7 +257,7 @@ mod tests {
             published: Mutex::default(),
             fail: Mutex::new(vec![failed.event_id]),
         };
-        let action = PublishOutbox::new(&store, &events, 25);
+        let action = PublishOutbox::new(&store, &events, 25, Metrics::default());
 
         let err = action.publish_once().await.unwrap_err();
 
@@ -271,7 +274,7 @@ mod tests {
             ..Default::default()
         };
         let events = FakeOutboxEvents::default();
-        let action = PublishOutbox::new(&store, &events, 25);
+        let action = PublishOutbox::new(&store, &events, 25, Metrics::default());
 
         let stats = action.publish_once().await.unwrap();
 
@@ -291,7 +294,7 @@ mod tests {
     async fn rejects_empty_batches() {
         let store = FakeOutboxRepository::default();
         let events = FakeOutboxEvents::default();
-        let action = PublishOutbox::new(&store, &events, 0);
+        let action = PublishOutbox::new(&store, &events, 0, Metrics::default());
 
         let err = action.publish_once().await.unwrap_err();
 

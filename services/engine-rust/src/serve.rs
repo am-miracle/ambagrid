@@ -12,6 +12,7 @@ use crate::{
         postgres::PostgresIngestRepository,
     },
     config::Config,
+    metrics::Metrics,
 };
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -27,8 +28,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         cfg.alert_opened_topic.clone(),
         cfg.alert_resolved_topic.clone(),
     );
-    let dead_letters =
-        KafkaDeadLetterPublisher::connect(cfg.kafka_brokers.clone(), cfg.telemetry_dlq_topic)?;
+    let dead_letters = KafkaDeadLetterPublisher::connect(
+        cfg.kafka_brokers.clone(),
+        cfg.telemetry_dlq_topic,
+        Metrics::new()?,
+    )?;
     let mut ingest = IngestReading::new(&store);
     ingest.policy = cfg.threshold_policy;
 

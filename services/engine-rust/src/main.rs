@@ -1,8 +1,9 @@
 mod actions;
 mod adapters;
+mod alert_outbox;
 mod config;
 mod domain;
-mod metrics;
+pub mod metrics;
 mod ports;
 mod serve;
 mod telemetry;
@@ -19,6 +20,7 @@ use adapters::{
 };
 use config::Config;
 use domain::actor::ActorId;
+use metrics::Metrics;
 use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
@@ -99,7 +101,7 @@ async fn publish_outbox() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     let store = PostgresOutboxRepository::new(pool);
     let events = KafkaOutboxEventPublisher::connect(cfg.kafka_brokers)?;
-    let publisher = PublishOutbox::new(&store, &events, BATCH_SIZE);
+    let publisher = PublishOutbox::new(&store, &events, BATCH_SIZE, Metrics::new()?);
     let mut consecutive_failures = 0;
     let mut cleanup = tokio::time::interval(CLEANUP_INTERVAL);
     cleanup.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);

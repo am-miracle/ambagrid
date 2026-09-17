@@ -1,33 +1,17 @@
 use std::{collections::BTreeMap, future::Future};
 
+use super::proto;
+use crate::{
+    alert_outbox::{AlertOpenedPayload, AlertResolvedPayload, AlertSeverity},
+    metrics::Metrics,
+    ports::{DeadLetter, DeadLetterSink, OutboxEvent, OutboxEventType, OutboxEvents, PortError},
+};
 use prost::Message;
 use rdkafka::{
     ClientConfig,
     message::{Header, OwnedHeaders},
     producer::{FutureProducer, FutureRecord},
 };
-use serde::Deserialize;
-
-use super::proto;
-use crate::ports::{DeadLetter, DeadLetterSink, OutboxEvent, OutboxEvents, PortError};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OutboxEventType {
-    AlertOpened,
-    AlertResolved,
-}
-
-impl OutboxEventType {
-    fn parse(raw: &str, event_id: uuid::Uuid) -> Result<Self, PortError> {
-        match raw {
-            "alert.opened" => Ok(Self::AlertOpened),
-            "alert.resolved" => Ok(Self::AlertResolved),
-            event_type => Err(PortError::message(format!(
-                "unsupported outbox event type {event_type} for event {event_id}"
-            ))),
-        }
-    }
-}
 
 // A single-record producer, kept as a trait so tests can substitute a fake
 // and assert on topic routing/payloads without a live broker.
@@ -72,6 +56,7 @@ impl RecordSink for FutureProducer {
 pub struct KafkaDeadLetterPublisher<S: RecordSink = FutureProducer> {
     topic: String,
     sink: S,
+    metrics: Metrics,
 }
 
 pub struct KafkaOutboxEventPublisher<S: RecordSink = FutureProducer> {
@@ -82,10 +67,12 @@ impl KafkaDeadLetterPublisher<FutureProducer> {
     pub fn connect(
         brokers: Vec<String>,
         topic: String,
+        metrics: Metrics,
     ) -> Result<Self, rdkafka::error::KafkaError> {
         Ok(Self {
             topic,
             sink: future_producer(brokers)?,
+            metrics,
         })
     }
 }
@@ -107,24 +94,17 @@ fn future_producer(brokers: Vec<String>) -> Result<FutureProducer, rdkafka::erro
 
 impl<S: RecordSink> DeadLetterSink for KafkaDeadLetterPublisher<S> {
     async fn park(&self, entry: &DeadLetter) -> Result<(), PortError> {
-        crate::metrics::DLQ_PARKED_TOTAL.inc();
-        if crate::metrics::DLQ_PARKED_TOTAL.get() % 1.0 == 1.0 {
-            tracing::warn!(
-                topic = %entry.kafka_topic,
-                partition = entry.kafka_partition,
-                offset = entry.kafka_offset,
-                stage = %entry.stage.as_str(),
-                "dlq parked — alert threshold check"
-            );
-        }
-        self.sink.send(dead_letter_record(&self.topic, entry)).await
+        self.sink
+            .send(dead_letter_record(&self.topic, entry))
+            .await?;
+        self.metrics.record_dlq_parked();
+        Ok(())
     }
 }
 
 impl<S: RecordSink> OutboxEvents for KafkaOutboxEventPublisher<S> {
     async fn publish(&self, event: &OutboxEvent) -> Result<(), PortError> {
-        let event_type = OutboxEventType::parse(&event.event_type, event.event_id)?;
-        let payload = encode_outbox_payload(event, event_type)?;
+        let payload = encode_outbox_payload(event, &event.event_type)?;
         self.sink
             .send(kafka_record(
                 &event.topic,
@@ -139,46 +119,9 @@ impl<S: RecordSink> OutboxEvents for KafkaOutboxEventPublisher<S> {
     }
 }
 
-#[derive(Deserialize)]
-struct AlertOpenedOutboxPayload {
-    alert_id: String,
-    asset_id: String,
-    site_id: String,
-    severity: OutboxSeverity,
-    reason: String,
-    opened_at_utc: i64,
-    source_event_id: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct AlertResolvedOutboxPayload {
-    alert_id: String,
-    asset_id: String,
-    site_id: String,
-    severity: OutboxSeverity,
-    reason: String,
-    opened_at_utc: i64,
-    resolved_at_utc: i64,
-    resolution_note: String,
-    resolved_by: String,
-}
-
-#[derive(Clone, Copy, Deserialize)]
-enum OutboxSeverity {
-    #[serde(rename = "SEVERITY_UNSPECIFIED")]
-    Unspecified,
-    #[serde(rename = "SEVERITY_INFO")]
-    Info,
-    #[serde(rename = "SEVERITY_WARNING")]
-    Warning,
-    #[serde(rename = "SEVERITY_CRITICAL")]
-    Critical,
-}
-
-impl OutboxSeverity {
+impl AlertSeverity {
     fn as_proto(self) -> i32 {
         (match self {
-            Self::Unspecified => proto::Severity::Unspecified,
             Self::Info => proto::Severity::Info,
             Self::Warning => proto::Severity::Warning,
             Self::Critical => proto::Severity::Critical,
@@ -188,11 +131,11 @@ impl OutboxSeverity {
 
 fn encode_outbox_payload(
     event: &OutboxEvent,
-    event_type: OutboxEventType,
+    event_type: &OutboxEventType,
 ) -> Result<Vec<u8>, PortError> {
     match event_type {
         OutboxEventType::AlertOpened => {
-            let payload: AlertOpenedOutboxPayload = serde_json::from_slice(&event.payload)
+            let payload: AlertOpenedPayload = serde_json::from_slice(&event.payload)
                 .map_err(|err| invalid_outbox_payload(event, err))?;
             Ok(proto::AlertOpened {
                 alert_id: payload.alert_id,
@@ -206,7 +149,7 @@ fn encode_outbox_payload(
             .encode_to_vec())
         }
         OutboxEventType::AlertResolved => {
-            let payload: AlertResolvedOutboxPayload = serde_json::from_slice(&event.payload)
+            let payload: AlertResolvedPayload = serde_json::from_slice(&event.payload)
                 .map_err(|err| invalid_outbox_payload(event, err))?;
             Ok(proto::AlertResolved {
                 alert_id: payload.alert_id,
@@ -221,6 +164,10 @@ fn encode_outbox_payload(
             }
             .encode_to_vec())
         }
+        OutboxEventType::Unsupported(value) => Err(PortError::message(format!(
+            "unsupported outbox event type {value} for event {}",
+            event.event_id
+        ))),
     }
 }
 
@@ -302,9 +249,11 @@ mod tests {
 
     #[tokio::test]
     async fn dead_letter_publisher_preserves_payload_and_source_metadata() {
+        let metrics = Metrics::default();
         let publisher = KafkaDeadLetterPublisher {
             topic: "telemetry.ingested.dlq".to_string(),
             sink: FakeSink::default(),
+            metrics: metrics.clone(),
         };
         let payload = b"malformed metric payload".to_vec();
         let entry = DeadLetter {
@@ -347,6 +296,7 @@ mod tests {
             record.headers.get("error").map(Vec::as_slice),
             Some("telemetry metrics must be set for a smart meter payload".as_bytes())
         );
+        assert_eq!(metrics.snapshot().dlq_parked, 1);
     }
 
     #[tokio::test]
@@ -358,7 +308,7 @@ mod tests {
             event_id: Uuid::parse_str("5f1b98a9-7ab4-4bb7-8f24-90ae8b09a76c").unwrap(),
             claim_id: Uuid::new_v4(),
             topic: "alert.resolved".to_string(),
-            event_type: "alert.resolved".to_string(),
+            event_type: OutboxEventType::AlertResolved,
             aggregate_id: "0f7b1d6c-2b4a-4f8e-9a1b-2c3d4e5f6a7b".to_string(),
             payload: include_bytes!(
                 "../../../../../proto/fixtures/alert_resolved_outbox_payload.json"
@@ -400,7 +350,7 @@ mod tests {
             event_id: Uuid::new_v4(),
             claim_id: Uuid::new_v4(),
             topic: "alert.opened".to_string(),
-            event_type: "alert.opened".to_string(),
+            event_type: OutboxEventType::AlertOpened,
             aggregate_id: "alert-0101".to_string(),
             payload: include_bytes!(
                 "../../../../../proto/fixtures/alert_opened_outbox_payload.json"
@@ -429,7 +379,7 @@ mod tests {
             event_id: Uuid::new_v4(),
             claim_id: Uuid::new_v4(),
             topic: "payment.failed".to_string(),
-            event_type: "payment.failed".to_string(),
+            event_type: OutboxEventType::from_persisted("payment.failed".to_string()),
             aggregate_id: "payment-0101".to_string(),
             payload: b"{}".to_vec(),
         };
@@ -452,7 +402,7 @@ mod tests {
             event_id: Uuid::new_v4(),
             claim_id: Uuid::new_v4(),
             topic: "custom.alert.opened".to_string(),
-            event_type: "alert.opened".to_string(),
+            event_type: OutboxEventType::AlertOpened,
             aggregate_id: "alert-0101".to_string(),
             payload: include_bytes!(
                 "../../../../../proto/fixtures/alert_opened_outbox_payload.json"
