@@ -115,9 +115,40 @@ pub struct OutboxEvent {
     pub event_id: Uuid,
     pub claim_id: Uuid,
     pub topic: String,
-    pub event_type: String,
+    pub event_type: OutboxEventType,
     pub aggregate_id: String,
     pub payload: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OutboxEventType {
+    AlertOpened,
+    AlertResolved,
+    Unsupported(String),
+}
+
+impl OutboxEventType {
+    pub fn from_persisted(value: String) -> Self {
+        match value.as_str() {
+            "alert.opened" => Self::AlertOpened,
+            "alert.resolved" => Self::AlertResolved,
+            _ => Self::Unsupported(value),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::AlertOpened => "alert.opened",
+            Self::AlertResolved => "alert.resolved",
+            Self::Unsupported(value) => value,
+        }
+    }
+}
+
+impl std::fmt::Display for OutboxEventType {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

@@ -1,17 +1,20 @@
 use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
-use serde_json::{Value, json};
+use serde::Serialize;
 use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgRow, query};
 use uuid::Uuid;
 
 use crate::{
+    alert_outbox::{AlertOpenedPayload, AlertResolvedPayload},
     domain::{
         actor::{ActorId, ResolutionActor},
         alert::{Alert, AlertDecision, AlertKind},
         asset::{AssetState, BatteryBmsState, Reading, SmartMeterState, SolarInverterState},
     },
-    ports::{AlertRepository, IngestRepository, IngestWrite, PolicyOutcome, PortError},
+    ports::{
+        AlertRepository, IngestRepository, IngestWrite, OutboxEventType, PolicyOutcome, PortError,
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -365,7 +368,14 @@ async fn open_alert(
     .map_err(PortError::storage)?;
 
     let alert = row_to_alert(row)?;
-    insert_alert_event(tx, topic, "alert.opened", alert_opened_payload(&alert)?).await?;
+    insert_alert_event(
+        tx,
+        topic,
+        OutboxEventType::AlertOpened,
+        alert.alert_id,
+        alert_opened_payload(&alert)?,
+    )
+    .await?;
     Ok(alert)
 }
 
@@ -426,19 +436,24 @@ async fn resolve_alert(
         .await?;
 
     let alert = row_to_alert(row)?;
-    insert_alert_event(tx, topic, "alert.resolved", alert_resolved_payload(&alert)?).await?;
+    insert_alert_event(
+        tx,
+        topic,
+        OutboxEventType::AlertResolved,
+        alert.alert_id,
+        alert_resolved_payload(&alert)?,
+    )
+    .await?;
     Ok(alert)
 }
 
 async fn insert_alert_event(
     tx: &mut Transaction<'_, Postgres>,
     topic: &str,
-    event_type: &str,
-    payload: Value,
+    event_type: OutboxEventType,
+    alert_id: Uuid,
+    payload: impl Serialize,
 ) -> Result<(), PortError> {
-    let aggregate_id = payload["alert_id"]
-        .as_str()
-        .ok_or_else(|| PortError::message("alert outbox payload is missing alert_id"))?;
     let payload = serde_json::to_string(&payload).map_err(PortError::storage)?;
 
     query(
@@ -450,8 +465,8 @@ async fn insert_alert_event(
         "#,
     )
     .bind(topic)
-    .bind(event_type)
-    .bind(aggregate_id)
+    .bind(event_type.as_str())
+    .bind(alert_id)
     .bind(payload)
     .execute(&mut **tx)
     .await
@@ -460,23 +475,23 @@ async fn insert_alert_event(
     Ok(())
 }
 
-fn alert_opened_payload(alert: &Alert) -> Result<Value, PortError> {
+fn alert_opened_payload(alert: &Alert) -> Result<AlertOpenedPayload, PortError> {
     let asset_id = required_alert_text(alert.alert_id, "asset_id", &alert.asset_id)?;
     let site_id = required_alert_text(alert.alert_id, "site_id", &alert.site_id)?;
     let reason = required_alert_text(alert.alert_id, "reason", &alert.reason)?;
 
-    Ok(json!({
-        "alert_id": alert.alert_id.to_string(),
-        "asset_id": asset_id,
-        "site_id": site_id,
-        "severity": proto_severity(alert.severity),
-        "reason": reason,
-        "opened_at_utc": alert.opened_at.timestamp(),
-        "source_event_id": alert.source_event_id,
-    }))
+    Ok(AlertOpenedPayload {
+        alert_id: alert.alert_id.to_string(),
+        asset_id: asset_id.to_string(),
+        site_id: site_id.to_string(),
+        severity: alert.severity.into(),
+        reason: reason.to_string(),
+        opened_at_utc: alert.opened_at.timestamp(),
+        source_event_id: alert.source_event_id.clone(),
+    })
 }
 
-fn alert_resolved_payload(alert: &Alert) -> Result<Value, PortError> {
+fn alert_resolved_payload(alert: &Alert) -> Result<AlertResolvedPayload, PortError> {
     let resolved_at = alert.resolved_at.ok_or_else(|| {
         PortError::message(format!(
             "resolved alert {} is missing resolved_at",
@@ -496,25 +511,17 @@ fn alert_resolved_payload(alert: &Alert) -> Result<Value, PortError> {
         ))
     })?;
 
-    Ok(json!({
-        "alert_id": alert.alert_id.to_string(),
-        "asset_id": alert.asset_id,
-        "site_id": alert.site_id,
-        "severity": proto_severity(alert.severity),
-        "reason": alert.reason,
-        "opened_at_utc": alert.opened_at.timestamp(),
-        "resolved_at_utc": resolved_at.timestamp(),
-        "resolution_note": resolution_note,
-        "resolved_by": resolved_by.as_str(),
-    }))
-}
-
-fn proto_severity(severity: crate::domain::alert::Severity) -> &'static str {
-    match severity {
-        crate::domain::alert::Severity::Info => "SEVERITY_INFO",
-        crate::domain::alert::Severity::Warning => "SEVERITY_WARNING",
-        crate::domain::alert::Severity::Critical => "SEVERITY_CRITICAL",
-    }
+    Ok(AlertResolvedPayload {
+        alert_id: alert.alert_id.to_string(),
+        asset_id: alert.asset_id.clone(),
+        site_id: alert.site_id.clone(),
+        severity: alert.severity.into(),
+        reason: alert.reason.clone(),
+        opened_at_utc: alert.opened_at.timestamp(),
+        resolved_at_utc: resolved_at.timestamp(),
+        resolution_note: resolution_note.to_string(),
+        resolved_by: resolved_by.as_str().to_string(),
+    })
 }
 
 fn required_alert_text<'a>(
@@ -625,15 +632,22 @@ mod tests {
     #[test]
     fn alert_opened_outbox_payload_matches_the_protobuf_json_shape() {
         let payload = alert_opened_payload(&alert()).unwrap();
-        let fixture: Value = serde_json::from_slice(include_bytes!(
+        let payload_json = serde_json::to_value(&payload).unwrap();
+        let fixture: serde_json::Value = serde_json::from_slice(include_bytes!(
             "../../../../../proto/fixtures/alert_opened_outbox_payload.json"
         ))
         .unwrap();
 
-        assert_eq!(payload, fixture);
-        assert_eq!(payload["severity"], "SEVERITY_CRITICAL");
-        assert_eq!(payload["opened_at_utc"], 1_789_351_200);
-        assert_eq!(payload["source_event_id"], "telemetry.ingested:2:17");
+        assert_eq!(payload_json, fixture);
+        assert_eq!(
+            payload.severity,
+            crate::alert_outbox::AlertSeverity::Critical
+        );
+        assert_eq!(payload.opened_at_utc, 1_789_351_200);
+        assert_eq!(
+            payload.source_event_id.as_deref(),
+            Some("telemetry.ingested:2:17")
+        );
     }
 
     #[test]
@@ -682,8 +696,8 @@ mod tests {
 
         let payload = alert_resolved_payload(&resolved).unwrap();
 
-        assert_eq!(payload["resolved_at_utc"], 1_789_351_500);
-        assert_eq!(payload["resolution_note"], "temperature recovered");
-        assert_eq!(payload["resolved_by"], "system");
+        assert_eq!(payload.resolved_at_utc, 1_789_351_500);
+        assert_eq!(payload.resolution_note, "temperature recovered");
+        assert_eq!(payload.resolved_by, "system");
     }
 }
