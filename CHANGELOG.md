@@ -17,6 +17,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **api:** Add asset readings endpoint for chart-ready telemetry (#11)
 - **api:** Add alert resolution command
 - **domain:** Separate GridOperator from Actor (#13)
+- **ui:** Build operator control room
 
 ### Documentation
 
@@ -27,7 +28,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 ### Fixed
 
 - **outbox:** Publish alert events durably (#12)
-- **engine:** Make outbox dependencies explicit
+- **engine:** Make outbox dependencies explicit (#14)
 
 ### Maintenance
 
