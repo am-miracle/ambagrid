@@ -1,0 +1,147 @@
+.asset-page {
+	min-height: 100dvh;
+	max-width: 920px;
+	margin: 0 auto;
+	padding: 18px 20px 40px;
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	background: radial-gradient(
+		1200px 700px at 50% 0%,
+		#0a1621 0%,
+		var(--void) 68%
+	);
+}
+
+.asset-back {
+	color: var(--muted);
+	font-size: 12.5px;
+	text-decoration: none;
+}
+.asset-back:hover {
+	color: var(--cyan);
+}
+
+.asset-head {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-end;
+	gap: 12px;
+}
+.asset-head h1 {
+	margin: 2px 0 0;
+	font-size: 26px;
+	font-weight: 600;
+	letter-spacing: 0.3px;
+}
+.asset-head .mono {
+	font-size: 11.5px;
+}
+
+.asset-deck {
+	background: var(--deck);
+	border: 1px solid var(--edge);
+	padding: 14px 16px;
+}
+.asset-deck h2 {
+	margin: 0 0 8px;
+	font-size: 16px;
+	font-weight: 600;
+}
+.asset-loading {
+	height: 240px;
+}
+
+.asset-fields {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+	gap: 10px 18px;
+}
+.asset-field {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	font-size: 12.5px;
+}
+.asset-field span {
+	color: var(--muted);
+	font-size: 11px;
+}
+.asset-field b {
+	font-weight: 500;
+}
+
+.asset-note {
+	margin: 0;
+	color: var(--muted);
+	font-size: 12.5px;
+}
+.asset-error {
+	color: #ff8b96;
+	font-size: 13px;
+}
+
+.asset-controls {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: space-between;
+	gap: 8px;
+	margin-bottom: 12px;
+}
+.asset-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+}
+.asset-page .chip {
+	border: 1px solid var(--edge-strong);
+	padding: 4px 10px;
+	font-size: 12px;
+	color: var(--muted);
+	background: none;
+}
+.asset-page .chip.on {
+	color: #04121a;
+	background: var(--cyan);
+	border-color: var(--cyan);
+	font-weight: 600;
+}
+
+.asset-chart-head {
+	display: flex;
+	justify-content: space-between;
+	align-items: baseline;
+	gap: 10px;
+}
+.asset-chart-head .mono {
+	font-size: 11px;
+}
+
+.asset-history {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+.asset-history li {
+	display: flex;
+	gap: 10px;
+	align-items: baseline;
+	padding: 9px 0;
+	border-top: 1px solid rgba(122, 186, 212, 0.07);
+}
+.asset-history-title {
+	font-size: 13.5px;
+}
+.asset-history-title .mono {
+	font-size: 11px;
+}
+.asset-history-text {
+	font-size: 12.5px;
+	color: #b9cbd9;
+	margin-top: 2px;
+}
+.asset-history-meta {
+	font-size: 11px;
+	color: var(--muted);
+	margin-top: 3px;
+}

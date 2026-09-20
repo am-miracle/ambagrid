@@ -1,34 +1,9 @@
-export type AssetType = "smart_meter" | "battery_bms" | "solar_inverter";
-
-export interface AssetTelemetry {
-	assetId: string;
-	assetType: AssetType;
-	observedAt: string;
-	internalTemperature: number | null;
-	voltage?: number | null;
-	current?: number | null;
-	activePower?: number | null;
-	frequency?: number | null;
-	totalKwh?: number | null;
-	relayClosed?: boolean | null;
-	batterySocPct?: number | null;
-	solarIrradiance?: number | null;
-}
-
-export interface SiteTelemetrySnapshot {
-	siteId: string;
-	receivedAt: string;
-	assets: AssetTelemetry[];
-}
-
-export interface TelemetrySubscriber {
-	onSnapshot(snapshot: SiteTelemetrySnapshot): void;
-	onError?(error: Error): void;
-}
-
-export interface TelemetrySource {
-	subscribe(siteId: string, subscriber: TelemetrySubscriber): () => void;
-}
+import type {
+	AssetTelemetry,
+	AssetType,
+	TelemetrySource,
+	TelemetrySubscriber,
+} from "./types";
 
 interface AssetWireDTO {
 	asset_id: string;
@@ -42,6 +17,7 @@ interface AssetWireDTO {
 		frequency: number | null;
 		total_kwh: number | null;
 		relay_closed: boolean | null;
+		reported_household_id: string | null;
 	};
 	battery_bms?: { battery_soc_pct: number | null };
 	solar_inverter?: { solar_irradiance: number | null };
@@ -150,7 +126,7 @@ export class PollingTelemetrySource implements TelemetrySource {
 	}
 }
 
-function toAssetTelemetry(asset: AssetWireDTO): AssetTelemetry {
+export function toAssetTelemetry(asset: AssetWireDTO): AssetTelemetry {
 	return {
 		assetId: asset.asset_id,
 		assetType: asset.asset_type,
@@ -162,6 +138,7 @@ function toAssetTelemetry(asset: AssetWireDTO): AssetTelemetry {
 		frequency: asset.smart_meter?.frequency,
 		totalKwh: asset.smart_meter?.total_kwh,
 		relayClosed: asset.smart_meter?.relay_closed,
+		reportedHouseholdId: asset.smart_meter?.reported_household_id,
 		batterySocPct: asset.battery_bms?.battery_soc_pct,
 		solarIrradiance: asset.solar_inverter?.solar_irradiance,
 	};
