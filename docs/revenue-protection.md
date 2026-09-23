@@ -17,6 +17,7 @@ That answer depends on linked operational facts:
 ```text
 Customer
   -> Household
+  -> MeterAssignment
   -> SmartMeter
   -> TariffPlan
   -> Payment
@@ -32,9 +33,11 @@ Revenue protection depends on these ontology objects:
 - `Customer`
 - `Household`
 - `SmartMeter`
+- `MeterAssignment`
 - `TariffPlan`
 - `Payment`
 - `EnergyCredit`
+- `EmergencyCreditAdvance`
 - `CreditBalance`
 - `MeterCommand`
 - `AuditEvent`
@@ -105,7 +108,7 @@ price_per_kwh = NGN 250
 energy credit = 20 kWh
 ```
 
-The tariff calculation should record the tariff version used at the time of credit issuance. Later tariff changes must not rewrite historical payment or credit records.
+The tariff calculation should record the tariff version used at the time of credit issuance. Each `tariff_plans` row is one immutable calculation version. Changing its currency, price, standing charge, site, or start time requires a new row with a new `tariff_plan_id`; `effective_to` may close the old version. This keeps later tariff changes from rewriting historical payment or credit records.
 
 ## Emergency Credit
 
@@ -126,9 +129,12 @@ Example flow:
 Customer requests emergency credit
   -> eligibility is checked
   -> EnergyCredit is issued with source_type=emergency_credit
+  -> EmergencyCreditAdvance records the debt
   -> CreditBalance increases
   -> future payments repay the emergency credit first
 ```
+
+The advance is the part that makes the last step possible. `energy_credits` only grants — `kwh_granted` must be positive — and a credit balance cannot go negative, so an advance recorded only as a grant is indistinguishable from a promotion and every later payment would be docked for the same debt forever. `emergency_credit_advances` carries `outstanding_kwh` down to zero, and `emergency_credit_repayments` records which payment cleared what. An advance pins its tariff plan at issuance, so a tariff change does not move what the customer owes.
 
 ## Split Billing
 
@@ -144,6 +150,16 @@ Split billing should model:
 - operator override
 
 Avoid hiding this inside notes or manual spreadsheets. Shared infrastructure is common enough to deserve a clean model.
+
+## Meter Reassignment
+
+A meter is not assigned by a column. `meter_assignments` records one row per period a customer is billed for a meter, and reassignment closes the open row and opens a new one. Energy credits and credit balances reference `assignment_id`, and everything identifying an assignment except `ended_at` is immutable, so credits issued under the old assignment keep their customer, meter, and site by construction rather than by convention.
+
+The distinction worth keeping in mind: site membership is a property, because a customer does not move between sites, and it travels through composite foreign keys everywhere in this schema. Assignment is an event — it starts, it ends, and its history is worth keeping — so it gets a table rather than a column. A partial unique index allows one open assignment per meter today; relaxing that index is how split billing will later let several customers share one meter.
+
+A meter can leave service without anyone touching money. Closing an assignment does not require deleting the customer's balance, so pulling a faulty meter for repair no longer writes off credit the customer paid for — the balance stays on the closed assignment until an operator settles or transfers it. Deliberately, nothing stops an assignment closing while a balance is still open: gating a hardware action on a financial one is what caused the write-off. A balance left on a closed assignment is a reconciliation item, not a database error.
+
+The one hard guard is on destroying value: a `credit_balances` row holding kWh or money cannot be deleted. Writing off a balance is a decision that should leave a record, so the operator has to zero it deliberately rather than have a reassignment delete it as a side effect.
 
 ## Meter Commands
 
