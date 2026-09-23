@@ -117,6 +117,18 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test
 ```
 
+Some engine tests assert against real Postgres behaviour — schema constraints,
+outbox claim fencing — so they are `#[ignore]`d until you point them at a
+database. CI runs them, so run them yourself before changing a migration:
+
+```bash
+docker compose up -d database
+DATABASE_URL=postgres://ambagrid_admin:ambagrid_secure_pass@localhost:5432/ambagrid_operational \
+  cargo test -- --ignored --test-threads=1
+```
+
+They share one database and each runs the migrator, so keep them single-threaded.
+
 For the frontend:
 
 ```bash

@@ -99,7 +99,6 @@ Useful properties:
 - `meter_id`
 - `site_id`
 - `household_id`
-- `customer_id`
 - `serial_number`
 - `relay_state`
 - `last_seen_at`
@@ -114,9 +113,9 @@ Useful properties:
 
 - `household_id`
 - `site_id`
-- `meter_id`
-- `address_label`
-- `connection_status`
+- `customer_id`
+- `display_name`
+- `status`
 
 **Alert**
 
@@ -163,6 +162,21 @@ Useful properties:
 - `site_id`
 - `status`
 
+**MeterAssignment**
+
+The period during which one customer is billed for one meter. A meter is not
+assigned by a column on `SmartMeter`; reassignment closes one assignment and
+opens another, so credits issued under the old one keep pointing at it.
+
+Useful properties:
+
+- `assignment_id`
+- `site_id`
+- `meter_id`
+- `customer_id`
+- `started_at`
+- `ended_at`
+
 **TariffPlan**
 
 The pricing rule used to convert payment into energy credit or charges.
@@ -194,13 +208,12 @@ Useful properties:
 
 **EnergyCredit**
 
-The electricity value granted from a payment, adjustment, promotion, or operator correction.
+The electricity value granted from a payment, adjustment, promotion, emergency credit, or operator correction.
 
 Useful properties:
 
 - `credit_id`
-- `customer_id`
-- `meter_id`
+- `assignment_id`
 - `source_type`
 - `source_id`
 - `kwh_granted`
@@ -208,15 +221,31 @@ Useful properties:
 
 **CreditBalance**
 
-The current remaining commercial entitlement for a customer or meter.
+The current remaining commercial entitlement on one meter assignment.
 
 Useful properties:
 
-- `customer_id`
-- `meter_id`
+- `assignment_id`
 - `remaining_kwh`
 - `remaining_money_value`
 - `updated_at`
+
+**EmergencyCreditAdvance**
+
+Emergency credit lent against future payment. An `EnergyCredit` records the
+grant; this records the debt, so a repaid advance is distinguishable from an
+unrepaid one. It pins the tariff plan at issuance, so a later tariff change does
+not move what the customer owes.
+
+Useful properties:
+
+- `advance_id`
+- `assignment_id`
+- `credit_id`
+- `tariff_plan_id`
+- `advanced_kwh`
+- `outstanding_kwh`
+- `settled_at`
 
 **MeterCommand**
 
@@ -243,9 +272,12 @@ Site serves Household
 Site has TariffPlan
 
 Customer pays Payment
-Customer receives EnergyCredit
-Customer has CreditBalance
 Customer occupies Household
+Customer holds MeterAssignment
+
+MeterAssignment covers SmartMeter
+MeterAssignment receives EnergyCredit
+MeterAssignment has CreditBalance
 
 Household uses SmartMeter
 SmartMeter belongs to Site
@@ -253,7 +285,9 @@ SmartMeter reports TelemetryReading
 SmartMeter receives MeterCommand
 
 Payment creates EnergyCredit
+Payment repays EmergencyCreditAdvance
 EnergyCredit changes CreditBalance
+EnergyCredit may open EmergencyCreditAdvance
 
 Alert affects Asset
 Alert may create MeterCommand

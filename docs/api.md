@@ -392,8 +392,8 @@ and pins the connection that cancelling it was meant to free.
 - **Built-in authentication.** There is none. Run it behind a gateway that
   terminates TLS, authenticates callers, and injects `X-Actor-Id` for
   operator commands; do not expose it to the internet as is.
-- **Customers, balances, payments, commands.** Those ontology objects have no
-  tables yet. When they land, they are new `/v1` collections, not changes to
-  these.
+- **Customer, balance, payment, and command APIs.** Those ontology objects have
+  storage tables but no public handlers yet. When handlers land, they are new
+  `/v1` collections, not changes to these.
 - **General writes.** Alert resolution is the only operator command exposed
   here. Meter commands, payments, credits, and customer changes are not here yet.

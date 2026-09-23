@@ -4,6 +4,8 @@ mod alert_outbox;
 mod config;
 mod domain;
 pub mod metrics;
+#[cfg(test)]
+mod migration_tests;
 mod ports;
 mod serve;
 mod telemetry;
