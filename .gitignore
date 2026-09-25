@@ -2,3 +2,4 @@
 apps/dist/
 services/engine-rust/target/
 SENIOR_ENGINEERING.md
+.env

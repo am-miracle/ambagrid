@@ -4,14 +4,20 @@ package bridge
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/sasl"
+	"github.com/twmb/franz-go/pkg/sasl/plain"
+	"github.com/twmb/franz-go/pkg/sasl/scram"
 
 	"ingestion-go/internal/config"
 	"ingestion-go/internal/stats"
@@ -58,6 +64,70 @@ func (g *queueGuard) closeOnce() {
 	}
 }
 
+// tlsConfig trusts caFile when set and the system roots otherwise.
+func tlsConfig(envName, caFile string) (*tls.Config, error) {
+	if caFile == "" {
+		return tlsConfigFromPEM(envName, nil)
+	}
+	pem, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", envName, err)
+	}
+	return tlsConfigFromPEM(envName, pem)
+}
+
+func tlsConfigFromPEM(envName string, pem []byte) (*tls.Config, error) {
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	if len(pem) == 0 {
+		return cfg, nil
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, fmt.Errorf("%s contains no PEM certificates", envName)
+	}
+	cfg.RootCAs = pool
+	return cfg, nil
+}
+
+func kafkaSecurityOpts(sec config.KafkaSecurity) ([]kgo.Opt, error) {
+	var opts []kgo.Opt
+	if sec.UsesTLS() {
+		tlsCfg, err := kafkaTLSConfig(sec)
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts, kgo.DialTLSConfig(tlsCfg))
+	}
+	if sec.UsesSASL() {
+		mechanism, err := saslMechanism(sec)
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts, kgo.SASL(mechanism))
+	}
+	return opts, nil
+}
+
+func kafkaTLSConfig(sec config.KafkaSecurity) (*tls.Config, error) {
+	if sec.CAPEM != "" {
+		return tlsConfigFromPEM("KAFKA_SSL_CA_PEM", []byte(sec.CAPEM))
+	}
+	return tlsConfig("KAFKA_SSL_CA_LOCATION", sec.CAFile)
+}
+
+func saslMechanism(sec config.KafkaSecurity) (sasl.Mechanism, error) {
+	switch sec.SASLMechanism {
+	case config.MechanismPlain:
+		return plain.Auth{User: sec.SASLUsername, Pass: sec.SASLPassword}.AsMechanism(), nil
+	case config.MechanismSCRAMSHA256:
+		return scram.Auth{User: sec.SASLUsername, Pass: sec.SASLPassword}.AsSha256Mechanism(), nil
+	case config.MechanismSCRAMSHA512:
+		return scram.Auth{User: sec.SASLUsername, Pass: sec.SASLPassword}.AsSha512Mechanism(), nil
+	default:
+		return nil, fmt.Errorf("unsupported KAFKA_SASL_MECHANISM %q", sec.SASLMechanism)
+	}
+}
+
 // Run wires the MQTT subscription to the Kafka producer pool and blocks until
 // ctx is cancelled or a fatal setup error occurs.
 func Run(ctx context.Context, cfg config.Config) error {
@@ -69,6 +139,11 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if cfg.AllowAutoTopicCreation {
 		kafkaOpts = append(kafkaOpts, kgo.AllowAutoTopicCreation())
 	}
+	securityOpts, err := kafkaSecurityOpts(cfg.KafkaSecurity)
+	if err != nil {
+		return err
+	}
+	kafkaOpts = append(kafkaOpts, securityOpts...)
 
 	kafkaClient, err := kgo.NewClient(kafkaOpts...)
 	if err != nil {
@@ -94,7 +169,11 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 
 	subscribed := make(chan error, 1)
-	mqttClient := mqtt.NewClient(mqttClientOptions(cfg, queue, &st, subscribed))
+	mqttTLS, err := tlsConfig("MQTT_CA_FILE", cfg.MQTTCAFile)
+	if err != nil {
+		return err
+	}
+	mqttClient := mqtt.NewClient(mqttClientOptions(cfg, mqttTLS, queue, &st, subscribed))
 
 	// finish tears resources down in dependency order: stop new MQTT
 	// deliveries, close the queue, wait for workers to drain it, then close
@@ -164,12 +243,16 @@ func waitForMQTTConnect(ctx context.Context, token mqtt.Token, broker string) er
 	}
 }
 
-func mqttClientOptions(cfg config.Config, queue *queueGuard, st *stats.IngestionStats, subscribed chan<- error) *mqtt.ClientOptions {
+func mqttClientOptions(cfg config.Config, tlsCfg *tls.Config, queue *queueGuard, st *stats.IngestionStats, subscribed chan<- error) *mqtt.ClientOptions {
 	var subscribeOnce sync.Once
 
 	return mqtt.NewClientOptions().
 		AddBroker(cfg.MQTTBroker).
 		SetClientID(cfg.MQTTClientID).
+		SetUsername(cfg.MQTTUsername).
+		SetPassword(cfg.MQTTPassword).
+		// Only used for ssl://, tls://, mqtts:// and wss:// broker URLs.
+		SetTLSConfig(tlsCfg).
 		SetCleanSession(true).
 		SetAutoReconnect(true).
 		SetConnectTimeout(5 * time.Second).

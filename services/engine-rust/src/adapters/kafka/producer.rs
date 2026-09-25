@@ -1,14 +1,14 @@
 use std::{collections::BTreeMap, future::Future};
 
-use super::proto;
+use super::{client_config, proto};
 use crate::{
     alert_outbox::{AlertOpenedPayload, AlertResolvedPayload, AlertSeverity},
+    config::KafkaSecurity,
     metrics::Metrics,
     ports::{DeadLetter, DeadLetterSink, OutboxEvent, OutboxEventType, OutboxEvents, PortError},
 };
 use prost::Message;
 use rdkafka::{
-    ClientConfig,
     message::{Header, OwnedHeaders},
     producer::{FutureProducer, FutureRecord},
 };
@@ -65,29 +65,35 @@ pub struct KafkaOutboxEventPublisher<S: RecordSink = FutureProducer> {
 
 impl KafkaDeadLetterPublisher<FutureProducer> {
     pub fn connect(
-        brokers: Vec<String>,
+        brokers: &[String],
+        security: &KafkaSecurity,
         topic: String,
         metrics: Metrics,
     ) -> Result<Self, rdkafka::error::KafkaError> {
         Ok(Self {
             topic,
-            sink: future_producer(brokers)?,
+            sink: future_producer(brokers, security)?,
             metrics,
         })
     }
 }
 
 impl KafkaOutboxEventPublisher<FutureProducer> {
-    pub fn connect(brokers: Vec<String>) -> Result<Self, rdkafka::error::KafkaError> {
+    pub fn connect(
+        brokers: &[String],
+        security: &KafkaSecurity,
+    ) -> Result<Self, rdkafka::error::KafkaError> {
         Ok(Self {
-            sink: future_producer(brokers)?,
+            sink: future_producer(brokers, security)?,
         })
     }
 }
 
-fn future_producer(brokers: Vec<String>) -> Result<FutureProducer, rdkafka::error::KafkaError> {
-    ClientConfig::new()
-        .set("bootstrap.servers", brokers.join(","))
+fn future_producer(
+    brokers: &[String],
+    security: &KafkaSecurity,
+) -> Result<FutureProducer, rdkafka::error::KafkaError> {
+    client_config(brokers, security)
         .set("message.timeout.ms", "5000")
         .create()
 }

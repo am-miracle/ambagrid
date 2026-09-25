@@ -67,7 +67,7 @@ func TestDefaultPublishHandlerCopiesPayloadAndTracksDrops(t *testing.T) {
 	queue := newQueueGuard(1)
 	var st stats.IngestionStats
 	subscribed := make(chan error, 1)
-	opts := mqttClientOptions(testConfig(), queue, &st, subscribed)
+	opts := mqttClientOptions(testConfig(), nil, queue, &st, subscribed)
 
 	payload := []byte(`{"device_id":"met-0101"}`)
 	opts.DefaultPublishHandler(nil, fakeMessage{

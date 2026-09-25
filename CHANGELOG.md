@@ -18,7 +18,8 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **api:** Add alert resolution command
 - **domain:** Separate GridOperator from Actor (#13)
 - **ui:** Build operator control room (#15)
-- **engine:** Add revenue protection storage schema
+- **engine:** Add revenue protection storage schema (#16)
+- Add authenticated staging telemetry worker
 
 ### Documentation
 
@@ -40,4 +41,8 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - Harden ingestion bridge package split
 
 Move ingestion bridge internals into dedicated packages with focused config, telemetry, stats, and bridge tests. Validate MQTT topic filters before deriving constraints, cover queue shutdown/resubscribe behavior, and document simulator payload fields. Harden the virtual meter simulator state model and add tests for generated readings.
+
+### Testing
+
+- Add warning-status frontend mock data
 

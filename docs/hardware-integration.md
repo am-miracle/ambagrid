@@ -21,7 +21,7 @@ africa-west/ng-kaji-01/smartmeter/met-0101/telemetry
 The Go ingestion bridge subscribes to:
 
 ```text
-africa-west/+/smartmeter/+/telemetry
+africa-west/+/+/+/telemetry
 ```
 
 The bridge encodes each JSON payload as `MetricPayload` protobuf and writes it to Redpanda topic:
@@ -62,7 +62,8 @@ being persisted as `1970-01-01`.
 
 The simulator always emits `internal_temperature`, `relay_closed`,
 `battery_soc_pct`, and `solar_irradiance` in JSON, even when their value is
-zero or false. `household_id` is still omitted when empty. Each `metrics.*`
+zero or false. Battery BMS and solar inverter devices omit `metrics` entirely
+rather than reporting zeroed electrical readings. `household_id` is still omitted when empty. Each `metrics.*`
 field may also be omitted individually when a meter doesn't report that
 particular measurement; a missing field is distinct from a reported zero and
 is not coerced into one.
@@ -77,7 +78,7 @@ The examples below show the same message under three filter configurations.
 
 ### Default filter
 
-`MQTT_TOPIC_FILTER=africa-west/+/smartmeter/+/telemetry`
+`MQTT_TOPIC_FILTER=africa-west/+/+/+/telemetry`
 
 MQTT publish:
 
@@ -191,3 +192,25 @@ go run scripts/virtual_meter.go -sites 1 -meters-per-site 2 -interval 1s -durati
 ```
 
 This lets contributors test the full MQTT to Redpanda path without owning physical solar equipment.
+
+With `-include-site-kit` each site also publishes one battery BMS and one
+solar inverter (`battery_bms` and `solar_inverter` topics); the default
+`MQTT_TOPIC_FILTER` accepts them.
+
+Every flag has an environment variable (`MQTT_BROKER`, `MQTT_USERNAME`,
+`MQTT_PASSWORD`, `MQTT_CA_FILE`, `SIMULATOR_SITES`, and so on); run
+`go run scripts/virtual_meter.go -h` for the list.
+
+## Authenticated brokers
+
+The ingestion bridge and engine read `KAFKA_SECURITY_PROTOCOL`,
+`KAFKA_SASL_MECHANISM`, `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD` and
+`KAFKA_SSL_CA_LOCATION` or `KAFKA_SSL_CA_PEM`. The bridge also reads
+`MQTT_USERNAME`, `MQTT_PASSWORD` and `MQTT_CA_FILE`.
+
+## Staging worker
+
+`deploy/staging-worker` runs the simulator, bridge, engine and outbox
+publisher in one container. On every start it applies pending migrations and
+`seed.sql`, which idempotently creates the demo operator and the 20 `ng-demo`
+sites. See `deploy/staging-worker/.env.example` for its settings.

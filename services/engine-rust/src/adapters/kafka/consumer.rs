@@ -4,13 +4,15 @@ use std::{
 };
 
 use rdkafka::{
-    ClientConfig, Message,
+    Message,
     consumer::{Consumer, StreamConsumer},
     error::KafkaError,
 };
 
+use super::client_config;
 use crate::{
     actions::ingest_reading::IngestReading,
+    config::KafkaSecurity,
     domain::asset::Reading,
     ports::{DeadLetter, DeadLetterSink, DeadLetterStage, IngestRepository, PortError},
     telemetry::decode::decode_metric_payload,
@@ -19,6 +21,7 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConsumerConfig {
     pub brokers: Vec<String>,
+    pub security: KafkaSecurity,
     pub topic: String,
     pub group_id: String,
 }
@@ -72,8 +75,7 @@ where
     S: IngestRepository,
     D: DeadLetterSink,
 {
-    let consumer: StreamConsumer = ClientConfig::new()
-        .set("bootstrap.servers", config.brokers.join(","))
+    let consumer: StreamConsumer = client_config(&config.brokers, &config.security)
         .set("group.id", &config.group_id)
         .set("auto.offset.reset", "earliest")
         .set("enable.auto.commit", "true")
