@@ -29,7 +29,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         cfg.alert_resolved_topic.clone(),
     );
     let dead_letters = KafkaDeadLetterPublisher::connect(
-        cfg.kafka_brokers.clone(),
+        &cfg.kafka_brokers,
+        &cfg.kafka_security,
         cfg.telemetry_dlq_topic,
         Metrics::new()?,
     )?;
@@ -39,6 +40,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     consumer::run(
         ConsumerConfig {
             brokers: cfg.kafka_brokers,
+            security: cfg.kafka_security,
             topic: cfg.telemetry_topic,
             group_id: cfg.telemetry_group_id,
         },

@@ -104,7 +104,7 @@ services:
     restart: unless-stopped
     environment:
       MQTT_BROKER: tcp://mqtt-broker:1883
-      MQTT_TOPIC_FILTER: africa-west/+/smartmeter/+/telemetry
+      MQTT_TOPIC_FILTER: africa-west/+/+/+/telemetry
       KAFKA_BROKERS: redpanda:29092
       KAFKA_TOPIC: telemetry.ingested
       KAFKA_DLQ_TOPIC: telemetry.ingested.dlq

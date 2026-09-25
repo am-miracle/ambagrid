@@ -4,6 +4,7 @@ use crate::domain::{actor::ActorId, rules::ThresholdPolicy};
 pub struct Config {
     pub database_url: String,
     pub kafka_brokers: Vec<String>,
+    pub kafka_security: KafkaSecurity,
     pub telemetry_topic: String,
     pub telemetry_dlq_topic: String,
     pub telemetry_group_id: String,
@@ -43,6 +44,8 @@ impl Config {
             ));
         }
 
+        let kafka_security = KafkaSecurity::from_lookup(&lookup)?;
+
         let defaults = ThresholdPolicy::default();
         let threshold_policy = ThresholdPolicy {
             smart_meter_critical_c: env_f32(
@@ -70,6 +73,7 @@ impl Config {
         Ok(Self {
             database_url,
             kafka_brokers,
+            kafka_security,
             telemetry_topic,
             telemetry_dlq_topic,
             telemetry_group_id,
@@ -78,6 +82,158 @@ impl Config {
             alert_resolve_actors,
             threshold_policy,
         })
+    }
+}
+
+/// Passed through to librdkafka as `security.protocol`, `sasl.*` and
+/// `ssl.ca.location`/`ssl.ca.pem`.
+#[derive(Clone, PartialEq, Eq)]
+pub struct KafkaSecurity {
+    pub protocol: SecurityProtocol,
+    pub sasl: Option<SaslCredentials>,
+    pub ssl_ca_location: Option<String>,
+    pub ssl_ca_pem: Option<String>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct SaslCredentials {
+    pub mechanism: SaslMechanism,
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecurityProtocol {
+    Plaintext,
+    Ssl,
+    SaslPlaintext,
+    SaslSsl,
+}
+
+impl SecurityProtocol {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Plaintext => "plaintext",
+            Self::Ssl => "ssl",
+            Self::SaslPlaintext => "sasl_plaintext",
+            Self::SaslSsl => "sasl_ssl",
+        }
+    }
+
+    fn uses_sasl(self) -> bool {
+        matches!(self, Self::SaslPlaintext | Self::SaslSsl)
+    }
+
+    fn parse(value: &str) -> Result<Self, ConfigError> {
+        match value.to_lowercase().as_str() {
+            "plaintext" => Ok(Self::Plaintext),
+            "ssl" => Ok(Self::Ssl),
+            "sasl_plaintext" => Ok(Self::SaslPlaintext),
+            "sasl_ssl" => Ok(Self::SaslSsl),
+            _ => Err(ConfigError::Invalid(format!(
+                "KAFKA_SECURITY_PROTOCOL must be one of PLAINTEXT, SSL, SASL_PLAINTEXT, SASL_SSL: {value:?}"
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaslMechanism {
+    Plain,
+    ScramSha256,
+    ScramSha512,
+}
+
+impl SaslMechanism {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Plain => "PLAIN",
+            Self::ScramSha256 => "SCRAM-SHA-256",
+            Self::ScramSha512 => "SCRAM-SHA-512",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, ConfigError> {
+        match value.to_uppercase().as_str() {
+            "PLAIN" => Ok(Self::Plain),
+            "SCRAM-SHA-256" => Ok(Self::ScramSha256),
+            "SCRAM-SHA-512" => Ok(Self::ScramSha512),
+            _ => Err(ConfigError::Invalid(format!(
+                "KAFKA_SASL_MECHANISM must be one of PLAIN, SCRAM-SHA-256, SCRAM-SHA-512: {value:?}"
+            ))),
+        }
+    }
+}
+
+impl KafkaSecurity {
+    fn from_lookup(lookup: &impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
+        let protocol = SecurityProtocol::parse(&env_string(
+            lookup,
+            "KAFKA_SECURITY_PROTOCOL",
+            Some("plaintext"),
+        )?)?;
+        let ssl_ca_location = env_string(lookup, "KAFKA_SSL_CA_LOCATION", None).ok();
+        // Single-line secret stores often hold the PEM with literal "\n" escapes.
+        let ssl_ca_pem = env_string(lookup, "KAFKA_SSL_CA_PEM", None)
+            .ok()
+            .map(|pem| pem.replace("\\n", "\n"));
+        if ssl_ca_location.is_some() && ssl_ca_pem.is_some() {
+            return Err(ConfigError::Invalid(
+                "set only one of KAFKA_SSL_CA_LOCATION and KAFKA_SSL_CA_PEM".to_string(),
+            ));
+        }
+        let sasl = if protocol.uses_sasl() {
+            Some(SaslCredentials {
+                mechanism: SaslMechanism::parse(&env_string(
+                    lookup,
+                    "KAFKA_SASL_MECHANISM",
+                    None,
+                )?)?,
+                username: env_string(lookup, "KAFKA_SASL_USERNAME", None)?,
+                password: env_string(lookup, "KAFKA_SASL_PASSWORD", None)?,
+            })
+        } else {
+            None
+        };
+
+        Ok(Self {
+            protocol,
+            sasl,
+            ssl_ca_location,
+            ssl_ca_pem,
+        })
+    }
+}
+
+impl Default for KafkaSecurity {
+    fn default() -> Self {
+        Self {
+            protocol: SecurityProtocol::Plaintext,
+            sasl: None,
+            ssl_ca_location: None,
+            ssl_ca_pem: None,
+        }
+    }
+}
+
+impl std::fmt::Debug for KafkaSecurity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KafkaSecurity")
+            .field("protocol", &self.protocol)
+            .field("sasl", &self.sasl)
+            .field("ssl_ca_location", &self.ssl_ca_location)
+            .field("ssl_ca_pem", &self.ssl_ca_pem.as_ref().map(|_| "<set>"))
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for SaslCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SaslCredentials")
+            .field("mechanism", &self.mechanism)
+            .field("username", &self.username)
+            .field("password", &"<redacted>")
+            .finish()
     }
 }
 
@@ -206,6 +362,79 @@ mod tests {
     }
 
     #[test]
+    fn from_lookup_reads_sasl_ssl_settings() {
+        let mut vars = required_vars();
+        vars.insert("KAFKA_SECURITY_PROTOCOL", "SASL_SSL");
+        vars.insert("KAFKA_SASL_MECHANISM", "scram-sha-256");
+        vars.insert("KAFKA_SASL_USERNAME", "avnadmin");
+        vars.insert("KAFKA_SASL_PASSWORD", "secret");
+        vars.insert("KAFKA_SSL_CA_LOCATION", "/etc/kafka/ca.pem");
+
+        let cfg = Config::from_lookup(lookup_fn(vars)).unwrap();
+
+        assert_eq!(
+            cfg.kafka_security,
+            KafkaSecurity {
+                protocol: SecurityProtocol::SaslSsl,
+                sasl: Some(SaslCredentials {
+                    mechanism: SaslMechanism::ScramSha256,
+                    username: "avnadmin".to_string(),
+                    password: "secret".to_string(),
+                }),
+                ssl_ca_location: Some("/etc/kafka/ca.pem".to_string()),
+                ssl_ca_pem: None,
+            }
+        );
+        assert!(!format!("{cfg:?}").contains("secret"));
+    }
+
+    #[test]
+    fn from_lookup_reads_inline_ca_pem() {
+        let mut vars = required_vars();
+        vars.insert("KAFKA_SSL_CA_PEM", "-----BEGIN CERTIFICATE-----\\nabc\n");
+
+        let cfg = Config::from_lookup(lookup_fn(vars)).unwrap();
+
+        assert_eq!(
+            cfg.kafka_security.ssl_ca_pem.as_deref(),
+            Some("-----BEGIN CERTIFICATE-----\nabc")
+        );
+    }
+
+    #[test]
+    fn from_lookup_rejects_both_ca_location_and_pem() {
+        let mut vars = required_vars();
+        vars.insert("KAFKA_SSL_CA_LOCATION", "/etc/kafka/ca.pem");
+        vars.insert("KAFKA_SSL_CA_PEM", "-----BEGIN CERTIFICATE-----");
+
+        assert!(Config::from_lookup(lookup_fn(vars)).is_err());
+    }
+
+    #[test]
+    fn from_lookup_requires_sasl_credentials_for_sasl_protocols() {
+        let mut vars = required_vars();
+        vars.insert("KAFKA_SECURITY_PROTOCOL", "SASL_SSL");
+        vars.insert("KAFKA_SASL_MECHANISM", "SCRAM-SHA-256");
+
+        let err = Config::from_lookup(lookup_fn(vars)).unwrap_err();
+        assert_eq!(err, ConfigError::Missing("KAFKA_SASL_USERNAME"));
+    }
+
+    #[test]
+    fn from_lookup_rejects_unknown_protocol_and_mechanism() {
+        let mut vars = required_vars();
+        vars.insert("KAFKA_SECURITY_PROTOCOL", "tls");
+        assert!(Config::from_lookup(lookup_fn(vars)).is_err());
+
+        let mut vars = required_vars();
+        vars.insert("KAFKA_SECURITY_PROTOCOL", "SASL_SSL");
+        vars.insert("KAFKA_SASL_MECHANISM", "GSSAPI");
+        vars.insert("KAFKA_SASL_USERNAME", "u");
+        vars.insert("KAFKA_SASL_PASSWORD", "p");
+        assert!(Config::from_lookup(lookup_fn(vars)).is_err());
+    }
+
+    #[test]
     fn from_lookup_rejects_reserved_system_actor() {
         let mut vars = required_vars();
         vars.insert("ALERT_RESOLVE_ACTORS", "system");
@@ -223,6 +452,7 @@ mod tests {
         let cfg = Config::from_lookup(lookup_fn(required_vars())).unwrap();
 
         assert_eq!(cfg.kafka_brokers, vec!["localhost:9092"]);
+        assert_eq!(cfg.kafka_security, KafkaSecurity::default());
         assert_eq!(cfg.telemetry_topic, "telemetry.ingested");
         assert_eq!(cfg.telemetry_dlq_topic, "telemetry.ingested.dlq");
         assert_eq!(cfg.telemetry_group_id, "engine-rust");

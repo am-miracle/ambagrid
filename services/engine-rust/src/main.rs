@@ -102,7 +102,7 @@ async fn publish_outbox() -> Result<(), Box<dyn std::error::Error>> {
         .connect(&cfg.database_url)
         .await?;
     let store = PostgresOutboxRepository::new(pool);
-    let events = KafkaOutboxEventPublisher::connect(cfg.kafka_brokers)?;
+    let events = KafkaOutboxEventPublisher::connect(&cfg.kafka_brokers, &cfg.kafka_security)?;
     let publisher = PublishOutbox::new(&store, &events, BATCH_SIZE, Metrics::new()?);
     let mut consecutive_failures = 0;
     let mut cleanup = tokio::time::interval(CLEANUP_INTERVAL);

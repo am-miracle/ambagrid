@@ -11,7 +11,7 @@ Solar assets, smart meters, batteries, inverters
         v
 Mosquitto MQTT broker
         |
-        | africa-west/+/smartmeter/+/telemetry
+        | africa-west/+/+/+/telemetry
         v
 Go ingestion bridge
         |
