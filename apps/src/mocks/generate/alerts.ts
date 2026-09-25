@@ -7,12 +7,11 @@ import {
 	HEAT_EPISODES,
 	lastReportAt,
 	sample,
+	WARNING_ALERTS,
 } from "./fleet";
 import { seededUuid } from "./noise";
 
-// Every alert the engine emits today is a critical internal_temperature alert
-// (services/engine-rust/src/domain/rules.rs), so the mock emits nothing else.
-const KIND = "internal_temperature";
+const TEMPERATURE_KIND = "internal_temperature";
 const MINUTE = 60_000;
 
 const iso = (t: number) => new Date(t).toISOString();
@@ -25,7 +24,7 @@ const specFor = (assetId: string) =>
 	ASSETS.find((a) => a.asset_id === assetId) as AssetSpec;
 
 function seedAlerts(): AlertDetail[] {
-	return HEAT_EPISODES.map((episode, index) => {
+	const alerts = HEAT_EPISODES.map((episode, index) => {
 		const spec = specFor(episode.asset_id);
 		const threshold = criticalFor(spec);
 		const openedAt = episode.start + 6 * MINUTE;
@@ -33,7 +32,7 @@ function seedAlerts(): AlertDetail[] {
 			alert_id: seededUuid(`${episode.asset_id}:${index}`),
 			asset_id: spec.asset_id,
 			site_id: spec.site_id,
-			kind: KIND,
+			kind: TEMPERATURE_KIND,
 			severity: "critical",
 			status: "open",
 			reason: openReason(
@@ -61,6 +60,29 @@ function seedAlerts(): AlertDetail[] {
 			);
 		return resolve(alert, resolvedAt, note, operator?.actor ?? SYSTEM_ACTOR);
 	});
+
+	alerts.push(
+		...WARNING_ALERTS.map((warning) => {
+			const spec = specFor(warning.asset_id);
+			return {
+				alert_id: seededUuid(`warning:${warning.asset_id}:${warning.kind}`),
+				asset_id: warning.asset_id,
+				site_id: spec.site_id,
+				kind: warning.kind,
+				severity: "warning" as const,
+				status: "open" as const,
+				reason: warning.reason,
+				opened_at: iso(warning.openedAt),
+				source_event_id: `telemetry-evt-${warning.asset_id}-${warning.openedAt / 1000}`,
+				resolved_at: null,
+				resolution_note: null,
+				resolved_by: null,
+				resolutions: [],
+			};
+		}),
+	);
+
+	return alerts;
 }
 
 function resolve(
@@ -99,7 +121,9 @@ export function evaluatePolicy(now: number) {
 		const threshold = criticalFor(spec);
 		const open = alerts.find(
 			(a) =>
-				a.asset_id === spec.asset_id && a.kind === KIND && a.status === "open",
+				a.asset_id === spec.asset_id &&
+				a.kind === TEMPERATURE_KIND &&
+				a.status === "open",
 		);
 
 		if (!open && temperature >= threshold) {
@@ -113,7 +137,7 @@ export function evaluatePolicy(now: number) {
 				alert_id: seededUuid(`${spec.asset_id}:${reportedAt}`),
 				asset_id: spec.asset_id,
 				site_id: spec.site_id,
-				kind: KIND,
+				kind: TEMPERATURE_KIND,
 				severity: "critical",
 				status: "open",
 				reason: openReason(temperature, threshold),

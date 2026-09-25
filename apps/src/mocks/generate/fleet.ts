@@ -69,6 +69,13 @@ export interface HeatEpisode {
 	operatorResolution?: { actor: string; note: string };
 }
 
+export interface WarningAlertSpec {
+	asset_id: string;
+	kind: string;
+	reason: string;
+	openedAt: number;
+}
+
 const REGISTERED_AT = BOOT - 400 * DAY;
 
 const METER_OVERRIDES: Record<string, Partial<AssetSpec>> = {
@@ -196,6 +203,33 @@ export const HEAT_EPISODES: HeatEpisode[] = [
 	},
 	{ asset_id: "bms-1901", start: BOOT - 20 * MINUTE, end: null, peak: 56.4 },
 	{ asset_id: "met-0903", start: BOOT - 19 * HOUR, end: null, peak: 72.8 },
+];
+
+export const WARNING_ALERTS: WarningAlertSpec[] = [
+	{
+		asset_id: "bms-1001",
+		kind: "battery_soc_low",
+		reason: "battery_soc_low:22.4%<threshold:25.0%",
+		openedAt: BOOT - 35 * MINUTE,
+	},
+	{
+		asset_id: "met-1406",
+		kind: "frequency_drift",
+		reason: "frequency_drift:49.71Hz<lower_bound:49.80Hz",
+		openedAt: BOOT - 52 * MINUTE,
+	},
+	{
+		asset_id: "inv-1701",
+		kind: "solar_irradiance_low",
+		reason: "solar_irradiance_low:118.2W/m2<expected:180.0W/m2",
+		openedAt: BOOT - 74 * MINUTE,
+	},
+	{
+		asset_id: "met-2003",
+		kind: "voltage_sag",
+		reason: "voltage_sag:207.8V<lower_bound:210.0V",
+		openedAt: BOOT - 96 * MINUTE,
+	},
 ];
 
 const RAMP_MS = 8 * MINUTE;
