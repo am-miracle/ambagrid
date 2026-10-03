@@ -3,6 +3,7 @@ import type {
 	Alert,
 	AlertDetail,
 	AlertStatus,
+	ApplyPaymentResult,
 	Asset,
 	AssetType,
 	CollectionBody,
@@ -117,6 +118,25 @@ export const api = {
 					[ACTOR_ID_HEADER]: actorId,
 				},
 				body: JSON.stringify({ resolution_note: resolutionNote }),
+			},
+		),
+
+	applyDevPayment: (
+		customerId: string,
+		amountMinorUnits: number,
+		currency: string,
+	) =>
+		request<ObjectBody<ApplyPaymentResult>>(
+			"/v1/dev/payments",
+			{},
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					customer_id: customerId,
+					amount_minor_units: amountMinorUnits,
+					currency,
+				}),
 			},
 		),
 };

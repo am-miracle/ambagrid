@@ -11,10 +11,18 @@ type API struct {
 	Assets         AssetService
 	Alerts         AlertService
 	Sites          SiteService
+	Payments       PaymentService
 	Health         HealthService
+	Webhooks       []WebhookRoute
 	Logger         *slog.Logger
 	RequestTimeout time.Duration
 	AllowedOrigins []string
+	DevMode        bool
+}
+
+type WebhookRoute struct {
+	Pattern  string
+	Provider WebhookProvider
 }
 
 // Handler builds the versioned routes and middleware chain.
@@ -32,6 +40,14 @@ func (a API) Handler() http.Handler {
 	a.handleRoute(mux, http.MethodGet, "/v1/alerts", a.handleListAlerts)
 	a.handleRoute(mux, http.MethodGet, "/v1/alerts/{alert_id}", a.handleGetAlert)
 	a.handleRoute(mux, http.MethodPost, "/v1/alerts/{alert_id}/resolve", a.handleResolveAlert)
+	if a.DevMode {
+		a.handleRoute(mux, http.MethodPost, "/v1/dev/payments", a.handleApplyDevPayment)
+	}
+
+	for _, wh := range a.Webhooks {
+		provider := wh.Provider
+		a.handleRoute(mux, http.MethodPost, wh.Pattern, a.handleWebhookPayment(provider))
+	}
 
 	// Keep unmatched responses in the API's JSON envelope.
 	mux.HandleFunc("/", a.handleUnmatched)

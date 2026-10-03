@@ -36,6 +36,21 @@ func TestFromEnvAppliesDefaults(t *testing.T) {
 	if cfg.AlertResolvedTopic != "alert.resolved" {
 		t.Fatalf("AlertResolvedTopic = %q", cfg.AlertResolvedTopic)
 	}
+	if cfg.PaymentConfirmedTopic != "payment.confirmed" {
+		t.Fatalf("PaymentConfirmedTopic = %q", cfg.PaymentConfirmedTopic)
+	}
+	if cfg.CreditIssuedTopic != "credit.issued" {
+		t.Fatalf("CreditIssuedTopic = %q", cfg.CreditIssuedTopic)
+	}
+	if cfg.MeterCommandRequestedTopic != "meter.command.requested" {
+		t.Fatalf("MeterCommandRequestedTopic = %q", cfg.MeterCommandRequestedTopic)
+	}
+	if cfg.PaystackSecretKey != "" {
+		t.Fatalf("PaystackSecretKey = %q, want empty", cfg.PaystackSecretKey)
+	}
+	if cfg.DevMode {
+		t.Fatal("DevMode = true, want false by default")
+	}
 	// Postgres must allow the API time to return its own timeout response.
 	if cfg.DBStatementTimeout <= cfg.DBQueryTimeout {
 		t.Fatalf("DBStatementTimeout %s must exceed DBQueryTimeout %s", cfg.DBStatementTimeout, cfg.DBQueryTimeout)
@@ -49,6 +64,10 @@ func TestFromEnvReadsOverrides(t *testing.T) {
 	t.Setenv("DB_MAX_CONNS", "40")
 	t.Setenv("API_CORS_ALLOWED_ORIGINS", " https://ops.example , ")
 	t.Setenv("ALERT_RESOLVED_TOPIC", "custom.alert.resolved")
+	t.Setenv("PAYMENT_CONFIRMED_TOPIC", "custom.payment.confirmed")
+	t.Setenv("CREDIT_ISSUED_TOPIC", "custom.credit.issued")
+	t.Setenv("METER_COMMAND_REQUESTED_TOPIC", "custom.meter.command.requested")
+	t.Setenv("PAYSTACK_SECRET_KEY", "sk_test_example")
 
 	cfg, err := FromEnv()
 	if err != nil {
@@ -64,6 +83,25 @@ func TestFromEnvReadsOverrides(t *testing.T) {
 	if cfg.AlertResolvedTopic != "custom.alert.resolved" {
 		t.Fatalf("AlertResolvedTopic = %q", cfg.AlertResolvedTopic)
 	}
+	if cfg.PaymentConfirmedTopic != "custom.payment.confirmed" || cfg.CreditIssuedTopic != "custom.credit.issued" || cfg.MeterCommandRequestedTopic != "custom.meter.command.requested" {
+		t.Fatalf("revenue topic overrides not applied: %+v", cfg)
+	}
+	if cfg.PaystackSecretKey != "sk_test_example" {
+		t.Fatalf("PaystackSecretKey = %q", cfg.PaystackSecretKey)
+	}
+}
+
+func TestFromEnvEnablesDevMode(t *testing.T) {
+	setRequired(t)
+	t.Setenv("API_DEV_MODE", "true")
+
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv() error = %v", err)
+	}
+	if !cfg.DevMode {
+		t.Fatal("DevMode = false, want true when API_DEV_MODE=true")
+	}
 }
 
 func TestFromEnvRejectsUnusableValues(t *testing.T) {
@@ -73,6 +111,10 @@ func TestFromEnvRejectsUnusableValues(t *testing.T) {
 		"timeout is negative":       {key: "API_REQUEST_TIMEOUT", value: "-1s"},
 		"pool cannot serve anyone":  {key: "DB_MAX_CONNS", value: "0"},
 		"ceiling below the default": {key: "API_MAX_PAGE_SIZE", value: "10"},
+		"alert topic is blank":      {key: "ALERT_RESOLVED_TOPIC", value: " "},
+		"payment topic is blank":    {key: "PAYMENT_CONFIRMED_TOPIC", value: " "},
+		"credit topic is blank":     {key: "CREDIT_ISSUED_TOPIC", value: " "},
+		"command topic is blank":    {key: "METER_COMMAND_REQUESTED_TOPIC", value: " "},
 	}
 
 	for name, test := range tests {

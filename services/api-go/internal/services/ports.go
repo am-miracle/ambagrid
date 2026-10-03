@@ -1,14 +1,12 @@
-// Defines the repository interfaces used by services.
 package services
 
 import (
 	"context"
+	"time"
 
 	"api-go/internal/domain"
 	"api-go/internal/page"
 )
-
-// Services depend on these interfaces instead of Postgres directly.
 
 type AssetRepository interface {
 	ListAssets(ctx context.Context, query domain.AssetQuery) (page.Page[domain.Asset], error)
@@ -24,6 +22,26 @@ type AlertRepository interface {
 
 type SiteRepository interface {
 	ListSites(ctx context.Context, query domain.SiteQuery) (page.Page[domain.Site], error)
+}
+
+type PaymentRepository interface {
+	RunPaymentTx(ctx context.Context, fn func(PaymentTx) (domain.ApplyPaymentResult, error)) (domain.ApplyPaymentResult, error)
+}
+
+type PaymentTx interface {
+	FindExistingPayment(ctx context.Context, provider, externalReference string) (*domain.Payment, error)
+	InsertPayment(ctx context.Context, command domain.ApplyPaymentCommand) (*domain.Payment, error)
+	ReplayPriorResult(ctx context.Context, payment domain.Payment) (domain.ApplyPaymentResult, error)
+	FindActiveAssignment(ctx context.Context, customerID string) (domain.MeterAssignment, error)
+	FindActiveTariff(ctx context.Context, siteID string, at time.Time) (domain.Tariff, error)
+	InsertEnergyCredit(ctx context.Context, siteID, assignmentID, paymentID, tariffPlanID string, kwhGranted float64, moneyMinorUnits int64) (domain.EnergyCredit, error)
+	GetPriorBalance(ctx context.Context, assignmentID string) (float64, error)
+	UpsertCreditBalance(ctx context.Context, assignmentID string, kwhGranted float64, moneyMinorUnits int64) (domain.CreditBalance, error)
+	InsertMeterCommand(ctx context.Context, meterID string, commandType domain.MeterCommandType, requestedBy, reason string) (domain.MeterCommand, error)
+	InsertPaymentConfirmedEvent(ctx context.Context, payment domain.Payment) error
+	InsertCreditIssuedEvent(ctx context.Context, credit domain.EnergyCredit) error
+	InsertMeterCommandEvent(ctx context.Context, cmd domain.MeterCommand, siteID, assignmentID string) error
+	InsertAuditEvent(ctx context.Context, siteID, actorID, action, subjectType, subjectID string, metadata map[string]any) error
 }
 
 type HealthRepository interface {

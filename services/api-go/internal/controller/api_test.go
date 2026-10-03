@@ -3,6 +3,9 @@ package controller
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha512"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -16,6 +19,7 @@ import (
 	"api-go/internal/domain"
 	"api-go/internal/page"
 	"api-go/internal/services"
+	"api-go/internal/webhook"
 )
 
 type fakeAssets struct {
@@ -79,35 +83,89 @@ func (f *fakeSites) List(context.Context, services.ListSitesRequest) (page.Page[
 	return f.listResult, f.listErr
 }
 
+type fakePayments struct {
+	devResult         domain.ApplyPaymentResult
+	devErr            error
+	webhookResult     domain.ApplyPaymentResult
+	webhookErr        error
+	gotDevRequest     services.ApplyDevPaymentRequest
+	gotWebhookCommand domain.ApplyPaymentCommand
+	devCalls          int
+	webhookCalls      int
+}
+
+func (f *fakePayments) ApplyDevPayment(_ context.Context, request services.ApplyDevPaymentRequest) (domain.ApplyPaymentResult, error) {
+	f.devCalls++
+	f.gotDevRequest = request
+	return f.devResult, f.devErr
+}
+
+func (f *fakePayments) ApplyWebhookPayment(_ context.Context, command domain.ApplyPaymentCommand) (domain.ApplyPaymentResult, error) {
+	f.webhookCalls++
+	f.gotWebhookCommand = command
+	return f.webhookResult, f.webhookErr
+}
+
 type fakeHealth struct{ err error }
 
 func (f *fakeHealth) Ready(context.Context) error { return f.err }
 
 type testAPI struct {
-	handler http.Handler
-	assets  *fakeAssets
-	alerts  *fakeAlerts
-	sites   *fakeSites
-	health  *fakeHealth
+	handler  http.Handler
+	assets   *fakeAssets
+	alerts   *fakeAlerts
+	sites    *fakeSites
+	payments *fakePayments
+	health   *fakeHealth
 }
 
 func newTestAPI() testAPI {
 	assets := &fakeAssets{}
 	alerts := &fakeAlerts{}
 	sites := &fakeSites{}
+	payments := &fakePayments{}
 	health := &fakeHealth{}
 
 	api := API{
 		Assets:         assets,
 		Alerts:         alerts,
 		Sites:          sites,
+		Payments:       payments,
 		Health:         health,
 		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 		RequestTimeout: time.Second,
 		AllowedOrigins: []string{"http://localhost:5173"},
+		DevMode:        true,
 	}
 
-	return testAPI{handler: api.Handler(), assets: assets, alerts: alerts, sites: sites, health: health}
+	return testAPI{handler: api.Handler(), assets: assets, alerts: alerts, sites: sites, payments: payments, health: health}
+}
+
+func newTestAPIWithPaystack(secret string) testAPI {
+	assets := &fakeAssets{}
+	alerts := &fakeAlerts{}
+	sites := &fakeSites{}
+	payments := &fakePayments{}
+	health := &fakeHealth{}
+
+	paystack, _ := webhook.NewPaystack(secret)
+	api := API{
+		Assets:   assets,
+		Alerts:   alerts,
+		Sites:    sites,
+		Payments: payments,
+		Health:   health,
+		Webhooks: []WebhookRoute{{
+			Pattern:  "/v1/webhooks/paystack",
+			Provider: paystack,
+		}},
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		RequestTimeout: time.Second,
+		AllowedOrigins: []string{"http://localhost:5173"},
+		DevMode:        true,
+	}
+
+	return testAPI{handler: api.Handler(), assets: assets, alerts: alerts, sites: sites, payments: payments, health: health}
 }
 
 func (a testAPI) get(t *testing.T, target string) *httptest.ResponseRecorder {
@@ -547,5 +605,303 @@ func TestReadinessFollowsTheDatabase(t *testing.T) {
 	// Liveness remains healthy during a database outage.
 	if recorder := api.get(t, "/healthz"); recorder.Code != http.StatusOK {
 		t.Fatalf("liveness status = %d, want 200 during a database outage", recorder.Code)
+	}
+}
+
+func samplePaymentResult() domain.ApplyPaymentResult {
+	confirmedAt := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	creditCreatedAt := confirmedAt
+	balanceUpdatedAt := confirmedAt
+	paymentID := "pay-001"
+	tariffID := "tariff-01"
+	moneyValue := int64(500000)
+	return domain.ApplyPaymentResult{
+		Payment: domain.Payment{
+			PaymentID:         "pay-001",
+			Provider:          "dev",
+			ExternalReference: "dev-abc123",
+			CustomerID:        "cust-01",
+			AmountMinorUnits:  500000,
+			Currency:          "NGN",
+			Status:            domain.PaymentStatusConfirmed,
+			ConfirmedAt:       &confirmedAt,
+			CreatedAt:         confirmedAt,
+		},
+		Credit: domain.EnergyCredit{
+			CreditID:             "credit-001",
+			SiteID:               "site-01",
+			AssignmentID:         "assign-001",
+			PaymentID:            &paymentID,
+			TariffPlanID:         &tariffID,
+			SourceType:           domain.CreditSourcePayment,
+			SourceID:             "pay-001",
+			KWhGranted:           20.0,
+			MoneyValueMinorUnits: &moneyValue,
+			CreatedAt:            creditCreatedAt,
+		},
+		Balance: domain.CreditBalance{
+			AssignmentID:                  "assign-001",
+			RemainingKWh:                  20.0,
+			RemainingMoneyValueMinorUnits: 500000,
+			UpdatedAt:                     balanceUpdatedAt,
+		},
+		MeterCommand: &domain.MeterCommand{
+			CommandID:   "cmd-001",
+			MeterID:     "met-0101",
+			CommandType: domain.CommandReconnectMeter,
+			Status:      domain.CommandStatusRequested,
+			RequestedBy: "provider:dev",
+			Reason:      "balance recharged from zero",
+			RequestedAt: confirmedAt,
+		},
+	}
+}
+
+func TestDevPaymentReturnsTheFullChainOn201(t *testing.T) {
+	api := newTestAPI()
+	api.payments.devResult = samplePaymentResult()
+
+	recorder := api.post(t, "/v1/dev/payments", `{"customer_id":"cust-01","amount_minor_units":500000,"currency":"NGN"}`, nil)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", recorder.Code, recorder.Body.String())
+	}
+	body := decodeBody(t, recorder)
+	data := body["data"].(map[string]any)
+
+	payment := data["payment"].(map[string]any)
+	if payment["payment_id"] != "pay-001" || payment["provider"] != "dev" || payment["status"] != "confirmed" {
+		t.Fatalf("payment = %v", payment)
+	}
+	credit := data["credit"].(map[string]any)
+	if credit["kwh_granted"] != 20.0 || credit["source_type"] != "payment" {
+		t.Fatalf("credit = %v", credit)
+	}
+	balance := data["balance"].(map[string]any)
+	if balance["remaining_kwh"] != 20.0 {
+		t.Fatalf("balance = %v", balance)
+	}
+	cmd := data["meter_command"].(map[string]any)
+	if cmd["command_type"] != "reconnect_meter" || cmd["status"] != "requested" {
+		t.Fatalf("meter_command = %v", cmd)
+	}
+
+	if api.payments.devCalls != 1 {
+		t.Fatalf("service calls = %d, want 1", api.payments.devCalls)
+	}
+	got := api.payments.gotDevRequest
+	if got.CustomerID != "cust-01" || got.AmountMinorUnits != 500000 || got.Currency != "NGN" {
+		t.Fatalf("service request = %+v", got)
+	}
+	if body["request_id"] == "" {
+		t.Fatal("response missing request_id")
+	}
+}
+
+func TestDevPaymentOmitsMeterCommandWhenNoneIssued(t *testing.T) {
+	api := newTestAPI()
+	result := samplePaymentResult()
+	result.MeterCommand = nil
+	api.payments.devResult = result
+
+	recorder := api.post(t, "/v1/dev/payments", `{"customer_id":"cust-01","amount_minor_units":500000,"currency":"NGN"}`, nil)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", recorder.Code)
+	}
+	data := decodeBody(t, recorder)["data"].(map[string]any)
+	if data["meter_command"] != nil {
+		t.Fatalf("meter_command = %v, want nil", data["meter_command"])
+	}
+}
+
+func TestDevPaymentRejectsInvalidJSON(t *testing.T) {
+	api := newTestAPI()
+
+	recorder := api.post(t, "/v1/dev/payments", `{"customer_id":`, nil)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", recorder.Code)
+	}
+	if api.payments.devCalls != 0 {
+		t.Fatalf("service was called %d times, want 0", api.payments.devCalls)
+	}
+}
+
+func TestDevPaymentRejectsExtraJSONFields(t *testing.T) {
+	api := newTestAPI()
+
+	recorder := api.post(t, "/v1/dev/payments", `{"customer_id":"cust-01","amount_minor_units":500000,"currency":"NGN","extra":"field"}`, nil)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", recorder.Code)
+	}
+}
+
+func TestDevPaymentMapsServiceErrorsToHTTPStatus(t *testing.T) {
+	tests := map[string]struct {
+		err        error
+		wantStatus int
+	}{
+		"not found":   {err: domain.ErrNotFound, wantStatus: http.StatusNotFound},
+		"conflict":    {err: domain.ErrConflict, wantStatus: http.StatusConflict},
+		"bad request": {err: services.ErrInvalidRequest, wantStatus: http.StatusBadRequest},
+		"internal":    {err: errors.New("database error"), wantStatus: http.StatusInternalServerError},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			api := newTestAPI()
+			api.payments.devErr = test.err
+
+			recorder := api.post(t, "/v1/dev/payments", `{"customer_id":"cust-01","amount_minor_units":500000,"currency":"NGN"}`, nil)
+
+			if recorder.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d: %s", recorder.Code, test.wantStatus, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestDevPaymentReturns404WhenDevModeDisabled(t *testing.T) {
+	api := newTestAPI()
+	api.handler = (API{
+		Assets:         api.assets,
+		Alerts:         api.alerts,
+		Sites:          api.sites,
+		Payments:       api.payments,
+		Health:         api.health,
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		RequestTimeout: time.Second,
+		AllowedOrigins: []string{"http://localhost:5173"},
+		DevMode:        false,
+	}).Handler()
+
+	recorder := api.post(t, "/v1/dev/payments", `{"customer_id":"cust-01","amount_minor_units":500000,"currency":"NGN"}`, nil)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 when dev mode is disabled", recorder.Code)
+	}
+	if api.payments.devCalls != 0 {
+		t.Fatalf("service was called %d times, want 0", api.payments.devCalls)
+	}
+}
+
+const testPaystackSecret = "sk_test_xxxxxxxxxxxxxxxxxxxxx"
+
+func paystackSign(body []byte) string {
+	mac := hmac.New(sha512.New, []byte(testPaystackSecret))
+	mac.Write(body)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func paystackChargeBody(reference, customerID, currency string, amount int64) string {
+	envelope := map[string]any{
+		"event": "charge.success",
+		"data": map[string]any{
+			"reference": reference,
+			"amount":    amount,
+			"currency":  currency,
+			"status":    "success",
+			"paid_at":   "2026-10-01T14:30:00Z",
+			"metadata":  map[string]any{"customer_id": customerID},
+		},
+	}
+	b, _ := json.Marshal(envelope)
+	return string(b)
+}
+
+func TestWebhookPaystackAcceptsValidSignedPayload(t *testing.T) {
+	api := newTestAPIWithPaystack(testPaystackSecret)
+	api.payments.webhookResult = samplePaymentResult()
+
+	body := paystackChargeBody("txn-abc-123", "cust-01", "NGN", 500000)
+	sig := paystackSign([]byte(body))
+
+	recorder := api.post(t, "/v1/webhooks/paystack", body, map[string]string{
+		"X-Paystack-Signature": sig,
+	})
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	if api.payments.webhookCalls != 1 {
+		t.Fatalf("service calls = %d, want 1", api.payments.webhookCalls)
+	}
+	cmd := api.payments.gotWebhookCommand
+	if cmd.Provider != "paystack" || cmd.ExternalReference != "txn-abc-123" || cmd.CustomerID != "cust-01" || cmd.AmountMinorUnits != 500000 || cmd.Currency != "NGN" {
+		t.Fatalf("command = %+v", cmd)
+	}
+
+	data := decodeBody(t, recorder)["data"].(map[string]any)
+	if data["payment"].(map[string]any)["payment_id"] != "pay-001" {
+		t.Fatalf("response missing payment data")
+	}
+}
+
+func TestWebhookPaystackRejectsMissingSignature(t *testing.T) {
+	api := newTestAPIWithPaystack(testPaystackSecret)
+
+	body := paystackChargeBody("txn-abc-123", "cust-01", "NGN", 500000)
+	recorder := api.post(t, "/v1/webhooks/paystack", body, nil)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", recorder.Code)
+	}
+	if api.payments.webhookCalls != 0 {
+		t.Fatalf("service was called %d times, want 0", api.payments.webhookCalls)
+	}
+	if code := decodeBody(t, recorder)["error"].(map[string]any)["code"]; code != codeUnauthenticated {
+		t.Fatalf("code = %v, want %v", code, codeUnauthenticated)
+	}
+}
+
+func TestWebhookPaystackRejectsInvalidSignature(t *testing.T) {
+	api := newTestAPIWithPaystack(testPaystackSecret)
+
+	body := paystackChargeBody("txn-abc-123", "cust-01", "NGN", 500000)
+	recorder := api.post(t, "/v1/webhooks/paystack", body, map[string]string{
+		"X-Paystack-Signature": "deadbeef",
+	})
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", recorder.Code)
+	}
+	if api.payments.webhookCalls != 0 {
+		t.Fatalf("service was called %d times, want 0", api.payments.webhookCalls)
+	}
+}
+
+func TestWebhookPaystackRejectsMalformedPayload(t *testing.T) {
+	api := newTestAPIWithPaystack(testPaystackSecret)
+
+	body := []byte(`{"event":"transfer.success","data":{}}`)
+	sig := paystackSign(body)
+
+	recorder := api.post(t, "/v1/webhooks/paystack", string(body), map[string]string{
+		"X-Paystack-Signature": sig,
+	})
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", recorder.Code)
+	}
+	if api.payments.webhookCalls != 0 {
+		t.Fatalf("service was called %d times, want 0", api.payments.webhookCalls)
+	}
+}
+
+func TestWebhookPaystackMapsServiceErrorsToHTTPStatus(t *testing.T) {
+	api := newTestAPIWithPaystack(testPaystackSecret)
+	api.payments.webhookErr = domain.ErrNotFound
+
+	body := paystackChargeBody("txn-abc-123", "cust-01", "NGN", 500000)
+	sig := paystackSign([]byte(body))
+
+	recorder := api.post(t, "/v1/webhooks/paystack", body, map[string]string{
+		"X-Paystack-Signature": sig,
+	})
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", recorder.Code)
 	}
 }

@@ -9,3 +9,13 @@ kafka:
     mappings:
       - topicName: telemetry.ingested
         valueProtoType: ambagrid.telemetry.MetricPayload
+      - topicName: alert.opened
+        valueProtoType: ambagrid.alerts.AlertOpened
+      - topicName: alert.resolved
+        valueProtoType: ambagrid.alerts.AlertResolved
+      - topicName: payment.confirmed
+        valueProtoType: ambagrid.revenue.PaymentConfirmed
+      - topicName: credit.issued
+        valueProtoType: ambagrid.revenue.CreditIssued
+      - topicName: meter.command.requested
+        valueProtoType: ambagrid.meter_commands.MeterCommandRequested

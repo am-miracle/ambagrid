@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package ambagrid.meter_commands;
+
+option go_package = "ingestion-go/proto/ambagrid/meter_commands;meter_commands";
+
+message MeterCommandRequested {
+  string command_id = 1;
+  string meter_id = 2;
+  string site_id = 3;
+  string assignment_id = 4;
+  string command_type = 5;
+  string status = 6;
+  string requested_by = 7;
+  string reason = 8;
+  int64 requested_at_utc = 9; // Unix epoch timestamp in seconds.
+}

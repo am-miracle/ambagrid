@@ -142,3 +142,55 @@ export interface AlertResolution {
 export interface AlertDetail extends Alert {
 	resolutions: AlertResolution[];
 }
+
+export interface Payment {
+	payment_id: string;
+	provider: string;
+	external_reference: string;
+	customer_id: string;
+	amount_minor_units: number;
+	currency: string;
+	status: string;
+	confirmed_at: string | null;
+	created_at: string;
+}
+
+export interface EnergyCredit {
+	credit_id: string;
+	site_id: string;
+	assignment_id: string;
+	payment_id: string | null;
+	tariff_plan_id: string | null;
+	source_type: string;
+	source_id: string;
+	kwh_granted: number;
+	money_value_minor_units: number | null;
+	created_at: string;
+}
+
+export interface CreditBalance {
+	assignment_id: string;
+	remaining_kwh: number;
+	remaining_money_value_minor_units: number;
+	updated_at: string;
+}
+
+export interface MeterCommand {
+	command_id: string;
+	meter_id: string;
+	command_type: string;
+	status: string;
+	requested_by: string;
+	reason: string;
+	requested_at: string;
+	sent_at: string | null;
+	acknowledged_at: string | null;
+	failure_reason: string | null;
+}
+
+export interface ApplyPaymentResult {
+	payment: Payment;
+	credit: EnergyCredit;
+	balance: CreditBalance;
+	meter_command: MeterCommand | null;
+}

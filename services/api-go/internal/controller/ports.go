@@ -27,6 +27,18 @@ type SiteService interface {
 	List(ctx context.Context, request services.ListSitesRequest) (page.Page[domain.Site], error)
 }
 
+type PaymentService interface {
+	ApplyDevPayment(ctx context.Context, request services.ApplyDevPaymentRequest) (domain.ApplyPaymentResult, error)
+	ApplyWebhookPayment(ctx context.Context, command domain.ApplyPaymentCommand) (domain.ApplyPaymentResult, error)
+}
+
 type HealthService interface {
 	Ready(ctx context.Context) error
+}
+
+type WebhookProvider interface {
+	Name() string
+	SignatureHeader() string
+	VerifySignature(body []byte, signature string) error
+	ParsePayment(body []byte) (domain.ApplyPaymentCommand, error)
 }

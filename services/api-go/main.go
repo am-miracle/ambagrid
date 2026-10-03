@@ -13,6 +13,7 @@ import (
 	"api-go/internal/controller"
 	"api-go/internal/repository/postgres"
 	"api-go/internal/services"
+	"api-go/internal/webhook"
 )
 
 func main() {
@@ -34,7 +35,10 @@ func main() {
 	defer pool.Close()
 
 	store := postgres.NewStoreWithOutboxTopics(pool, cfg.DBQueryTimeout, postgres.OutboxTopics{
-		AlertResolved: cfg.AlertResolvedTopic,
+		AlertResolved:         cfg.AlertResolvedTopic,
+		PaymentConfirmed:      cfg.PaymentConfirmedTopic,
+		CreditIssued:          cfg.CreditIssuedTopic,
+		MeterCommandRequested: cfg.MeterCommandRequestedTopic,
 	})
 	limits := services.PageLimits{
 		DefaultSize: cfg.DefaultPageSize,
@@ -46,14 +50,19 @@ func main() {
 		MaxSize:     cfg.GlobalHistoryPageSize,
 	}
 
+	webhooks := buildWebhookRoutes(cfg, logger)
+
 	api := controller.API{
 		Assets:         services.NewAssetService(store, limits),
 		Alerts:         services.NewAlertService(store, limits, globalHistoryLimits),
 		Sites:          services.NewSiteService(store, limits),
+		Payments:       services.NewPaymentService(store),
 		Health:         services.NewHealthService(store),
+		Webhooks:       webhooks,
 		Logger:         logger,
 		RequestTimeout: cfg.RequestTimeout,
 		AllowedOrigins: cfg.CORSAllowedOrigins,
+		DevMode:        cfg.DevMode,
 	}
 
 	err = controller.Serve(ctx, controller.ServerOptions{
@@ -69,6 +78,25 @@ func main() {
 		logger.Error("api stopped", "error", err)
 		os.Exit(1)
 	}
+}
+
+func buildWebhookRoutes(cfg config.Config, logger *slog.Logger) []controller.WebhookRoute {
+	var routes []controller.WebhookRoute
+
+	if cfg.PaystackSecretKey != "" {
+		paystack, err := webhook.NewPaystack(cfg.PaystackSecretKey)
+		if err != nil {
+			logger.Error("configure paystack webhook", "error", err)
+			os.Exit(1)
+		}
+		routes = append(routes, controller.WebhookRoute{
+			Pattern:  "/v1/webhooks/paystack",
+			Provider: paystack,
+		})
+		logger.Info("paystack webhook enabled", "path", "/v1/webhooks/paystack")
+	}
+
+	return routes
 }
 
 // newLogger uses JSON unless text output is requested.

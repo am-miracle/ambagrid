@@ -184,6 +184,109 @@ func toAlertResolutionDTO(resolution domain.AlertResolution) alertResolutionDTO 
 	}
 }
 
+type paymentDTO struct {
+	PaymentID         string               `json:"payment_id"`
+	Provider          string               `json:"provider"`
+	ExternalReference string               `json:"external_reference"`
+	CustomerID        string               `json:"customer_id"`
+	AmountMinorUnits  int64                `json:"amount_minor_units"`
+	Currency          string               `json:"currency"`
+	Status            domain.PaymentStatus `json:"status"`
+	ConfirmedAt       *time.Time           `json:"confirmed_at"`
+	CreatedAt         time.Time            `json:"created_at"`
+}
+
+type energyCreditDTO struct {
+	CreditID             string    `json:"credit_id"`
+	SiteID               string    `json:"site_id"`
+	AssignmentID         string    `json:"assignment_id"`
+	PaymentID            *string   `json:"payment_id"`
+	TariffPlanID         *string   `json:"tariff_plan_id"`
+	SourceType           string    `json:"source_type"`
+	SourceID             string    `json:"source_id"`
+	KWhGranted           float64   `json:"kwh_granted"`
+	MoneyValueMinorUnits *int64    `json:"money_value_minor_units"`
+	CreatedAt            time.Time `json:"created_at"`
+}
+
+type creditBalanceDTO struct {
+	AssignmentID                  string    `json:"assignment_id"`
+	RemainingKWh                  float64   `json:"remaining_kwh"`
+	RemainingMoneyValueMinorUnits int64     `json:"remaining_money_value_minor_units"`
+	UpdatedAt                     time.Time `json:"updated_at"`
+}
+
+type meterCommandDTO struct {
+	CommandID      string     `json:"command_id"`
+	MeterID        string     `json:"meter_id"`
+	CommandType    string     `json:"command_type"`
+	Status         string     `json:"status"`
+	RequestedBy    string     `json:"requested_by"`
+	Reason         string     `json:"reason"`
+	RequestedAt    time.Time  `json:"requested_at"`
+	SentAt         *time.Time `json:"sent_at"`
+	AcknowledgedAt *time.Time `json:"acknowledged_at"`
+	FailureReason  *string    `json:"failure_reason"`
+}
+
+type applyPaymentResultDTO struct {
+	Payment      paymentDTO       `json:"payment"`
+	Credit       energyCreditDTO  `json:"credit"`
+	Balance      creditBalanceDTO `json:"balance"`
+	MeterCommand *meterCommandDTO `json:"meter_command"`
+}
+
+func toApplyPaymentResultDTO(result domain.ApplyPaymentResult) applyPaymentResultDTO {
+	dto := applyPaymentResultDTO{
+		Payment: paymentDTO{
+			PaymentID:         result.Payment.PaymentID,
+			Provider:          result.Payment.Provider,
+			ExternalReference: result.Payment.ExternalReference,
+			CustomerID:        result.Payment.CustomerID,
+			AmountMinorUnits:  result.Payment.AmountMinorUnits,
+			Currency:          result.Payment.Currency,
+			Status:            result.Payment.Status,
+			ConfirmedAt:       result.Payment.ConfirmedAt,
+			CreatedAt:         result.Payment.CreatedAt,
+		},
+		Credit: energyCreditDTO{
+			CreditID:             result.Credit.CreditID,
+			SiteID:               result.Credit.SiteID,
+			AssignmentID:         result.Credit.AssignmentID,
+			PaymentID:            result.Credit.PaymentID,
+			TariffPlanID:         result.Credit.TariffPlanID,
+			SourceType:           string(result.Credit.SourceType),
+			SourceID:             result.Credit.SourceID,
+			KWhGranted:           result.Credit.KWhGranted,
+			MoneyValueMinorUnits: result.Credit.MoneyValueMinorUnits,
+			CreatedAt:            result.Credit.CreatedAt,
+		},
+		Balance: creditBalanceDTO{
+			AssignmentID:                  result.Balance.AssignmentID,
+			RemainingKWh:                  result.Balance.RemainingKWh,
+			RemainingMoneyValueMinorUnits: result.Balance.RemainingMoneyValueMinorUnits,
+			UpdatedAt:                     result.Balance.UpdatedAt,
+		},
+	}
+
+	if cmd := result.MeterCommand; cmd != nil {
+		dto.MeterCommand = &meterCommandDTO{
+			CommandID:      cmd.CommandID,
+			MeterID:        cmd.MeterID,
+			CommandType:    string(cmd.CommandType),
+			Status:         string(cmd.Status),
+			RequestedBy:    cmd.RequestedBy,
+			Reason:         cmd.Reason,
+			RequestedAt:    cmd.RequestedAt,
+			SentAt:         cmd.SentAt,
+			AcknowledgedAt: cmd.AcknowledgedAt,
+			FailureReason:  cmd.FailureReason,
+		}
+	}
+
+	return dto
+}
+
 type siteDTO struct {
 	SiteID         string         `json:"site_id"`
 	Name           string         `json:"name"`

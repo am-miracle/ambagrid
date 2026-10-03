@@ -7,6 +7,7 @@ import { gsap } from "#/lib/motion";
 import { AlertDetail } from "./components/alert-detail";
 import { AlertInbox } from "./components/alert-inbox";
 import { FilterRail } from "./components/filter-rail";
+import { PaymentPanel } from "./components/payment-panel";
 import { SiteCard } from "./components/site-card";
 import { Timeline } from "./components/timeline";
 import { type FleetKpis, Topbar } from "./components/topbar";
@@ -78,6 +79,7 @@ export function CommandSurface() {
 	);
 	const [railOpen, setRailOpen] = useState(false);
 	const [inboxOpen, setInboxOpen] = useState(false);
+	const [paymentOpen, setPaymentOpen] = useState(false);
 	const [scenario, setScenario] = useState(false);
 
 	const camRef = useRef<CameraApi | null>(null);
@@ -400,9 +402,12 @@ export function CommandSurface() {
 				at={at}
 				live={live}
 				openCount={openAlerts.length}
+				onOpenPayment={() => setPaymentOpen(true)}
 				onToggleRail={() => setRailOpen((v) => !v)}
 				onToggleInbox={() => setInboxOpen((v) => !v)}
 			/>
+
+			<PaymentPanel open={paymentOpen} onClose={() => setPaymentOpen(false)} />
 
 			<FilterRail
 				open={railOpen}

@@ -60,6 +60,10 @@ const invalidCursor = () =>
 		"cursor is not a cursor this API issued",
 	);
 const notFound = () => new ApiFailure(404, "not_found", "object not found");
+const paymentBalances = new Map<
+	string,
+	{ kwh: number; moneyMinorUnits: number }
+>();
 
 const requestId = () =>
 	Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) =>
@@ -463,6 +467,103 @@ export const handlers = [
 				);
 			}
 			return { data: summary(result), request_id: id };
+		});
+	}),
+
+	http.post(`${BASE}/dev/payments`, async ({ request }) => {
+		let body: unknown;
+		try {
+			body = await request.json();
+		} catch {
+			body = undefined;
+		}
+
+		return respond((id) => {
+			const payment = body as
+				| {
+						customer_id?: unknown;
+						amount_minor_units?: unknown;
+						currency?: unknown;
+				  }
+				| undefined;
+			if (
+				!payment ||
+				typeof payment.customer_id !== "string" ||
+				!payment.customer_id.trim() ||
+				typeof payment.amount_minor_units !== "number" ||
+				payment.amount_minor_units <= 0 ||
+				payment.currency !== "NGN"
+			) {
+				throw invalidRequest(
+					"customer_id, positive amount_minor_units, and NGN currency are required",
+				);
+			}
+
+			const customerId = payment.customer_id.trim();
+			const previous = paymentBalances.get(customerId) ?? {
+				kwh: 0,
+				moneyMinorUnits: 0,
+			};
+			const kwhGranted = payment.amount_minor_units / 25_000;
+			const balance = {
+				kwh: previous.kwh + kwhGranted,
+				moneyMinorUnits: previous.moneyMinorUnits + payment.amount_minor_units,
+			};
+			paymentBalances.set(customerId, balance);
+			const now = new Date().toISOString();
+			const paymentId = crypto.randomUUID();
+			const creditId = crypto.randomUUID();
+			const commandId = crypto.randomUUID();
+
+			return {
+				data: {
+					payment: {
+						payment_id: paymentId,
+						provider: "dev",
+						external_reference: `dev-${crypto.randomUUID()}`,
+						customer_id: customerId,
+						amount_minor_units: payment.amount_minor_units,
+						currency: "NGN",
+						status: "confirmed",
+						confirmed_at: now,
+						created_at: now,
+					},
+					credit: {
+						credit_id: creditId,
+						site_id: "rivers-bolo",
+						assignment_id: `assignment-${customerId}`,
+						payment_id: paymentId,
+						tariff_plan_id: "demo-ngn-250",
+						source_type: "payment",
+						source_id: paymentId,
+						kwh_granted: kwhGranted,
+						money_value_minor_units: payment.amount_minor_units,
+						created_at: now,
+					},
+					balance: {
+						assignment_id: `assignment-${customerId}`,
+						remaining_kwh: balance.kwh,
+						remaining_money_value_minor_units: balance.moneyMinorUnits,
+						updated_at: now,
+					},
+					meter_command:
+						previous.kwh === 0
+							? {
+									command_id: commandId,
+									meter_id: "met-0101",
+									command_type: "reconnect_meter",
+									status: "requested",
+									requested_by: "provider:dev",
+									reason: "balance recharged from zero",
+									requested_at: now,
+									sent_at: null,
+									acknowledged_at: null,
+									failure_reason: null,
+								}
+							: null,
+				},
+				request_id: id,
+			};
 		});
 	}),
 

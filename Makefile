@@ -39,6 +39,9 @@ kafka-topics:
 	rpk topic create telemetry.ingested.dlq -p 1 --brokers $(KAFKA_BROKERS) || true
 	rpk topic create alert.opened -p 1 --brokers $(KAFKA_BROKERS) || true
 	rpk topic create alert.resolved -p 1 --brokers $(KAFKA_BROKERS) || true
+	rpk topic create payment.confirmed -p 1 --brokers $(KAFKA_BROKERS) || true
+	rpk topic create credit.issued -p 1 --brokers $(KAFKA_BROKERS) || true
+	rpk topic create meter.command.requested -p 1 --brokers $(KAFKA_BROKERS) || true
 	rpk topic list --brokers $(KAFKA_BROKERS)
 
 proto-gen-go:

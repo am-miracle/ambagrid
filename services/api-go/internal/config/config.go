@@ -27,7 +27,14 @@ type Config struct {
 	MaxPageSize           int
 	GlobalHistoryPageSize int
 
-	AlertResolvedTopic string
+	AlertResolvedTopic         string
+	PaymentConfirmedTopic      string
+	CreditIssuedTopic          string
+	MeterCommandRequestedTopic string
+
+	PaystackSecretKey string
+
+	DevMode bool
 }
 
 // FromEnv loads defaults and rejects missing or invalid values.
@@ -81,21 +88,26 @@ func FromEnv() (Config, error) {
 	}
 
 	cfg := Config{
-		HTTPAddr:              envString("API_HTTP_ADDR", ":8081"),
-		ReadHeaderTimeout:     readHeaderTimeout,
-		RequestTimeout:        requestTimeout,
-		IdleTimeout:           idleTimeout,
-		ShutdownTimeout:       shutdownTimeout,
-		CORSAllowedOrigins:    envCSV("API_CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173"),
-		DatabaseURL:           envString("DATABASE_URL", ""),
-		DBMaxConns:            int32(maxConns),
-		DBMinConns:            int32(minConns),
-		DBQueryTimeout:        queryTimeout,
-		DBStatementTimeout:    statementTimeout,
-		DefaultPageSize:       defaultPageSize,
-		MaxPageSize:           maxPageSize,
-		GlobalHistoryPageSize: globalHistoryPageSize,
-		AlertResolvedTopic:    envString("ALERT_RESOLVED_TOPIC", "alert.resolved"),
+		HTTPAddr:                   envString("API_HTTP_ADDR", ":8081"),
+		ReadHeaderTimeout:          readHeaderTimeout,
+		RequestTimeout:             requestTimeout,
+		IdleTimeout:                idleTimeout,
+		ShutdownTimeout:            shutdownTimeout,
+		CORSAllowedOrigins:         envCSV("API_CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173"),
+		DatabaseURL:                envString("DATABASE_URL", ""),
+		DBMaxConns:                 int32(maxConns),
+		DBMinConns:                 int32(minConns),
+		DBQueryTimeout:             queryTimeout,
+		DBStatementTimeout:         statementTimeout,
+		DefaultPageSize:            defaultPageSize,
+		MaxPageSize:                maxPageSize,
+		GlobalHistoryPageSize:      globalHistoryPageSize,
+		AlertResolvedTopic:         envConfiguredString("ALERT_RESOLVED_TOPIC", "alert.resolved"),
+		PaymentConfirmedTopic:      envConfiguredString("PAYMENT_CONFIRMED_TOPIC", "payment.confirmed"),
+		CreditIssuedTopic:          envConfiguredString("CREDIT_ISSUED_TOPIC", "credit.issued"),
+		MeterCommandRequestedTopic: envConfiguredString("METER_COMMAND_REQUESTED_TOPIC", "meter.command.requested"),
+		PaystackSecretKey:          envString("PAYSTACK_SECRET_KEY", ""),
+		DevMode:                    envBool("API_DEV_MODE"),
 	}
 
 	if cfg.HTTPAddr == "" {
@@ -128,6 +140,15 @@ func FromEnv() (Config, error) {
 	if cfg.AlertResolvedTopic == "" {
 		return Config{}, fmt.Errorf("ALERT_RESOLVED_TOPIC must not be empty")
 	}
+	if cfg.PaymentConfirmedTopic == "" {
+		return Config{}, fmt.Errorf("PAYMENT_CONFIRMED_TOPIC must not be empty")
+	}
+	if cfg.CreditIssuedTopic == "" {
+		return Config{}, fmt.Errorf("CREDIT_ISSUED_TOPIC must not be empty")
+	}
+	if cfg.MeterCommandRequestedTopic == "" {
+		return Config{}, fmt.Errorf("METER_COMMAND_REQUESTED_TOPIC must not be empty")
+	}
 
 	return cfg, nil
 }
@@ -138,6 +159,16 @@ func envString(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func envConfiguredString(key, fallback string) string {
+	// An explicitly blank topic is a configuration error. Preserve it so the
+	// validation below fails instead of silently restoring the default.
+	value, ok := os.LookupEnv(key)
+	if !ok {
+		return fallback
+	}
+	return strings.TrimSpace(value)
 }
 
 func envCSV(key, fallback string) []string {
@@ -163,6 +194,15 @@ func envInt(key string, fallback int) (int, error) {
 		return 0, fmt.Errorf("%s must be an integer: %q", key, raw)
 	}
 	return value, nil
+}
+
+func envBool(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
+	}
 }
 
 func envDuration(key string, fallback time.Duration) (time.Duration, error) {

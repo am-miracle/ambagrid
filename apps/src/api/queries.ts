@@ -122,3 +122,16 @@ export const useResolveAlert = (alertId: string) => {
 		},
 	});
 };
+
+export const useApplyDevPayment = () =>
+	useMutation({
+		mutationFn: ({
+			customerId,
+			amountMinorUnits,
+			currency,
+		}: {
+			customerId: string;
+			amountMinorUnits: number;
+			currency: string;
+		}) => api.applyDevPayment(customerId, amountMinorUnits, currency),
+	});

@@ -1,0 +1,9 @@
+{
+  "payment_id": "pay-0101",
+  "provider": "paystack",
+  "external_reference": "ref-0101",
+  "customer_id": "customer-0101",
+  "amount_minor_units": 500000,
+  "currency": "NGN",
+  "confirmed_at": "2026-10-01T14:29:00Z"
+}
