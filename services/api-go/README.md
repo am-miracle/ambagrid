@@ -34,6 +34,9 @@ curl -X POST http://localhost:8081/v1/alerts/0bb99171-6d9a-42d4-8124-a5d995b10fd
   -H "Content-Type: application/json" \
   -H "X-Actor-Id: actor-0101" \
   -d '{"resolution_note":"fan cleaned"}'
+curl -X POST http://localhost:8081/v1/dev/payments \
+  -H "Content-Type: application/json" \
+  -d '{"customer_id":"customer-0101","amount_minor_units":500000,"currency":"NGN"}'
 ```
 
 With no telemetry ingested yet, every listing is empty. Run the simulator and
@@ -80,3 +83,6 @@ The handler tests build the whole HTTP stack — routing, middleware, encoding,
 status mapping — over fake services, so they need no database. The repository
 package is the layer that does; it is covered by exercising the service against
 a local Postgres with the engine's migrations applied.
+
+Set `DATABASE_URL` when running `go test` to include the repository integration
+test for concurrent duplicate payments. Without it, that test is skipped.

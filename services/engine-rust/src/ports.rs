@@ -124,6 +124,9 @@ pub struct OutboxEvent {
 pub enum OutboxEventType {
     AlertOpened,
     AlertResolved,
+    PaymentConfirmed,
+    CreditIssued,
+    MeterCommandRequested,
     Unsupported(String),
 }
 
@@ -132,6 +135,9 @@ impl OutboxEventType {
         match value.as_str() {
             "alert.opened" => Self::AlertOpened,
             "alert.resolved" => Self::AlertResolved,
+            "payment.confirmed" => Self::PaymentConfirmed,
+            "credit.issued" => Self::CreditIssued,
+            "meter.command.requested" => Self::MeterCommandRequested,
             _ => Self::Unsupported(value),
         }
     }
@@ -140,6 +146,9 @@ impl OutboxEventType {
         match self {
             Self::AlertOpened => "alert.opened",
             Self::AlertResolved => "alert.resolved",
+            Self::PaymentConfirmed => "payment.confirmed",
+            Self::CreditIssued => "credit.issued",
+            Self::MeterCommandRequested => "meter.command.requested",
             Self::Unsupported(value) => value,
         }
     }

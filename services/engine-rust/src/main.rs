@@ -3,10 +3,12 @@ mod adapters;
 mod alert_outbox;
 mod config;
 mod domain;
+mod meter_command_outbox;
 pub mod metrics;
 #[cfg(test)]
 mod migration_tests;
 mod ports;
+mod revenue_outbox;
 mod serve;
 mod telemetry;
 

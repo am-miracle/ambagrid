@@ -27,6 +27,8 @@ fn client_config(brokers: &[String], security: &KafkaSecurity) -> ClientConfig {
 
 mod proto {
     include!(concat!(env!("OUT_DIR"), "/ambagrid.alerts.rs"));
+    include!(concat!(env!("OUT_DIR"), "/ambagrid.meter_commands.rs"));
+    include!(concat!(env!("OUT_DIR"), "/ambagrid.revenue.rs"));
 }
 
 #[cfg(test)]

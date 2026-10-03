@@ -328,6 +328,29 @@ Missing `X-Actor-Id` returns 401. A malformed alert ID, empty
 400. A missing alert returns 404. An alert that exists but is no longer open
 returns 409.
 
+### `POST /v1/dev/payments`
+
+When `API_DEV_MODE=true`, injects a local-development payment through the same
+`ApplyPayment` action used by provider webhooks. The response includes the
+confirmed payment, issued credit, updated assignment balance, and any reconnect
+command. Do not expose this route outside a development deployment.
+
+```json
+{
+  "customer_id": "customer-0101",
+  "amount_minor_units": 500000,
+  "currency": "NGN"
+}
+```
+
+### `POST /v1/webhooks/paystack`
+
+Accepts Paystack `charge.success` webhooks when `PAYSTACK_SECRET_KEY` is set.
+The handler verifies `X-Paystack-Signature` over the original request body,
+normalizes the provider payload, then calls the idempotent `ApplyPayment`
+action. Repeated provider references return the existing result without
+issuing credit twice.
+
 ### `GET /healthz` and `GET /readyz`
 
 `/healthz` is liveness and never touches the database — restarting a replica
@@ -354,6 +377,11 @@ is unreachable, so the replica leaves the load balancer instead.
 | `DB_QUERY_TIMEOUT` | `3s` | bounds waiting for a connection plus executing |
 | `DB_STATEMENT_TIMEOUT` | `5s` | server-side backstop |
 | `LOG_FORMAT` | JSON | set `text` for human-readable logs |
+| `API_DEV_MODE` | `false` | enables the local-only `POST /v1/dev/payments` route |
+| `PAYSTACK_SECRET_KEY` | disabled | enables the Paystack webhook route |
+| `PAYMENT_CONFIRMED_TOPIC` | `payment.confirmed` | confirmed-payment outbox topic |
+| `CREDIT_ISSUED_TOPIC` | `credit.issued` | issued-credit outbox topic |
+| `METER_COMMAND_REQUESTED_TOPIC` | `meter.command.requested` | requested-command outbox topic |
 
 `DB_STATEMENT_TIMEOUT` must be at least `1ms`, and `DB_QUERY_TIMEOUT` must be
 lower than `DB_STATEMENT_TIMEOUT`. The client-side timeout should fire first;
@@ -392,8 +420,9 @@ and pins the connection that cancelling it was meant to free.
 - **Built-in authentication.** There is none. Run it behind a gateway that
   terminates TLS, authenticates callers, and injects `X-Actor-Id` for
   operator commands; do not expose it to the internet as is.
-- **Customer, balance, payment, and command APIs.** Those ontology objects have
-  storage tables but no public handlers yet. When handlers land, they are new
-  `/v1` collections, not changes to these.
+- **Customer, balance, and command read APIs.** These ontology objects have
+  storage tables but no public collection handlers yet.
 - **General writes.** Alert resolution is the only operator command exposed
-  here. Meter commands, payments, credits, and customer changes are not here yet.
+  here. Payment writes are limited to the provider webhook and local-development
+  injection route; manual credits, customer changes, and direct meter commands
+  are not here yet.

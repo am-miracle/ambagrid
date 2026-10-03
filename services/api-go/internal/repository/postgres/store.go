@@ -21,7 +21,10 @@ type Store struct {
 }
 
 type OutboxTopics struct {
-	AlertResolved string
+	AlertResolved         string
+	PaymentConfirmed      string
+	CreditIssued          string
+	MeterCommandRequested string
 }
 
 type databasePool interface {
@@ -44,6 +47,15 @@ func NewStoreWithOutboxTopics(
 ) *Store {
 	if outboxTopics.AlertResolved == "" {
 		outboxTopics.AlertResolved = "alert.resolved"
+	}
+	if outboxTopics.PaymentConfirmed == "" {
+		outboxTopics.PaymentConfirmed = "payment.confirmed"
+	}
+	if outboxTopics.CreditIssued == "" {
+		outboxTopics.CreditIssued = "credit.issued"
+	}
+	if outboxTopics.MeterCommandRequested == "" {
+		outboxTopics.MeterCommandRequested = "meter.command.requested"
 	}
 	return &Store{pool: pool, queryTimeout: queryTimeout, outboxTopics: outboxTopics}
 }

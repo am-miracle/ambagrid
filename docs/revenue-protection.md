@@ -81,6 +81,13 @@ Provider adapters should handle:
 
 Provider adapters should not decide whether a meter reconnects. That belongs to the core revenue policy.
 
+Reconnect decisions use the latest persisted relay state. When a meter has no
+state row yet, the API assumes its relay is closed (on). This conservative
+default avoids sending a reconnect command to every newly onboarded meter, but
+an off meter without telemetry will not receive a reconnect on its first
+payment. Onboarding should therefore persist the initial relay state before
+accepting payments when that distinction matters.
+
 ## Idempotency
 
 Payment processing must be idempotent.

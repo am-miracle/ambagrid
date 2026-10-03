@@ -239,6 +239,396 @@ func TestAlertServiceResolveRejectsBadInputBeforeQuerying(t *testing.T) {
 	}
 }
 
+type fakePaymentTx struct {
+	existingPayment *domain.Payment
+	insertedPayment *domain.Payment
+	assignment      domain.MeterAssignment
+	tariff          domain.Tariff
+	priorBalance    float64
+	balance         domain.CreditBalance
+	credit          domain.EnergyCredit
+	meterCommand    domain.MeterCommand
+	replayResult    domain.ApplyPaymentResult
+
+	findAssignmentErr error
+	findTariffErr     error
+	priorBalanceErr   error
+	insertCommandErr  error
+
+	insertedCommands []domain.MeterCommand
+	auditCalls       int
+	outboxCalls      int
+}
+
+func (f *fakePaymentTx) FindExistingPayment(context.Context, string, string) (*domain.Payment, error) {
+	return f.existingPayment, nil
+}
+
+func (f *fakePaymentTx) InsertPayment(context.Context, domain.ApplyPaymentCommand) (*domain.Payment, error) {
+	return f.insertedPayment, nil
+}
+
+func (f *fakePaymentTx) ReplayPriorResult(context.Context, domain.Payment) (domain.ApplyPaymentResult, error) {
+	return f.replayResult, nil
+}
+
+func (f *fakePaymentTx) FindActiveAssignment(context.Context, string) (domain.MeterAssignment, error) {
+	return f.assignment, f.findAssignmentErr
+}
+
+func (f *fakePaymentTx) FindActiveTariff(context.Context, string, time.Time) (domain.Tariff, error) {
+	return f.tariff, f.findTariffErr
+}
+
+func (f *fakePaymentTx) InsertEnergyCredit(context.Context, string, string, string, string, float64, int64) (domain.EnergyCredit, error) {
+	return f.credit, nil
+}
+
+func (f *fakePaymentTx) GetPriorBalance(context.Context, string) (float64, error) {
+	return f.priorBalance, f.priorBalanceErr
+}
+
+func (f *fakePaymentTx) UpsertCreditBalance(context.Context, string, float64, int64) (domain.CreditBalance, error) {
+	return f.balance, nil
+}
+
+func (f *fakePaymentTx) InsertMeterCommand(_ context.Context, _ string, _ domain.MeterCommandType, _, _ string) (domain.MeterCommand, error) {
+	f.insertedCommands = append(f.insertedCommands, f.meterCommand)
+	return f.meterCommand, f.insertCommandErr
+}
+
+func (f *fakePaymentTx) InsertPaymentConfirmedEvent(context.Context, domain.Payment) error {
+	f.outboxCalls++
+	return nil
+}
+
+func (f *fakePaymentTx) InsertCreditIssuedEvent(context.Context, domain.EnergyCredit) error {
+	f.outboxCalls++
+	return nil
+}
+
+func (f *fakePaymentTx) InsertMeterCommandEvent(context.Context, domain.MeterCommand, string, string) error {
+	f.outboxCalls++
+	return nil
+}
+
+func (f *fakePaymentTx) InsertAuditEvent(context.Context, string, string, string, string, string, map[string]any) error {
+	f.auditCalls++
+	return nil
+}
+
+type fakePaymentRepository struct {
+	txCalls    int
+	gotCommand domain.ApplyPaymentCommand
+	fakeTx     *fakePaymentTx
+}
+
+func (f *fakePaymentRepository) RunPaymentTx(_ context.Context, fn func(PaymentTx) (domain.ApplyPaymentResult, error)) (domain.ApplyPaymentResult, error) {
+	f.txCalls++
+	return fn(f.fakeTx)
+}
+
+func newPaymentTestFixture() *fakePaymentTx {
+	confirmedAt := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	return &fakePaymentTx{
+		insertedPayment: &domain.Payment{
+			PaymentID: "pay-001", Provider: "dev", ExternalReference: "dev-abc123",
+			CustomerID: "cust-01", AmountMinorUnits: 500000, Currency: "NGN",
+			Status: domain.PaymentStatusConfirmed, ConfirmedAt: &confirmedAt,
+			CreatedAt: confirmedAt,
+		},
+		assignment: domain.MeterAssignment{
+			AssignmentID: "assign-001", SiteID: "site-01",
+			MeterID: "met-0101", RelayClosed: false,
+		},
+		tariff: domain.Tariff{
+			TariffPlanID: "tariff-01", PricePerKWh: 250, Currency: "NGN", MinorUnitsPerMajor: 100,
+		},
+		credit: domain.EnergyCredit{
+			CreditID: "credit-001", SiteID: "site-01", AssignmentID: "assign-001",
+		},
+		priorBalance: 0,
+		balance: domain.CreditBalance{
+			AssignmentID: "assign-001", RemainingKWh: 20.0,
+			RemainingMoneyValueMinorUnits: 500000,
+		},
+		meterCommand: domain.MeterCommand{
+			CommandID: "cmd-001", MeterID: "met-0101",
+			CommandType: domain.CommandReconnectMeter, Status: domain.CommandStatusRequested,
+		},
+	}
+}
+
+func TestPaymentServiceApplyDevPaymentValidatesAndPassesThrough(t *testing.T) {
+	fakeTx := newPaymentTestFixture()
+	repo := &fakePaymentRepository{fakeTx: fakeTx}
+
+	result, err := NewPaymentService(repo).ApplyDevPayment(context.Background(), ApplyDevPaymentRequest{
+		CustomerID:       "  cust-01  ",
+		AmountMinorUnits: 500000,
+		Currency:         "NGN",
+	})
+	if err != nil {
+		t.Fatalf("ApplyDevPayment() error = %v", err)
+	}
+	if result.Payment.PaymentID != "pay-001" {
+		t.Fatalf("payment_id = %v, want pay-001", result.Payment.PaymentID)
+	}
+	if repo.txCalls != 1 {
+		t.Fatalf("repository calls = %d, want 1", repo.txCalls)
+	}
+}
+
+func TestPaymentServiceApplyDevPaymentRejectsBadInputBeforeQuerying(t *testing.T) {
+	tests := map[string]ApplyDevPaymentRequest{
+		"empty customer":  {CustomerID: "  ", AmountMinorUnits: 500000, Currency: "NGN"},
+		"zero amount":     {CustomerID: "cust-01", AmountMinorUnits: 0, Currency: "NGN"},
+		"negative amount": {CustomerID: "cust-01", AmountMinorUnits: -1, Currency: "NGN"},
+		"empty currency":  {CustomerID: "cust-01", AmountMinorUnits: 500000, Currency: ""},
+	}
+
+	for name, request := range tests {
+		t.Run(name, func(t *testing.T) {
+			repo := &fakePaymentRepository{fakeTx: newPaymentTestFixture()}
+
+			_, err := NewPaymentService(repo).ApplyDevPayment(context.Background(), request)
+
+			if err == nil {
+				t.Fatal("ApplyDevPayment() error = nil, want validation error")
+			}
+			if repo.txCalls != 0 {
+				t.Fatalf("repository was called %d times, want 0", repo.txCalls)
+			}
+		})
+	}
+}
+
+func TestPaymentServiceApplyWebhookPaymentValidatesCommand(t *testing.T) {
+	confirmedAt := time.Date(2026, 10, 1, 14, 30, 0, 0, time.UTC)
+	tests := map[string]domain.ApplyPaymentCommand{
+		"empty provider": {Provider: "", ExternalReference: "ref-1", CustomerID: "cust-01",
+			AmountMinorUnits: 500000, Currency: "NGN", Status: domain.PaymentStatusConfirmed, ConfirmedAt: confirmedAt},
+		"empty reference": {Provider: "paystack", ExternalReference: "  ", CustomerID: "cust-01",
+			AmountMinorUnits: 500000, Currency: "NGN", Status: domain.PaymentStatusConfirmed, ConfirmedAt: confirmedAt},
+		"empty customer": {Provider: "paystack", ExternalReference: "ref-1", CustomerID: "",
+			AmountMinorUnits: 500000, Currency: "NGN", Status: domain.PaymentStatusConfirmed, ConfirmedAt: confirmedAt},
+		"zero amount": {Provider: "paystack", ExternalReference: "ref-1", CustomerID: "cust-01",
+			AmountMinorUnits: 0, Currency: "NGN", Status: domain.PaymentStatusConfirmed, ConfirmedAt: confirmedAt},
+		"negative amount": {Provider: "paystack", ExternalReference: "ref-1", CustomerID: "cust-01",
+			AmountMinorUnits: -100, Currency: "NGN", Status: domain.PaymentStatusConfirmed, ConfirmedAt: confirmedAt},
+		"empty currency": {Provider: "paystack", ExternalReference: "ref-1", CustomerID: "cust-01",
+			AmountMinorUnits: 500000, Currency: "", Status: domain.PaymentStatusConfirmed, ConfirmedAt: confirmedAt},
+		"non-confirmed status": {Provider: "paystack", ExternalReference: "ref-1", CustomerID: "cust-01",
+			AmountMinorUnits: 500000, Currency: "NGN", Status: domain.PaymentStatusPending, ConfirmedAt: confirmedAt},
+		"zero confirmed_at": {Provider: "paystack", ExternalReference: "ref-1", CustomerID: "cust-01",
+			AmountMinorUnits: 500000, Currency: "NGN", Status: domain.PaymentStatusConfirmed},
+	}
+
+	for name, command := range tests {
+		t.Run(name, func(t *testing.T) {
+			repo := &fakePaymentRepository{fakeTx: newPaymentTestFixture()}
+
+			_, err := NewPaymentService(repo).ApplyWebhookPayment(context.Background(), command)
+
+			if err == nil {
+				t.Fatal("ApplyWebhookPayment() error = nil, want validation error")
+			}
+			if repo.txCalls != 0 {
+				t.Fatalf("repository was called %d times, want 0", repo.txCalls)
+			}
+		})
+	}
+}
+
+func TestPaymentServiceApplyWebhookPaymentPassesValidCommandThrough(t *testing.T) {
+	fakeTx := newPaymentTestFixture()
+	repo := &fakePaymentRepository{fakeTx: fakeTx}
+
+	result, err := NewPaymentService(repo).ApplyWebhookPayment(context.Background(), domain.ApplyPaymentCommand{
+		Provider:          "paystack",
+		ExternalReference: "ps-ref-123",
+		CustomerID:        "cust-01",
+		AmountMinorUnits:  500000,
+		Currency:          "NGN",
+		Status:            domain.PaymentStatusConfirmed,
+		ConfirmedAt:       time.Date(2026, 10, 1, 14, 30, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("ApplyWebhookPayment() error = %v", err)
+	}
+	if result.Payment.PaymentID != "pay-001" {
+		t.Fatalf("payment_id = %v, want pay-001", result.Payment.PaymentID)
+	}
+	if repo.txCalls != 1 {
+		t.Fatalf("repository calls = %d, want 1", repo.txCalls)
+	}
+}
+
+func TestPaymentServiceCalculatesKWhFromTariff(t *testing.T) {
+	fakeTx := newPaymentTestFixture()
+	fakeTx.tariff = domain.Tariff{TariffPlanID: "tariff-01", PricePerKWh: 250, Currency: "NGN", MinorUnitsPerMajor: 100}
+	fakeTx.balance = domain.CreditBalance{AssignmentID: "assign-001", RemainingKWh: 20.0, RemainingMoneyValueMinorUnits: 500000}
+	repo := &fakePaymentRepository{fakeTx: fakeTx}
+
+	result, err := NewPaymentService(repo).ApplyWebhookPayment(context.Background(), domain.ApplyPaymentCommand{
+		Provider: "paystack", ExternalReference: "ref-1", CustomerID: "cust-01",
+		AmountMinorUnits: 500000, Currency: "NGN", Status: domain.PaymentStatusConfirmed,
+		ConfirmedAt: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if result.Balance.RemainingKWh != 20.0 {
+		t.Fatalf("remaining_kwh = %v, want 20.0 (500000 / (250 * 100))", result.Balance.RemainingKWh)
+	}
+}
+
+func TestPaymentServiceRejectsTariffCurrencyMismatch(t *testing.T) {
+	fakeTx := newPaymentTestFixture()
+	fakeTx.tariff.Currency = "KES"
+	repo := &fakePaymentRepository{fakeTx: fakeTx}
+
+	_, err := NewPaymentService(repo).ApplyWebhookPayment(context.Background(), domain.ApplyPaymentCommand{
+		Provider: "paystack", ExternalReference: "ref-1", CustomerID: "cust-01",
+		AmountMinorUnits: 500000, Currency: "NGN", Status: domain.PaymentStatusConfirmed,
+		ConfirmedAt: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC),
+	})
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("error = %v, want ErrConflict for tariff currency mismatch", err)
+	}
+}
+
+func TestPaymentServiceIssuesReconnectWhenBalanceGoesFromZeroToPositive(t *testing.T) {
+	fakeTx := newPaymentTestFixture()
+	fakeTx.assignment.RelayClosed = false
+	fakeTx.priorBalance = 0
+	fakeTx.balance.RemainingKWh = 20.0
+	repo := &fakePaymentRepository{fakeTx: fakeTx}
+
+	result, err := NewPaymentService(repo).ApplyWebhookPayment(context.Background(), domain.ApplyPaymentCommand{
+		Provider: "paystack", ExternalReference: "ref-1", CustomerID: "cust-01",
+		AmountMinorUnits: 500000, Currency: "NGN", Status: domain.PaymentStatusConfirmed,
+		ConfirmedAt: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if result.MeterCommand == nil || result.MeterCommand.CommandType != domain.CommandReconnectMeter {
+		t.Fatalf("meter_command = %+v, want reconnect_meter", result.MeterCommand)
+	}
+}
+
+func TestPaymentServiceSkipsReconnectWhenBalanceWasPositive(t *testing.T) {
+	fakeTx := newPaymentTestFixture()
+	fakeTx.assignment.RelayClosed = false
+	fakeTx.priorBalance = 5.0
+	fakeTx.balance.RemainingKWh = 25.0
+	repo := &fakePaymentRepository{fakeTx: fakeTx}
+
+	result, err := NewPaymentService(repo).ApplyWebhookPayment(context.Background(), domain.ApplyPaymentCommand{
+		Provider: "paystack", ExternalReference: "ref-1", CustomerID: "cust-01",
+		AmountMinorUnits: 500000, Currency: "NGN", Status: domain.PaymentStatusConfirmed,
+		ConfirmedAt: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if result.MeterCommand != nil {
+		t.Fatalf("meter_command = %+v, want nil when balance was already positive", result.MeterCommand)
+	}
+}
+
+func TestPaymentServiceSkipsReconnectWhenRelayIsClosed(t *testing.T) {
+	fakeTx := newPaymentTestFixture()
+	fakeTx.assignment.RelayClosed = true
+	fakeTx.priorBalance = 0
+	fakeTx.balance.RemainingKWh = 20.0
+	repo := &fakePaymentRepository{fakeTx: fakeTx}
+
+	result, err := NewPaymentService(repo).ApplyWebhookPayment(context.Background(), domain.ApplyPaymentCommand{
+		Provider: "paystack", ExternalReference: "ref-1", CustomerID: "cust-01",
+		AmountMinorUnits: 500000, Currency: "NGN", Status: domain.PaymentStatusConfirmed,
+		ConfirmedAt: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if result.MeterCommand != nil {
+		t.Fatalf("meter_command = %+v, want nil when relay is already closed", result.MeterCommand)
+	}
+}
+
+func TestPaymentServiceReplaysDuplicatePayment(t *testing.T) {
+	confirmedAt := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	fakeTx := newPaymentTestFixture()
+	existing := domain.Payment{
+		PaymentID: "pay-existing", Provider: "paystack", ExternalReference: "ref-1",
+		CustomerID: "cust-01", AmountMinorUnits: 500000, Currency: "NGN",
+		Status: domain.PaymentStatusConfirmed, ConfirmedAt: &confirmedAt,
+	}
+	fakeTx.existingPayment = &existing
+	fakeTx.insertedPayment = nil
+	fakeTx.replayResult = domain.ApplyPaymentResult{
+		Payment: existing,
+		Credit:  domain.EnergyCredit{CreditID: "credit-replayed"},
+	}
+	repo := &fakePaymentRepository{fakeTx: fakeTx}
+
+	result, err := NewPaymentService(repo).ApplyWebhookPayment(context.Background(), domain.ApplyPaymentCommand{
+		Provider: "paystack", ExternalReference: "ref-1", CustomerID: "cust-01",
+		AmountMinorUnits: 500000, Currency: "NGN", Status: domain.PaymentStatusConfirmed, ConfirmedAt: confirmedAt,
+	})
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if result.Payment.PaymentID != "pay-existing" {
+		t.Fatalf("payment_id = %v, want pay-existing (replayed)", result.Payment.PaymentID)
+	}
+	if result.Credit.CreditID != "credit-replayed" {
+		t.Fatalf("credit_id = %v, want credit-replayed", result.Credit.CreditID)
+	}
+}
+
+func TestPaymentServiceRejectsDuplicateWithDifferentAmount(t *testing.T) {
+	confirmedAt := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	fakeTx := newPaymentTestFixture()
+	existing := domain.Payment{
+		PaymentID: "pay-existing", Provider: "paystack", ExternalReference: "ref-1",
+		CustomerID: "cust-01", AmountMinorUnits: 999999, Currency: "NGN",
+		Status: domain.PaymentStatusConfirmed, ConfirmedAt: &confirmedAt,
+	}
+	fakeTx.existingPayment = &existing
+	repo := &fakePaymentRepository{fakeTx: fakeTx}
+
+	_, err := NewPaymentService(repo).ApplyWebhookPayment(context.Background(), domain.ApplyPaymentCommand{
+		Provider: "paystack", ExternalReference: "ref-1", CustomerID: "cust-01",
+		AmountMinorUnits: 500000, Currency: "NGN", Status: domain.PaymentStatusConfirmed, ConfirmedAt: confirmedAt,
+	})
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("error = %v, want ErrConflict for inconsistent amount", err)
+	}
+}
+
+func TestPaymentServiceRejectsDuplicateWithDifferentStatus(t *testing.T) {
+	confirmedAt := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	fakeTx := newPaymentTestFixture()
+	existing := domain.Payment{
+		PaymentID: "pay-existing", Provider: "paystack", ExternalReference: "ref-1",
+		CustomerID: "cust-01", AmountMinorUnits: 500000, Currency: "NGN",
+		Status: domain.PaymentStatusPending,
+	}
+	fakeTx.existingPayment = &existing
+	repo := &fakePaymentRepository{fakeTx: fakeTx}
+
+	_, err := NewPaymentService(repo).ApplyWebhookPayment(context.Background(), domain.ApplyPaymentCommand{
+		Provider: "paystack", ExternalReference: "ref-1", CustomerID: "cust-01",
+		AmountMinorUnits: 500000, Currency: "NGN", Status: domain.PaymentStatusConfirmed, ConfirmedAt: confirmedAt,
+	})
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("error = %v, want ErrConflict for inconsistent status", err)
+	}
+}
+
 type fakeAssetRepository struct {
 	gotQuery     domain.AssetQuery
 	calls        int

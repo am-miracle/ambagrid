@@ -23,6 +23,7 @@ export function Topbar({
 	openCount,
 	onToggleRail,
 	onToggleInbox,
+	onOpenPayment,
 }: {
 	kpi: FleetKpis;
 	at: number;
@@ -30,6 +31,7 @@ export function Topbar({
 	openCount: number;
 	onToggleRail: () => void;
 	onToggleInbox: () => void;
+	onOpenPayment: () => void;
 }) {
 	return (
 		<header className="topbar panel-anim">
@@ -120,6 +122,13 @@ export function Topbar({
 					<span className={`live${live ? " on" : ""}`} />
 					{live ? "LIVE" : "REPLAY"} {formatClock(at)} {timeZoneLabel}
 				</div>
+				<button
+					type="button"
+					className="ghost payment-toggle"
+					onClick={onOpenPayment}
+				>
+					Test payment
+				</button>
 				<button
 					type="button"
 					className="ghost inbox-toggle"

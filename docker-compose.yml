@@ -75,6 +75,9 @@ services:
         rpk topic create telemetry.ingested.dlq -p 1 --brokers redpanda:29092 || true
         rpk topic create alert.opened -p 1 --brokers redpanda:29092 || true
         rpk topic create alert.resolved -p 1 --brokers redpanda:29092 || true
+        rpk topic create payment.confirmed -p 1 --brokers redpanda:29092 || true
+        rpk topic create credit.issued -p 1 --brokers redpanda:29092 || true
+        rpk topic create meter.command.requested -p 1 --brokers redpanda:29092 || true
         rpk topic list --brokers redpanda:29092
     depends_on:
       - redpanda
@@ -89,6 +92,9 @@ services:
     volumes:
       - ./deploy/redpanda-console/config.yml:/etc/console/config.yml
       - ./proto/telemetry.proto:/etc/console/proto/telemetry.proto
+      - ./proto/alerts.proto:/etc/console/proto/alerts.proto
+      - ./proto/revenue.proto:/etc/console/proto/revenue.proto
+      - ./proto/meter_commands.proto:/etc/console/proto/meter_commands.proto
     ports:
       - "8080:8080"   # Open http://localhost:8080 to watch hardware metrics live
     depends_on:
@@ -161,6 +167,10 @@ services:
       API_HTTP_ADDR: ":8081"
       API_CORS_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:5173
       DB_MAX_CONNS: "10"
+      PAYMENT_CONFIRMED_TOPIC: payment.confirmed
+      CREDIT_ISSUED_TOPIC: credit.issued
+      METER_COMMAND_REQUESTED_TOPIC: meter.command.requested
+      API_DEV_MODE: "true"
     ports:
       - "8081:8081"   # http://localhost:8081/v1/sites
     depends_on:

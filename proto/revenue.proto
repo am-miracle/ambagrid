@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package ambagrid.revenue;
+
+option go_package = "ingestion-go/proto/ambagrid/revenue;revenue";
+
+message PaymentConfirmed {
+  string payment_id = 1;
+  string provider = 2;
+  string external_reference = 3;
+  string customer_id = 4;
+  int64 amount_minor_units = 5; // Integer units at the currency's configured scale.
+  string currency = 6;
+  int64 confirmed_at_utc = 7; // Unix epoch timestamp in seconds.
+}
+
+message CreditIssued {
+  string credit_id = 1;
+  string site_id = 2;
+  string assignment_id = 3;
+  string payment_id = 4;
+  string tariff_plan_id = 5;
+  string source_type = 6;
+  string source_id = 7;
+  double kwh_granted = 8;
+  int64 money_value_minor_units = 9; // Original monetary value of the issued credit.
+  int64 created_at_utc = 10; // Unix epoch timestamp in seconds.
+}

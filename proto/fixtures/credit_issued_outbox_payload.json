@@ -1,0 +1,12 @@
+{
+  "credit_id": "credit-0101",
+  "site_id": "site-0101",
+  "assignment_id": "asgn-0101",
+  "payment_id": "pay-0101",
+  "tariff_plan_id": "tariff-0101",
+  "source_type": "payment",
+  "source_id": "pay-0101",
+  "kwh_granted": 20.0,
+  "money_value_minor_units": 500000,
+  "created_at": "2026-10-01T14:30:00Z"
+}

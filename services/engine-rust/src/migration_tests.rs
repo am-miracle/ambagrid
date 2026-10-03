@@ -55,6 +55,22 @@ async fn assignment_constraints_reject_invalid_links() {
     )
     .await;
 
+    let minor_units_per_major: i32 =
+        query_scalar("SELECT minor_units_per_major FROM tariff_plans WHERE tariff_plan_id = $1")
+            .bind(&fixture.tariff_plan_id)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+    assert_eq!(minor_units_per_major, 100);
+
+    assert_database_error(
+        &mut tx,
+        query("UPDATE tariff_plans SET minor_units_per_major = 1 WHERE tariff_plan_id = $1")
+            .bind(&fixture.tariff_plan_id),
+        "23514",
+    )
+    .await;
+
     tx.rollback().await.unwrap();
 }
 

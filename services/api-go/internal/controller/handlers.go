@@ -209,6 +209,95 @@ func (a API) handleListSites(w http.ResponseWriter, r *http.Request) {
 	writeCollection(w, r, a.logger(), result, toSiteDTO)
 }
 
+type applyDevPaymentBody struct {
+	CustomerID       string `json:"customer_id"`
+	AmountMinorUnits int64  `json:"amount_minor_units"`
+	Currency         string `json:"currency"`
+}
+
+const maxWebhookBodySize = 64 * 1024
+
+func (a API) handleWebhookPayment(provider WebhookProvider) http.HandlerFunc {
+	signatureHeader := provider.SignatureHeader()
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		signature := r.Header.Get(signatureHeader)
+		if signature == "" {
+			writeErrorBody(w, a.logger(), http.StatusUnauthorized, codeUnauthenticated, "missing webhook signature", RequestIDFrom(r.Context()))
+			return
+		}
+
+		// Providers sign the exact request bytes, so verify the untouched body
+		// before parsing or normalizing any fields.
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookBodySize))
+		if err != nil {
+			writeError(w, r, a.logger(), errInvalidParameter)
+			return
+		}
+
+		if err := provider.VerifySignature(body, signature); err != nil {
+			a.logger().Warn("webhook signature verification failed",
+				"provider", provider.Name(),
+				"error", err,
+				"request_id", RequestIDFrom(r.Context()),
+			)
+			writeErrorBody(w, a.logger(), http.StatusUnauthorized, codeUnauthenticated, "invalid webhook signature", RequestIDFrom(r.Context()))
+			return
+		}
+
+		command, err := provider.ParsePayment(body)
+		if err != nil {
+			a.logger().Warn("webhook payload rejected",
+				"provider", provider.Name(),
+				"error", err,
+				"request_id", RequestIDFrom(r.Context()),
+			)
+			writeErrorBody(w, a.logger(), http.StatusBadRequest, codeInvalidArgument, err.Error(), RequestIDFrom(r.Context()))
+			return
+		}
+
+		result, err := a.Payments.ApplyWebhookPayment(r.Context(), command)
+		if err != nil {
+			writeError(w, r, a.logger(), err)
+			return
+		}
+
+		writeJSON(w, a.logger(), http.StatusOK, objectBody[applyPaymentResultDTO]{
+			Data:      toApplyPaymentResultDTO(result),
+			RequestID: RequestIDFrom(r.Context()),
+		})
+	}
+}
+
+func (a API) handleApplyDevPayment(w http.ResponseWriter, r *http.Request) {
+	var body applyDevPaymentBody
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
+		writeError(w, r, a.logger(), errInvalidParameter)
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeError(w, r, a.logger(), errInvalidParameter)
+		return
+	}
+
+	result, err := a.Payments.ApplyDevPayment(r.Context(), services.ApplyDevPaymentRequest{
+		CustomerID:       body.CustomerID,
+		AmountMinorUnits: body.AmountMinorUnits,
+		Currency:         body.Currency,
+	})
+	if err != nil {
+		writeError(w, r, a.logger(), err)
+		return
+	}
+
+	writeJSON(w, a.logger(), http.StatusCreated, objectBody[applyPaymentResultDTO]{
+		Data:      toApplyPaymentResultDTO(result),
+		RequestID: RequestIDFrom(r.Context()),
+	})
+}
+
 func (a API) handleLive(w http.ResponseWriter, r *http.Request) {
 	writeStatus(w, r, a.logger(), http.StatusOK, "ok", "")
 }

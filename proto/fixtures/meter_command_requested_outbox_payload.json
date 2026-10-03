@@ -1,0 +1,11 @@
+{
+  "command_id": "cmd-0101",
+  "meter_id": "met-0101",
+  "site_id": "site-0101",
+  "assignment_id": "asgn-0101",
+  "command_type": "reconnect_meter",
+  "status": "requested",
+  "requested_by": "provider:paystack",
+  "reason": "balance recharged from zero",
+  "requested_at": "2026-10-01T14:30:00Z"
+}
