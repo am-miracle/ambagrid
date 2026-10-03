@@ -50,14 +50,15 @@ export function PaymentPanel({
 	};
 
 	return (
-		<div
-			className="fixed inset-0 z-80 grid place-items-center bg-[rgba(2,6,10,0.72)] backdrop-blur-[5px]"
-			onMouseDown={(e) => {
-				if (e.target === e.currentTarget) dismiss();
-			}}
-		>
+		<div className="fixed inset-0 z-80 grid place-items-center bg-[rgba(2,6,10,0.72)] backdrop-blur-[5px]">
+			<button
+				type="button"
+				className="absolute inset-0 cursor-default"
+				aria-label="Close payment dialog"
+				onClick={dismiss}
+			/>
 			<section
-				className="panel-anim w-[min(520px,calc(100vw-32px))] border border-border bg-[#08111a] shadow-[0_30px_90px_rgba(0,0,0,0.72)]"
+				className="panel-anim relative w-[min(520px,calc(100vw-32px))] border border-border bg-[#08111a] shadow-[0_30px_90px_rgba(0,0,0,0.72)]"
 				role="dialog"
 				aria-modal="true"
 				aria-labelledby="payment-panel-title"

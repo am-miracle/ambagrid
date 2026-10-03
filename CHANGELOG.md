@@ -32,6 +32,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 
 - **outbox:** Publish alert events durably (#12)
 - **engine:** Make outbox dependencies explicit (#14)
+- Use semantic payment dialog backdrop
 
 ### Maintenance
 
