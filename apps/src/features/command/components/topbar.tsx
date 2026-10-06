@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { Badge } from "#/components/ui/badge";
+import { Button } from "#/components/ui/button";
 import {
 	formatClock,
 	STATUS_COLOR,
@@ -135,23 +137,13 @@ export function Topbar({
 					/>
 					{live ? "LIVE" : "REPLAY"} {formatClock(at)} {timeZoneLabel}
 				</div>
-				<button
-					type="button"
-					className="border border-border py-1.5 px-2.75 text-[12.5px] text-foreground hover:border-primary"
-					onClick={onOpenPayment}
-				>
-					Test payment
-				</button>
-				<button
-					type="button"
-					className="cmd-inbox-toggle hidden border border-border py-1.5 px-2.75 text-[12.5px] text-foreground hover:border-primary"
-					onClick={onToggleInbox}
-				>
+				<Button onClick={onOpenPayment}>Test payment</Button>
+				<Button className="cmd-inbox-toggle hidden" onClick={onToggleInbox}>
 					Alerts{" "}
-					<span className="bg-destructive text-destructive-foreground mono text-[11px] px-1.25 py-px ml-1.5">
+					<Badge variant="count" className="ml-1.5">
 						{openCount}
-					</span>
-				</button>
+					</Badge>
+				</Button>
 			</div>
 		</header>
 	);

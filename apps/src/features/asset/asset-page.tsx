@@ -11,6 +11,8 @@ import {
 import { useAsset, useAssetAlertHistory, useReadings } from "#/api/queries";
 import type { ReadingMetric } from "#/api/types";
 import { ReadingChart } from "#/components/chart/reading-chart";
+import { Card, CardTitle } from "#/components/ui/card";
+import { Toggle } from "#/components/ui/toggle";
 import {
 	RELAY_LABEL,
 	relayState,
@@ -101,7 +103,7 @@ export function AssetPage({ assetId }: { assetId: string }) {
 				style={PAGE_BG}
 			>
 				<BackLink />
-				<div className="bg-(--deck) border border-(--edge) px-4 py-3.5 h-60" />
+				<Card className="h-60" />
 			</div>
 		);
 	}
@@ -141,7 +143,7 @@ export function AssetPage({ assetId }: { assetId: string }) {
 				</div>
 			</header>
 
-			<section className="bg-(--deck) border border-(--edge) px-4 py-3.5 grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-x-4.5 gap-y-2.5 mono">
+			<Card className="grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-x-4.5 gap-y-2.5 mono">
 				<Field
 					label="Internal temperature"
 					value={
@@ -194,39 +196,39 @@ export function AssetPage({ assetId }: { assetId: string }) {
 						metrics reported yet.
 					</p>
 				)}
-			</section>
+			</Card>
 
-			<section className="bg-(--deck) border border-(--edge) px-4 py-3.5">
+			<Card>
 				<div className="flex flex-wrap justify-between gap-2 mb-3">
 					<div className="flex flex-wrap gap-1">
 						{metrics.map((m) => (
-							<button
-								type="button"
+							<Toggle
 								key={m.metric}
-								className={`chip${active === m.metric ? " on" : ""}`}
-								onClick={() => setMetric(m.metric)}
+								variant="chip"
+								pressed={active === m.metric}
+								onPressedChange={() => setMetric(m.metric)}
 							>
 								{METRIC_LABEL[m.metric].label}
-							</button>
+							</Toggle>
 						))}
 					</div>
 					<div className="flex flex-wrap gap-1">
 						{RANGE_PRESETS.map((p) => (
-							<button
-								type="button"
+							<Toggle
 								key={p.id}
-								className={`chip${preset.id === p.id ? " on" : ""}`}
-								onClick={() => setPresetId(p.id)}
+								variant="chip"
+								pressed={preset.id === p.id}
+								onPressedChange={() => setPresetId(p.id)}
 							>
 								{p.label}
-							</button>
+							</Toggle>
 						))}
 					</div>
 				</div>
 				<div className="flex justify-between items-baseline gap-2.5">
-					<h2 className="m-0 mb-2 text-base font-semibold">
+					<CardTitle>
 						{METRIC_LABEL[active].label} ({METRIC_LABEL[active].unit})
-					</h2>
+					</CardTitle>
 					<span className="mono muted text-[11px]">
 						{series?.aggregation === "max" ? "maximum" : "average"} per{" "}
 						{preset.interval}
@@ -241,10 +243,10 @@ export function AssetPage({ assetId }: { assetId: string }) {
 						label={METRIC_LABEL[active].label}
 					/>
 				</div>
-			</section>
+			</Card>
 
-			<section className="bg-(--deck) border border-(--edge) px-4 py-3.5">
-				<h2 className="m-0 mb-2 text-base font-semibold">Alert history</h2>
+			<Card>
+				<CardTitle>Alert history</CardTitle>
 				{sortedHistory.length === 0 && (
 					<p className="m-0 text-muted-foreground text-[12.5px]">
 						No alerts on this asset.
@@ -303,7 +305,7 @@ export function AssetPage({ assetId }: { assetId: string }) {
 						);
 					})}
 				</ul>
-			</section>
+			</Card>
 		</div>
 	);
 }

@@ -22,6 +22,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - Add authenticated staging telemetry worker (#17)
 - Add prepaid payment processing (#18)
 - Add revenue operations dashboard
+- **ui:** Add shared control room components
 
 ### Documentation
 

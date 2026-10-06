@@ -1,5 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useApplyDevPayment } from "#/api/queries";
+import { Button } from "#/components/ui/button";
+import {
+	Dialog,
+	DialogClose,
+	DialogContent,
+	DialogHeader,
+	DialogTitle,
+} from "#/components/ui/dialog";
+import { Input } from "#/components/ui/input";
+import { Label } from "#/components/ui/label";
 
 export function PaymentPanel({
 	open,
@@ -12,30 +22,6 @@ export function PaymentPanel({
 	const [customerId, setCustomerId] = useState("cust-01");
 	const [amount, setAmount] = useState("5000");
 	const firstInputRef = useRef<HTMLInputElement>(null);
-	const onCloseRef = useRef(onClose);
-	onCloseRef.current = onClose;
-	const paymentRef = useRef(payment);
-	paymentRef.current = payment;
-
-	const dismiss = () => {
-		paymentRef.current.reset();
-		onCloseRef.current();
-	};
-
-	useEffect(() => {
-		if (!open) return;
-		firstInputRef.current?.focus();
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key === "Escape") {
-				paymentRef.current.reset();
-				onCloseRef.current();
-			}
-		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
-	}, [open]);
-
-	if (!open) return null;
 
 	const result = payment.data?.data;
 	const submit = (event: React.FormEvent<HTMLFormElement>) => {
@@ -50,60 +36,47 @@ export function PaymentPanel({
 	};
 
 	return (
-		<div className="fixed inset-0 z-80 grid place-items-center bg-[rgba(2,6,10,0.72)] backdrop-blur-[5px]">
-			<button
-				type="button"
-				className="absolute inset-0 cursor-default"
-				aria-label="Close payment dialog"
-				onClick={dismiss}
-			/>
-			<section
-				className="panel-anim relative w-[min(520px,calc(100vw-32px))] border border-border bg-[#08111a] shadow-[0_30px_90px_rgba(0,0,0,0.72)]"
-				role="dialog"
-				aria-modal="true"
-				aria-labelledby="payment-panel-title"
-			>
-				<div className="flex items-center gap-2.5 border-b border-(--edge) px-4 py-3.25">
+		<Dialog
+			open={open}
+			onOpenChange={(next) => {
+				if (next) return;
+				payment.reset();
+				onClose();
+			}}
+		>
+			<DialogContent initialFocus={firstInputRef}>
+				<DialogHeader>
 					<div className="flex-1">
 						<div className="mb-0.75 font-mono text-[10px] uppercase tracking-[0.12em] text-success">
 							Revenue loop
 						</div>
-						<h2
-							id="payment-panel-title"
-							className="m-0 font-heading text-base font-semibold"
-						>
-							Inject test payment
-						</h2>
+						<DialogTitle>Inject test payment</DialogTitle>
 					</div>
-					<button
-						type="button"
-						className="border border-border px-2.75 py-1.5 text-[12.5px] text-foreground hover:border-primary"
-						onClick={dismiss}
-					>
-						Close
-					</button>
-				</div>
+					<DialogClose render={<Button />}>Close</DialogClose>
+				</DialogHeader>
 
 				<form
 					className="grid grid-cols-[1fr_0.8fr] gap-3 px-4 py-4.5"
 					onSubmit={submit}
 				>
-					<label className="grid gap-1.5 text-[11px] text-muted-foreground">
-						<span>Customer ID</span>
-						<input
+					<div className="grid gap-1.5">
+						<Label htmlFor="payment-customer">Customer ID</Label>
+						<Input
 							ref={firstInputRef}
-							className="w-full border border-input bg-[rgba(255,255,255,0.025)] px-2.5 py-2.25 font-mono text-[13px] text-foreground outline-none focus:border-primary focus:shadow-[0_0_0_2px_rgba(143,246,255,0.08)]"
+							id="payment-customer"
+							className="h-9 px-2.5 font-mono text-[13px]"
 							value={customerId}
 							onChange={(event) => setCustomerId(event.target.value)}
 							required
 						/>
-					</label>
-					<label className="grid gap-1.5 text-[11px] text-muted-foreground">
-						<span>Amount (major)</span>
-						<div className="flex items-center border border-input">
+					</div>
+					<div className="grid gap-1.5">
+						<Label htmlFor="payment-amount">Amount (major)</Label>
+						<div className="flex items-center border border-input bg-[rgba(4,8,13,0.8)] focus-within:border-primary">
 							<b className="pl-2.5 font-mono text-[10px] text-primary">NGN</b>
-							<input
-								className="w-full border-0 bg-[rgba(255,255,255,0.025)] px-2.5 py-2.25 font-mono text-[13px] text-foreground outline-none focus:shadow-[0_0_0_2px_rgba(143,246,255,0.08)]"
+							<Input
+								id="payment-amount"
+								className="h-9 border-0 bg-transparent px-2.5 font-mono text-[13px] focus-visible:shadow-none"
 								type="number"
 								min="0.01"
 								step="0.01"
@@ -112,14 +85,16 @@ export function PaymentPanel({
 								required
 							/>
 						</div>
-					</label>
-					<button
+					</div>
+					<Button
 						type="submit"
-						className="col-span-full border border-success/50 bg-success/9 px-3.5 py-2.5 text-[13px] text-success disabled:opacity-[0.55]"
+						variant="success"
+						size="lg"
+						className="col-span-full"
 						disabled={payment.isPending}
 					>
 						{payment.isPending ? "Applying payment…" : "Apply payment"}
-					</button>
+					</Button>
 				</form>
 
 				{payment.error && (
@@ -137,22 +112,14 @@ export function PaymentPanel({
 							Payment confirmed
 						</div>
 						<div className="my-3 grid grid-cols-2 gap-2.5">
-							<div className="grid gap-1 border-l-2 border-success bg-black/18 p-2.5">
-								<span className="text-[10px] text-muted-foreground">
-									Credit issued
-								</span>
-								<b className="font-mono text-lg font-medium">
-									{result.credit.kwh_granted.toFixed(2)} kWh
-								</b>
-							</div>
-							<div className="grid gap-1 border-l-2 border-success bg-black/18 p-2.5">
-								<span className="text-[10px] text-muted-foreground">
-									Current balance
-								</span>
-								<b className="font-mono text-lg font-medium">
-									{result.balance.remaining_kwh.toFixed(2)} kWh
-								</b>
-							</div>
+							<ResultTile
+								label="Credit issued"
+								kwh={result.credit.kwh_granted}
+							/>
+							<ResultTile
+								label="Current balance"
+								kwh={result.balance.remaining_kwh}
+							/>
 						</div>
 						<div className="mt-1 text-[11px] text-muted-foreground">
 							Credit issued
@@ -162,7 +129,16 @@ export function PaymentPanel({
 						</div>
 					</div>
 				)}
-			</section>
+			</DialogContent>
+		</Dialog>
+	);
+}
+
+function ResultTile({ label, kwh }: { label: string; kwh: number }) {
+	return (
+		<div className="grid gap-1 border-l-2 border-success bg-black/18 p-2.5">
+			<span className="text-[10px] text-muted-foreground">{label}</span>
+			<b className="font-mono text-lg font-medium">{kwh.toFixed(2)} kWh</b>
 		</div>
 	);
 }

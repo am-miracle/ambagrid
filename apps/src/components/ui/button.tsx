@@ -4,35 +4,33 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-	"group/button inline-flex shrink-0 items-center justify-center rounded-md border border-transparent bg-clip-padding text-xs/relaxed font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-2 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+	"group/button inline-flex shrink-0 items-center justify-center gap-1 border border-transparent whitespace-nowrap transition-colors outline-none select-none disabled:pointer-events-none disabled:opacity-35 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5",
 	{
 		variants: {
 			variant: {
-				default: "bg-primary text-primary-foreground hover:bg-primary/80",
+				default:
+					"border-primary bg-primary font-semibold text-primary-foreground hover:bg-primary/85",
 				outline:
-					"border-border hover:bg-input/50 hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:bg-input/30",
-				secondary:
-					"bg-secondary text-secondary-foreground hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)] aria-expanded:bg-secondary aria-expanded:text-secondary-foreground",
-				ghost:
-					"hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:hover:bg-muted/50",
-				destructive:
-					"bg-destructive/10 text-destructive hover:bg-destructive/20 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40",
-				link: "text-primary underline-offset-4 hover:underline",
+					"border-border text-foreground hover:border-primary hover:text-primary",
+				muted:
+					"border-border text-muted-foreground hover:border-primary hover:text-primary",
+				success:
+					"border-success/45 bg-success/9 text-success hover:border-primary hover:text-primary",
+				command:
+					"border-[#2f8ea3] bg-linear-to-b from-[#1d5f6d] to-[#113c47] font-semibold text-secondary-foreground hover:from-[#24707f] hover:to-[#14495a]",
+				ghost: "text-muted-foreground hover:text-foreground",
+				link: "text-muted-foreground hover:text-primary",
 			},
 			size: {
-				default:
-					"h-7 gap-1 px-2 text-xs/relaxed has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5",
-				xs: "h-5 gap-1 rounded-sm px-2 text-[0.625rem] has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-2.5",
-				sm: "h-6 gap-1 px-2 text-xs/relaxed has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
-				lg: "h-8 gap-1 px-2.5 text-xs/relaxed has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2 [&_svg:not([class*='size-'])]:size-4",
-				icon: "size-7 [&_svg:not([class*='size-'])]:size-3.5",
-				"icon-xs": "size-5 rounded-sm [&_svg:not([class*='size-'])]:size-2.5",
-				"icon-sm": "size-6 [&_svg:not([class*='size-'])]:size-3",
-				"icon-lg": "size-8 [&_svg:not([class*='size-'])]:size-4",
+				default: "h-7 px-2.75 text-[12.5px]",
+				sm: "h-6 px-2 text-[11px]",
+				lg: "h-9 px-3.5 text-[13px]",
+				icon: "size-7",
+				inline: "h-auto p-0 text-[12.5px]",
 			},
 		},
 		defaultVariants: {
-			variant: "default",
+			variant: "outline",
 			size: "default",
 		},
 	},
@@ -40,8 +38,8 @@ const buttonVariants = cva(
 
 function Button({
 	className,
-	variant = "default",
-	size = "default",
+	variant,
+	size,
 	...props
 }: ButtonPrimitive.Props & VariantProps<typeof buttonVariants>) {
 	return (

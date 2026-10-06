@@ -1,5 +1,6 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { type ComponentProps, useEffect, useId, useRef, useState } from "react";
 import { gsap, prefersReducedMotion } from "#/lib/motion";
+import { cn } from "#/lib/utils";
 import { formatClock, STATUS_COLOR, type Status } from "./model";
 
 export function AnimatedNumber({
@@ -166,13 +167,61 @@ export function StatusDot({
 }) {
 	return (
 		<span
-			className={`inline-block rounded-full flex-none${className ? ` ${className}` : ""}`}
+			className={cn("inline-block rounded-full flex-none", className)}
 			style={{
 				width: size,
 				height: size,
 				background: STATUS_COLOR[status],
 				boxShadow: `0 0 ${size}px ${STATUS_COLOR[status]}`,
 			}}
+		/>
+	);
+}
+
+export function PanelHeader({ className, ...props }: ComponentProps<"div">) {
+	return (
+		<div
+			className={cn(
+				"flex items-center gap-2.5 py-3.25 px-4 border-b border-(--edge)",
+				className,
+			)}
+			{...props}
+		/>
+	);
+}
+
+export function PanelTitle({ className, ...props }: ComponentProps<"h2">) {
+	return (
+		<h2
+			className={cn(
+				"font-heading text-base font-semibold m-0 flex-1",
+				className,
+			)}
+			{...props}
+		/>
+	);
+}
+
+export function SectionTitle({ className, ...props }: ComponentProps<"h3">) {
+	return (
+		<h3
+			className={cn(
+				"font-heading text-[11.5px] tracking-[0.6px] font-normal text-muted-foreground m-0 mb-2",
+				className,
+			)}
+			{...props}
+		/>
+	);
+}
+
+export function EmptyState({ className, ...props }: ComponentProps<"div">) {
+	return (
+		<div
+			className={cn(
+				"py-10 px-6 text-center text-muted-foreground text-[13px] leading-[1.6]",
+				className,
+			)}
+			{...props}
 		/>
 	);
 }

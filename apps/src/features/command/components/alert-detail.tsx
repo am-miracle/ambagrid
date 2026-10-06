@@ -1,9 +1,13 @@
 import { Link } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { ApiError } from "#/api/client";
 import { ASSET_TYPE_LABEL, SYSTEM_ACTOR } from "#/api/contract";
 import { useAlert, useResolveAlert } from "#/api/queries";
 import type { Alert } from "#/api/types";
+import { Badge } from "#/components/ui/badge";
+import { Button } from "#/components/ui/button";
+import { Label } from "#/components/ui/label";
+import { Textarea } from "#/components/ui/textarea";
 import { useActorId } from "#/lib/actor";
 import { formatDuration } from "#/lib/format";
 import { gsap } from "#/lib/motion";
@@ -19,7 +23,13 @@ import {
 	severityStatus,
 	shortId,
 } from "../model";
-import { type Series, Sparkline, StatusDot } from "../ui";
+import {
+	PanelHeader,
+	SectionTitle,
+	type Series,
+	Sparkline,
+	StatusDot,
+} from "../ui";
 
 interface Activity {
 	id: string;
@@ -29,10 +39,7 @@ interface Activity {
 	text: string;
 }
 
-const STATE_STYLE: Record<string, { color: string; borderColor: string }> = {
-	open: { color: "#ff8b96", borderColor: "rgba(255,77,94,0.4)" },
-	resolved: { color: "var(--healthy)", borderColor: "rgba(57,215,192,0.4)" },
-};
+const STATE_BADGE = { open: "critical", resolved: "success" } as const;
 
 const SEV_HERO: Record<
 	string,
@@ -109,21 +116,17 @@ export function AlertDetail({
 
 	return (
 		<div className="overflow-y-auto min-h-0" ref={ref}>
-			<div className="flex items-center gap-2.5 py-3.25 px-4 border-b border-(--edge)">
-				<button
-					type="button"
-					className="text-muted-foreground text-[12.5px] flex-1 text-left hover:text-primary"
+			<PanelHeader>
+				<Button
+					variant="link"
+					size="inline"
+					className="flex-1 justify-start"
 					onClick={onBack}
 				>
 					← Inbox
-				</button>
-				<span
-					className="font-mono text-[10px] py-px px-1.5 border text-muted-foreground"
-					style={STATE_STYLE[stateKey]}
-				>
-					{stateKey}
-				</span>
-			</div>
+				</Button>
+				<Badge variant={STATE_BADGE[stateKey]}>{stateKey}</Badge>
+			</PanelHeader>
 
 			<div
 				className="py-3.5 px-4 border-l-[3px] border-l-transparent"
@@ -146,43 +149,26 @@ export function AlertDetail({
 			</div>
 
 			<div className="px-4 my-3.5 flex flex-col gap-1.5 mono">
-				<div className="flex justify-between gap-3.5 text-[11.5px] border-b border-[rgba(122,186,212,0.07)] pb-1.25">
-					<span className="text-muted-foreground">Kind</span>
-					<b className="font-medium text-right">{alert.kind}</b>
-				</div>
-				<div className="flex justify-between gap-3.5 text-[11.5px] border-b border-[rgba(122,186,212,0.07)] pb-1.25">
-					<span className="text-muted-foreground">Severity</span>
-					<b
-						className="font-medium text-right"
-						style={{ color: STATUS_COLOR[severityStatus(alert.severity)] }}
-					>
-						{alert.severity}
-					</b>
-				</div>
+				<DetailRow label="Kind">{alert.kind}</DetailRow>
+				<DetailRow
+					label="Severity"
+					color={STATUS_COLOR[severityStatus(alert.severity)]}
+				>
+					{alert.severity}
+				</DetailRow>
 				{asset?.reportedHouseholdId && (
-					<div className="flex justify-between gap-3.5 text-[11.5px] border-b border-[rgba(122,186,212,0.07)] pb-1.25">
-						<span className="text-muted-foreground">Household</span>
-						<b className="font-medium text-right">
-							{asset.reportedHouseholdId}
-						</b>
-					</div>
+					<DetailRow label="Household">{asset.reportedHouseholdId}</DetailRow>
 				)}
-				<div className="flex justify-between gap-3.5 text-[11.5px] border-b border-[rgba(122,186,212,0.07)] pb-1.25">
-					<span className="text-muted-foreground">Source event</span>
-					<b className="font-medium text-right">
-						{alert.source_event_id ?? "—"}
-					</b>
-				</div>
-				<div className="flex justify-between gap-3.5 text-[11.5px] border-b border-[rgba(122,186,212,0.07)] pb-1.25">
-					<span className="text-muted-foreground">Resolved by</span>
-					<b className="font-medium text-right">
-						{alert.resolved_by === null
-							? "—"
-							: alert.resolved_by === SYSTEM_ACTOR
-								? "automatic recovery"
-								: alert.resolved_by}
-					</b>
-				</div>
+				<DetailRow label="Source event">
+					{alert.source_event_id ?? "—"}
+				</DetailRow>
+				<DetailRow label="Resolved by">
+					{alert.resolved_by === null
+						? "—"
+						: alert.resolved_by === SYSTEM_ACTOR
+							? "automatic recovery"
+							: alert.resolved_by}
+				</DetailRow>
 			</div>
 
 			{series && (
@@ -222,13 +208,11 @@ export function AlertDetail({
 			)}
 
 			<div className="px-4 pb-4">
-				<div className="font-heading text-[11.5px] tracking-[0.6px] text-muted-foreground mb-2">
-					Activity
-				</div>
+				<SectionTitle>Activity</SectionTitle>
 				{activity.map((h) => (
 					<div
 						key={h.id}
-						className="flex gap-2.5py-2 border-t border-[rgba(122,186,212,0.07)]"
+						className="flex gap-2.5 py-2 border-t border-[rgba(122,186,212,0.07)]"
 					>
 						<span className="mono text-[10.5px] text-muted-foreground pt-0.5 shrink-0 w-9.5">
 							{formatClock(h.at)}
@@ -249,9 +233,7 @@ export function AlertDetail({
 
 			{related.length > 0 && (
 				<div className="px-4 pb-4">
-					<div className="font-heading text-[11.5px] tracking-[0.6px] text-muted-foreground mb-2">
-						Same asset, earlier
-					</div>
+					<SectionTitle>Same asset, earlier</SectionTitle>
 					{related.map((r) => (
 						<button
 							type="button"
@@ -293,14 +275,10 @@ function ResolveForm({ alertId }: { alertId: string }) {
 					resolve.mutate({ actorId, note: note.trim() });
 			}}
 		>
-			<label
-				className="font-heading text-[11.5px] tracking-[0.6px] text-muted-foreground mb-2"
-				htmlFor={`note-${alertId}`}
-			>
+			<Label className="mb-2" htmlFor={`note-${alertId}`}>
 				Resolve as {actorId || "…"}
-			</label>
-			<textarea
-				className="flex-1 min-w-0 bg-[rgba(4,8,13,0.8)] border border-border text-foreground py-1.25 px-2 text-[13px] font-sans resize-y focus:outline-none focus:border-primary"
+			</Label>
+			<Textarea
 				id={`note-${alertId}`}
 				value={note}
 				onChange={(e) => setNote(e.target.value)}
@@ -308,29 +286,51 @@ function ResolveForm({ alertId }: { alertId: string }) {
 				rows={2}
 			/>
 			{!actorId && (
-				<p className="m-0 text-[11.5px] text-warning leading-[1.45]">
-					Set an operator id in the left rail first.
-				</p>
+				<FormWarning>Set an operator id in the left rail first.</FormWarning>
 			)}
 			{error?.status === 409 && (
-				<p className="m-0 text-[11.5px] text-warning leading-[1.45]">
+				<FormWarning>
 					Already resolved by someone else. The record above has refreshed.
-				</p>
+				</FormWarning>
 			)}
 			{error && error.status !== 409 && (
-				<p className="m-0 text-[11.5px] text-warning leading-[1.45]">
+				<FormWarning>
 					{error.message} (request {error.requestId})
-				</p>
+				</FormWarning>
 			)}
-			<div className="flex gap-1.5">
-				<button
-					type="submit"
-					className="flex-1 border py-2 px-1 text-[12.5px] hover:enabled:border-primary hover:enabled:text-primary enabled:border-[rgba(57,215,192,0.45)] enabled:text-success"
-					disabled={resolve.isPending || !actorId || !note.trim()}
-				>
-					{resolve.isPending ? "Resolving…" : "Resolve"}
-				</button>
-			</div>
+			<Button
+				type="submit"
+				variant="success"
+				size="lg"
+				disabled={resolve.isPending || !actorId || !note.trim()}
+			>
+				{resolve.isPending ? "Resolving…" : "Resolve"}
+			</Button>
 		</form>
+	);
+}
+
+function DetailRow({
+	label,
+	color,
+	children,
+}: {
+	label: string;
+	color?: string;
+	children: ReactNode;
+}) {
+	return (
+		<div className="flex justify-between gap-3.5 text-[11.5px] border-b border-[rgba(122,186,212,0.07)] pb-1.25">
+			<span className="text-muted-foreground">{label}</span>
+			<b className="font-medium text-right" style={{ color }}>
+				{children}
+			</b>
+		</div>
+	);
+}
+
+function FormWarning({ children }: { children: ReactNode }) {
+	return (
+		<p className="m-0 text-[11.5px] text-warning leading-[1.45]">{children}</p>
 	);
 }

@@ -40,7 +40,7 @@ export function MeterCells({
 	if (meters.length === 0) return null;
 	return (
 		<div className="mt-3">
-			<div className="flex justify-between text-[11px] text-muted-foreground font-heading mb-[6px]">
+			<div className="flex justify-between text-[11px] text-muted-foreground font-heading mb-1.5">
 				<span>Household relays</span>
 				<span className="mono muted">
 					{meters.filter((m) => relayState(m) === "closed").length}/
@@ -89,7 +89,7 @@ function MeterCell({
 			ref={ref}
 			to="/assets/$assetId"
 			params={{ assetId: meter.assetId }}
-			className={`block w-[14px] h-[14px] border border-border hover:border-foreground${state === "unknown" ? " meter-cell-unknown" : ""}`}
+			className={`block w-3.5 h-3.5 border border-border hover:border-foreground${state === "unknown" ? " meter-cell-unknown" : ""}`}
 			style={{
 				...RELAY_STYLE[state],
 				...(alerting
