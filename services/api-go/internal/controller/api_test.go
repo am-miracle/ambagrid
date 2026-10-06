@@ -106,6 +106,18 @@ func (f *fakePayments) ApplyWebhookPayment(_ context.Context, command domain.App
 	return f.webhookResult, f.webhookErr
 }
 
+func (f *fakePayments) ListCustomers(_ context.Context) ([]domain.CustomerSummary, error) {
+	return nil, nil
+}
+
+func (f *fakePayments) ListMeterCommands(_ context.Context) ([]domain.MeterCommand, error) {
+	return nil, nil
+}
+
+func (f *fakePayments) ListAuditEvents(_ context.Context, _ string) ([]domain.AuditEvent, error) {
+	return nil, nil
+}
+
 type fakeHealth struct{ err error }
 
 func (f *fakeHealth) Ready(context.Context) error { return f.err }

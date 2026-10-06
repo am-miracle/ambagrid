@@ -49,18 +49,20 @@ export function FilterRail({
 	onReplay: () => void;
 }) {
 	return (
-		<aside className={`rail panel-anim${open ? " open" : ""}`}>
+		<aside
+			className={`cmd-rail col-start-1 row-start-2 row-end-4 border-r border-(--edge) bg-(--deck) backdrop-blur-[10px] p-4 px-3 flex flex-col gap-4.5 overflow-y-auto z-20 panel-anim${open ? " open" : ""}`}
+		>
 			<RailGroup title="View">
 				<button
 					type="button"
-					className={`chip${!siteSelected ? " on" : ""}`}
+					className={`border py-1.25 px-2.75 text-[12.5px] ${!siteSelected ? "text-primary-foreground bg-primary border-primary font-semibold" : "border-border text-muted-foreground"}`}
 					onClick={onFleetView}
 				>
 					Fleet
 				</button>
 				<button
 					type="button"
-					className={`chip${siteSelected ? " on" : ""}`}
+					className={`border py-1.25 px-2.75 text-[12.5px] ${siteSelected ? "text-primary-foreground bg-primary border-primary font-semibold" : "border-border text-muted-foreground"}`}
 					disabled={!siteSelected}
 					onClick={onSiteView}
 				>
@@ -73,13 +75,18 @@ export function FilterRail({
 					<button
 						type="button"
 						key={s}
-						className={`rail-filter${visible[s] ? " on" : ""}`}
+						className={`flex items-center gap-2 w-full py-1.25 px-2 border text-[13px] capitalize ${visible[s] ? "text-foreground border-(--edge) bg-[rgba(143,246,255,0.04)]" : "border-transparent text-muted-foreground"} hover:border-border`}
 						aria-pressed={visible[s]}
 						onClick={() => onToggleStatus(s)}
 					>
-						<StatusDot status={s} />
-						<span className="rail-filter-label">{s}</span>
-						<span className="mono rail-filter-count">{statusCounts[s]}</span>
+						<StatusDot
+							status={s}
+							className={visible[s] ? undefined : "opacity-30"}
+						/>
+						<span className="flex-1 text-left">{s}</span>
+						<span className="mono text-[11.5px] text-muted-foreground">
+							{statusCounts[s]}
+						</span>
 					</button>
 				))}
 			</RailGroup>
@@ -89,12 +96,14 @@ export function FilterRail({
 					<button
 						type="button"
 						key={k}
-						className={`rail-filter${kinds[k] ? " on" : ""}`}
+						className={`flex items-center gap-2 w-full py-1.25 px-2 border text-[13px] capitalize ${kinds[k] ? "text-foreground border-(--edge) bg-[rgba(143,246,255,0.04)]" : "border-transparent text-muted-foreground"} hover:border-border`}
 						aria-pressed={kinds[k]}
 						onClick={() => onToggleKind(k)}
 					>
-						<span className="rail-filter-label">{ASSET_TYPE_LABEL[k]}</span>
-						<span className="mono rail-filter-count">{kindCounts[k]}</span>
+						<span className="flex-1 text-left">{ASSET_TYPE_LABEL[k]}</span>
+						<span className="mono text-[11.5px] text-muted-foreground">
+							{kindCounts[k]}
+						</span>
 					</button>
 				))}
 			</RailGroup>
@@ -102,19 +111,24 @@ export function FilterRail({
 			{unplaced.length > 0 && (
 				<RailGroup title="Not on the map">
 					{unplaced.map((s) => (
-						<div key={s.id} className="unplaced">
+						<div
+							key={s.id}
+							className="flex justify-between gap-2 w-full py-1 px-2 text-[12.5px] text-muted-foreground"
+						>
 							<span>{s.name}</span>
-							<span className="mono muted">{s.provisioningStatus}</span>
+							<span className="mono text-[10.5px] muted">
+								{s.provisioningStatus}
+							</span>
 						</div>
 					))}
 				</RailGroup>
 			)}
 
-			<div className="rail-foot">
+			<div className="mt-auto flex flex-col gap-2">
 				<ActorField />
 				<button
 					type="button"
-					className={`chip wide${focusMode ? " on" : ""}`}
+					className={`border py-1.25 px-2.75 text-[12.5px] w-full text-center ${focusMode ? "text-primary-foreground bg-primary border-primary font-semibold" : "border-border text-muted-foreground"}`}
 					onClick={onToggleFocus}
 					disabled={!canFocus}
 				>
@@ -122,13 +136,13 @@ export function FilterRail({
 				</button>
 				<button
 					type="button"
-					className="primary wide"
+					className="w-full text-center bg-linear-to-b from-[#1d5f6d] to-[#113c47] border border-[#2f8ea3] text-[#d8fbff] py-2.25 font-semibold text-[13px] hover:from-[#24707f] hover:to-[#14495a]"
 					onClick={onReplay}
 					disabled={!canReplay || replaying}
 				>
 					{replaying ? "Replaying…" : "Run incident replay"}
 				</button>
-				<div className="rail-hint">
+				<div className="text-2.75 text-muted-foreground leading-normal">
 					Drag the field to orbit. Scroll to zoom.
 				</div>
 			</div>
@@ -144,32 +158,36 @@ function RailGroup({
 	children: ReactNode;
 }) {
 	return (
-		<div className="rail-group">
-			<div className="rail-title">{title}</div>
-			<div className="rail-body">{children}</div>
+		<div>
+			<div className="font-heading text-[11.5px] tracking-[0.6px] text-muted-foreground mb-2">
+				{title}
+			</div>
+			<div className="flex flex-wrap gap-1">{children}</div>
 		</div>
 	);
 }
 
-// Stand-in for the gateway-injected X-Actor-Id until operator auth exists.
 function ActorField() {
 	const actorId = useActorId();
 	const [draft, setDraft] = useState(actorId);
 	return (
 		<form
-			className="actor"
+			className="flex flex-col"
 			onSubmit={(e) => {
 				e.preventDefault();
 				if (draft.trim()) setActorId(draft);
 			}}
 		>
-			<label className="rail-title" htmlFor="actor-id">
+			<label
+				className="font-heading text-[11.5px] tracking-[0.6px] text-muted-foreground mb-2"
+				htmlFor="actor-id"
+			>
 				Operator id
 			</label>
-			<div className="actor-row">
+			<div className="flex gap-1">
 				<input
 					id="actor-id"
-					className="mono"
+					className="mono flex-1 min-w-0 bg-[rgba(4,8,13,0.8)] border border-border text-foreground py-1.25 px-2 text-xs focus:outline-none focus:border-primary"
 					value={draft}
 					onChange={(e) => setDraft(e.target.value)}
 					placeholder="operator-0101"
@@ -177,7 +195,7 @@ function ActorField() {
 				/>
 				<button
 					type="submit"
-					className="chip"
+					className="border border-border py-1.25 px-2.75 text-[12.5px] text-muted-foreground"
 					disabled={!draft.trim() || draft.trim() === actorId}
 				>
 					Set

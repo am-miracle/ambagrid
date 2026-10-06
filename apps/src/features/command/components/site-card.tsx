@@ -28,7 +28,6 @@ export function SiteCard({
 	onClose: () => void;
 }) {
 	const ref = useRef<HTMLDivElement | null>(null);
-	// The parent keys this card by site, so a new site remounts and re-enters.
 	useEffect(() => {
 		gsap.fromTo(
 			ref.current,
@@ -46,24 +45,29 @@ export function SiteCard({
 		site.assets.find((a) => a.assetId === assetId)?.assetType;
 
 	return (
-		<div className="site-card" ref={ref}>
-			<div className="site-head">
+		<div
+			className="cmd-site-card absolute left-4 bottom-4 w-[300px] bg-[rgba(7,13,19,0.93)] border border-border p-[13px] shadow-[0_24px_60px_rgba(0,0,0,0.6)]"
+			ref={ref}
+		>
+			<div className="flex justify-between items-start gap-[10px]">
 				<div>
-					<div className="site-name">{site.name}</div>
-					<div className="mono muted">
+					<div className="font-heading text-[17px] font-semibold">
+						{site.name}
+					</div>
+					<div className="mono muted text-[10.5px]">
 						{site.id} · {site.region}
 					</div>
 				</div>
 				<button
 					type="button"
-					className="x"
+					className="text-muted-foreground text-[18px] leading-none px-[2px] hover:text-foreground"
 					onClick={onClose}
 					aria-label="Close site"
 				>
 					×
 				</button>
 			</div>
-			<div className="flow">
+			<div className="grid grid-cols-3 gap-[10px] my-3">
 				<FlowCell
 					label="Solar"
 					value={
@@ -91,39 +95,39 @@ export function SiteCard({
 					color="#8FF6FF"
 				/>
 			</div>
-			<div className="site-grid mono">
-				<span>Meters</span>
+			<div className="grid grid-cols-[1fr_auto_1fr_auto] gap-x-[10px] gap-y-[3px] text-[11.5px] mono">
+				<span className="text-muted-foreground">Meters</span>
 				<b>{site.meters.length}</b>
-				<span>Assets</span>
+				<span className="text-muted-foreground">Assets</span>
 				<b>{site.assets.length}</b>
-				<span>Disconnected</span>
+				<span className="text-muted-foreground">Disconnected</span>
 				<b>{site.disconnected}</b>
-				<span>Operator</span>
+				<span className="text-muted-foreground">Operator</span>
 				<b>{site.operatorId ?? "unassigned"}</b>
-				<span>Last report</span>
+				<span className="text-muted-foreground">Last report</span>
 				<b>
 					{formatAge(
 						site.lastSeenAt ? new Date(site.lastSeenAt).toISOString() : null,
 						now,
 					)}
 				</b>
-				<span>Status</span>
+				<span className="text-muted-foreground">Status</span>
 				<b style={{ color: STATUS_COLOR[status] }}>{status}</b>
 			</div>
 			{dark && (
-				<p className="site-note">
+				<p className="mt-[10px] text-[11.5px] text-warning leading-[1.45]">
 					Telemetry is stale. Values show the last report before the site went
 					dark.
 				</p>
 			)}
 			<MeterCells meters={site.meters} alertingIds={alertingIds} />
 			{openAlerts.length > 0 && (
-				<div className="site-alerts">
+				<div className="mt-[11px] flex flex-col gap-[5px]">
 					{openAlerts.map((a) => (
 						<button
 							type="button"
 							key={a.alert_id}
-							className={`mini sev-${a.severity}`}
+							className="flex items-center gap-[7px] text-left text-xs py-[6px] px-2 border border-(--edge) bg-[rgba(255,77,94,0.05)] hover:border-border"
 							onClick={() => onOpenAlert(a)}
 						>
 							<StatusDot status={severityStatus(a.severity)} size={6} />
@@ -148,11 +152,14 @@ function FlowCell({
 	color: string;
 }) {
 	return (
-		<div className="flow-cell">
-			<div className="flow-label">{label}</div>
-			<div className="flow-value mono">{value}</div>
-			<div className="flow-bar">
+		<div>
+			<div className="text-[11px] text-muted-foreground font-heading">
+				{label}
+			</div>
+			<div className="text-[15px] mono">{value}</div>
+			<div className="h-[3px] bg-white/[0.07] mt-[5px]">
 				<i
+					className="block h-full transition-[width] duration-500 ease-in-out"
 					style={{
 						width: `${Math.min(1, Math.max(0, pct)) * 100}%`,
 						background: color,

@@ -6,9 +6,12 @@ import type {
 	ApplyPaymentResult,
 	Asset,
 	AssetType,
+	AuditEvent,
 	CollectionBody,
+	CustomerSummary,
 	ErrorBody,
 	ErrorCode,
+	MeterCommand,
 	ObjectBody,
 	ReadingInterval,
 	ReadingMetric,
@@ -139,4 +142,16 @@ export const api = {
 				}),
 			},
 		),
+
+	listDevCustomers: () =>
+		request<CollectionBody<CustomerSummary>>("/v1/dev/customers"),
+
+	listDevAuditEvents: (customerId?: string) =>
+		request<CollectionBody<AuditEvent>>(
+			"/v1/dev/audit-events",
+			customerId ? { customer_id: customerId } : {},
+		),
+
+	listDevCommands: () =>
+		request<CollectionBody<MeterCommand>>("/v1/dev/commands"),
 };

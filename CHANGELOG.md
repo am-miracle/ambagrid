@@ -20,7 +20,8 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **ui:** Build operator control room (#15)
 - **engine:** Add revenue protection storage schema (#16)
 - Add authenticated staging telemetry worker (#17)
-- Add prepaid payment processing
+- Add prepaid payment processing (#18)
+- Add revenue operations dashboard
 
 ### Documentation
 
@@ -32,7 +33,6 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 
 - **outbox:** Publish alert events durably (#12)
 - **engine:** Make outbox dependencies explicit (#14)
-- Use semantic payment dialog backdrop
 
 ### Maintenance
 

@@ -13,7 +13,10 @@ import type {
 	Alert,
 	AlertDetail,
 	AssetType,
+	AuditEvent,
 	ErrorCode,
+	MeterCommand,
+	Payment,
 	ReadingInterval,
 	ReadingMetric,
 	Site,
@@ -64,6 +67,9 @@ const paymentBalances = new Map<
 	string,
 	{ kwh: number; moneyMinorUnits: number }
 >();
+const paymentHistory: Payment[] = [];
+const commandHistory: MeterCommand[] = [];
+const auditEvents: AuditEvent[] = [];
 
 const requestId = () =>
 	Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) =>
@@ -500,6 +506,7 @@ export const handlers = [
 			}
 
 			const customerId = payment.customer_id.trim();
+			const siteId = "rivers-bolo";
 			const previous = paymentBalances.get(customerId) ?? {
 				kwh: 0,
 				moneyMinorUnits: 0,
@@ -515,22 +522,94 @@ export const handlers = [
 			const creditId = crypto.randomUUID();
 			const commandId = crypto.randomUUID();
 
+			const paymentRecord: Payment = {
+				payment_id: paymentId,
+				provider: "dev",
+				external_reference: `dev-${crypto.randomUUID()}`,
+				customer_id: customerId,
+				amount_minor_units: payment.amount_minor_units,
+				currency: "NGN",
+				status: "confirmed",
+				confirmed_at: now,
+				created_at: now,
+			};
+			paymentHistory.push(paymentRecord);
+
+			auditEvents.push({
+				event_id: crypto.randomUUID(),
+				event_type: "payment_confirmed",
+				entity_type: "payment",
+				entity_id: paymentId,
+				customer_id: customerId,
+				site_id: siteId,
+				detail: {
+					amount_minor_units: payment.amount_minor_units,
+					currency: "NGN",
+				},
+				created_at: now,
+			});
+
+			auditEvents.push({
+				event_id: crypto.randomUUID(),
+				event_type: "credit_issued",
+				entity_type: "credit",
+				entity_id: creditId,
+				customer_id: customerId,
+				site_id: siteId,
+				detail: { kwh_granted: kwhGranted, payment_id: paymentId },
+				created_at: now,
+			});
+
+			auditEvents.push({
+				event_id: crypto.randomUUID(),
+				event_type: "balance_updated",
+				entity_type: "balance",
+				entity_id: `assignment-${customerId}`,
+				customer_id: customerId,
+				site_id: siteId,
+				detail: {
+					remaining_kwh: balance.kwh,
+					remaining_money_value_minor_units: balance.moneyMinorUnits,
+				},
+				created_at: now,
+			});
+
+			const meterCommand: MeterCommand | null =
+				previous.kwh === 0
+					? {
+							command_id: commandId,
+							meter_id: "met-0101",
+							command_type: "reconnect_meter",
+							status: "requested",
+							requested_by: "provider:dev",
+							reason: "balance recharged from zero",
+							requested_at: now,
+							sent_at: null,
+							acknowledged_at: null,
+							failure_reason: null,
+						}
+					: null;
+
+			if (meterCommand) {
+				commandHistory.push(meterCommand);
+				auditEvents.push({
+					event_id: crypto.randomUUID(),
+					event_type: "meter_command_issued",
+					entity_type: "meter_command",
+					entity_id: commandId,
+					customer_id: customerId,
+					site_id: siteId,
+					detail: { command_type: "reconnect_meter", meter_id: "met-0101" },
+					created_at: now,
+				});
+			}
+
 			return {
 				data: {
-					payment: {
-						payment_id: paymentId,
-						provider: "dev",
-						external_reference: `dev-${crypto.randomUUID()}`,
-						customer_id: customerId,
-						amount_minor_units: payment.amount_minor_units,
-						currency: "NGN",
-						status: "confirmed",
-						confirmed_at: now,
-						created_at: now,
-					},
+					payment: paymentRecord,
 					credit: {
 						credit_id: creditId,
-						site_id: "rivers-bolo",
+						site_id: siteId,
 						assignment_id: `assignment-${customerId}`,
 						payment_id: paymentId,
 						tariff_plan_id: "demo-ngn-250",
@@ -546,26 +625,83 @@ export const handlers = [
 						remaining_money_value_minor_units: balance.moneyMinorUnits,
 						updated_at: now,
 					},
-					meter_command:
-						previous.kwh === 0
-							? {
-									command_id: commandId,
-									meter_id: "met-0101",
-									command_type: "reconnect_meter",
-									status: "requested",
-									requested_by: "provider:dev",
-									reason: "balance recharged from zero",
-									requested_at: now,
-									sent_at: null,
-									acknowledged_at: null,
-									failure_reason: null,
-								}
-							: null,
+					meter_command: meterCommand,
 				},
 				request_id: id,
 			};
 		});
 	}),
+
+	http.get(`${BASE}/dev/customers`, () =>
+		respond((id) => {
+			const customers = [...paymentBalances.entries()].map(
+				([customerId, bal]) => {
+					const payments = paymentHistory.filter(
+						(p) => p.customer_id === customerId,
+					);
+					const totalKwh = payments.reduce(
+						(sum, p) => sum + p.amount_minor_units / 25_000,
+						0,
+					);
+					const lastPayment = payments.length
+						? payments[payments.length - 1].created_at
+						: null;
+					return {
+						customer_id: customerId,
+						assignment_id: `assignment-${customerId}`,
+						remaining_kwh: bal.kwh,
+						remaining_money_value_minor_units: bal.moneyMinorUnits,
+						total_payments: payments.length,
+						total_kwh_purchased: totalKwh,
+						last_payment_at: lastPayment,
+						updated_at: lastPayment ?? new Date().toISOString(),
+					};
+				},
+			);
+			return {
+				data: customers,
+				page: { limit: customers.length, next_cursor: "" },
+				request_id: id,
+			};
+		}),
+	),
+
+	http.get(`${BASE}/dev/audit-events`, ({ request }) =>
+		respond((id) => {
+			const url = new URL(request.url);
+			const customerId = param(url, "customer_id");
+			const filtered = auditEvents
+				.filter((e) => !customerId || e.customer_id === customerId)
+				.slice()
+				.sort(
+					(a, b) =>
+						b.created_at.localeCompare(a.created_at) ||
+						b.event_id.localeCompare(a.event_id),
+				);
+			return {
+				data: filtered,
+				page: { limit: filtered.length, next_cursor: "" },
+				request_id: id,
+			};
+		}),
+	),
+
+	http.get(`${BASE}/dev/commands`, () =>
+		respond((id) => {
+			const sorted = commandHistory
+				.slice()
+				.sort(
+					(a, b) =>
+						b.requested_at.localeCompare(a.requested_at) ||
+						b.command_id.localeCompare(a.command_id),
+				);
+			return {
+				data: sorted,
+				page: { limit: sorted.length, next_cursor: "" },
+				request_id: id,
+			};
+		}),
+	),
 
 	http.all(`${BASE}/*`, () =>
 		respond(() => {

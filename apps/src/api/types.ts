@@ -194,3 +194,30 @@ export interface ApplyPaymentResult {
 	balance: CreditBalance;
 	meter_command: MeterCommand | null;
 }
+
+export interface AuditEvent {
+	event_id: string;
+	event_type:
+		| "payment_confirmed"
+		| "credit_issued"
+		| "balance_updated"
+		| "meter_command_issued"
+		| "meter_command_acknowledged";
+	entity_type: "payment" | "credit" | "balance" | "meter_command";
+	entity_id: string;
+	customer_id: string;
+	site_id: string;
+	detail: Record<string, unknown>;
+	created_at: string;
+}
+
+export interface CustomerSummary {
+	customer_id: string;
+	assignment_id: string;
+	remaining_kwh: number;
+	remaining_money_value_minor_units: number;
+	total_payments: number;
+	total_kwh_purchased: number;
+	last_payment_at: string | null;
+	updated_at: string;
+}

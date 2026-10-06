@@ -28,7 +28,10 @@ import { formatAge, useNow } from "#/lib/grid-tick";
 import { toAssetTelemetry } from "#/lib/telemetry";
 import { useSiteTelemetry } from "#/lib/use-site-telemetry";
 
-import "./asset.css";
+const PAGE_BG = {
+	background:
+		"radial-gradient(1200px 700px at 50% 0%, #0a1621 0%, var(--void) 68%)",
+} as const;
 
 export function AssetPage({ assetId }: { assetId: string }) {
 	const now = useNow();
@@ -75,9 +78,12 @@ export function AssetPage({ assetId }: { assetId: string }) {
 
 	if (error) {
 		return (
-			<div className="asset-page">
+			<div
+				className="min-h-dvh max-w-230 mx-auto px-5 pt-4.5 pb-10 flex flex-col gap-3.5"
+				style={PAGE_BG}
+			>
 				<BackLink />
-				<p className="asset-error">
+				<p className="text-[#ff8b96] text-[13px]">
 					{error instanceof ApiError && error.status === 404
 						? `No asset ${assetId} has reported yet.`
 						: error.message}
@@ -90,9 +96,12 @@ export function AssetPage({ assetId }: { assetId: string }) {
 	}
 	if (isLoading || !asset) {
 		return (
-			<div className="asset-page">
+			<div
+				className="min-h-dvh max-w-230 mx-auto px-5 pt-4.5 pb-10 flex flex-col gap-3.5"
+				style={PAGE_BG}
+			>
 				<BackLink />
-				<div className="asset-deck asset-loading" />
+				<div className="bg-(--deck) border border-(--edge) px-4 py-3.5 h-60" />
 			</div>
 		);
 	}
@@ -112,22 +121,27 @@ export function AssetPage({ assetId }: { assetId: string }) {
 	);
 
 	return (
-		<div className="asset-page">
+		<div
+			className="min-h-dvh max-w-230 mx-auto px-5 pt-4.5 pb-10 flex flex-col gap-3.5"
+			style={PAGE_BG}
+		>
 			<BackLink />
 
-			<header className="asset-head">
+			<header className="flex justify-between items-end gap-3">
 				<div>
-					<div className="mono muted">
+					<div className="mono muted text-[11.5px]">
 						{siteId} · {ASSET_TYPE_LABEL[asset.assetType]}
 					</div>
-					<h1>{asset.assetId}</h1>
+					<h1 className="mt-0.5 mb-0 text-[26px] font-semibold tracking-[0.3px]">
+						{asset.assetId}
+					</h1>
 				</div>
-				<div className="mono muted">
+				<div className="mono muted text-[11.5px]">
 					last report {formatAge(asset.observedAt, now)}
 				</div>
 			</header>
 
-			<section className="asset-deck asset-fields mono">
+			<section className="bg-(--deck) border border-(--edge) px-4 py-3.5 grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-x-4.5 gap-y-2.5 mono">
 				<Field
 					label="Internal temperature"
 					value={
@@ -175,16 +189,16 @@ export function AssetPage({ assetId }: { assetId: string }) {
 					/>
 				)}
 				{!reportsTypeMetrics && (
-					<p className="asset-note">
+					<p className="m-0 text-muted-foreground text-[12.5px]">
 						Registered, but no {ASSET_TYPE_LABEL[asset.assetType].toLowerCase()}{" "}
 						metrics reported yet.
 					</p>
 				)}
 			</section>
 
-			<section className="asset-deck">
-				<div className="asset-controls">
-					<div className="asset-chips">
+			<section className="bg-(--deck) border border-(--edge) px-4 py-3.5">
+				<div className="flex flex-wrap justify-between gap-2 mb-3">
+					<div className="flex flex-wrap gap-1">
 						{metrics.map((m) => (
 							<button
 								type="button"
@@ -196,7 +210,7 @@ export function AssetPage({ assetId }: { assetId: string }) {
 							</button>
 						))}
 					</div>
-					<div className="asset-chips">
+					<div className="flex flex-wrap gap-1">
 						{RANGE_PRESETS.map((p) => (
 							<button
 								type="button"
@@ -209,11 +223,11 @@ export function AssetPage({ assetId }: { assetId: string }) {
 						))}
 					</div>
 				</div>
-				<div className="asset-chart-head">
-					<h2>
+				<div className="flex justify-between items-baseline gap-2.5">
+					<h2 className="m-0 mb-2 text-base font-semibold">
 						{METRIC_LABEL[active].label} ({METRIC_LABEL[active].unit})
 					</h2>
-					<span className="mono muted">
+					<span className="mono muted text-[11px]">
 						{series?.aggregation === "max" ? "maximum" : "average"} per{" "}
 						{preset.interval}
 					</span>
@@ -229,16 +243,21 @@ export function AssetPage({ assetId }: { assetId: string }) {
 				</div>
 			</section>
 
-			<section className="asset-deck">
-				<h2>Alert history</h2>
+			<section className="bg-(--deck) border border-(--edge) px-4 py-3.5">
+				<h2 className="m-0 mb-2 text-base font-semibold">Alert history</h2>
 				{sortedHistory.length === 0 && (
-					<p className="asset-note">No alerts on this asset.</p>
+					<p className="m-0 text-muted-foreground text-[12.5px]">
+						No alerts on this asset.
+					</p>
 				)}
-				<ul className="asset-history">
+				<ul className="list-none m-0 p-0">
 					{sortedHistory.map((a) => {
 						const resolved = a.resolved_at ? Date.parse(a.resolved_at) : null;
 						return (
-							<li key={a.alert_id}>
+							<li
+								key={a.alert_id}
+								className="flex gap-2.5 items-baseline py-2.25 border-t border-[rgba(122,186,212,0.07)]"
+							>
 								<StatusDot
 									status={
 										a.status === "open" ? severityStatus(a.severity) : "offline"
@@ -246,16 +265,18 @@ export function AssetPage({ assetId }: { assetId: string }) {
 									size={7}
 								/>
 								<div>
-									<div className="asset-history-title">
+									<div className="text-[13.5px]">
 										{alertTitle(a, asset.assetType)}
-										<span className="mono muted">
+										<span className="mono muted text-[11px]">
 											{" "}
 											· {new Date(a.opened_at).toLocaleDateString()}{" "}
 											{formatClock(Date.parse(a.opened_at))}
 										</span>
 									</div>
-									<div className="asset-history-text">{alertSummary(a)}</div>
-									<div className="mono asset-history-meta">
+									<div className="text-[12.5px] text-[#b9cbd9] mt-0.5">
+										{alertSummary(a)}
+									</div>
+									<div className="mono text-[11px] text-muted-foreground mt-0.75">
 										{a.status === "open" ? (
 											<span
 												style={{
@@ -289,7 +310,10 @@ export function AssetPage({ assetId }: { assetId: string }) {
 
 function BackLink() {
 	return (
-		<Link to="/" className="asset-back">
+		<Link
+			to="/"
+			className="text-muted-foreground text-[12.5px] no-underline hover:text-primary"
+		>
 			← Fleet control
 		</Link>
 	);
@@ -297,9 +321,9 @@ function BackLink() {
 
 function Field({ label, value }: { label: string; value: string }) {
 	return (
-		<div className="asset-field">
-			<span>{label}</span>
-			<b>{value}</b>
+		<div className="flex flex-col gap-0.5 text-[12.5px]">
+			<span className="text-muted-foreground text-[11px]">{label}</span>
+			<b className="font-medium">{value}</b>
 		</div>
 	);
 }

@@ -287,6 +287,76 @@ func toApplyPaymentResultDTO(result domain.ApplyPaymentResult) applyPaymentResul
 	return dto
 }
 
+type customerSummaryDTO struct {
+	CustomerID                    string     `json:"customer_id"`
+	AssignmentID                  string     `json:"assignment_id"`
+	RemainingKWh                  float64    `json:"remaining_kwh"`
+	RemainingMoneyValueMinorUnits int64      `json:"remaining_money_value_minor_units"`
+	TotalPayments                 int64      `json:"total_payments"`
+	TotalKWhPurchased             float64    `json:"total_kwh_purchased"`
+	LastPaymentAt                 *time.Time `json:"last_payment_at"`
+	UpdatedAt                     time.Time  `json:"updated_at"`
+}
+
+func toCustomerSummaryDTO(cs domain.CustomerSummary) customerSummaryDTO {
+	return customerSummaryDTO{
+		CustomerID:                    cs.CustomerID,
+		AssignmentID:                  cs.AssignmentID,
+		RemainingKWh:                  cs.RemainingKWh,
+		RemainingMoneyValueMinorUnits: cs.RemainingMoneyValueMinorUnits,
+		TotalPayments:                 cs.TotalPayments,
+		TotalKWhPurchased:             cs.TotalKWhPurchased,
+		LastPaymentAt:                 cs.LastPaymentAt,
+		UpdatedAt:                     cs.UpdatedAt,
+	}
+}
+
+type auditEventDTO struct {
+	EventID    string         `json:"event_id"`
+	EventType  string         `json:"event_type"`
+	EntityType string         `json:"entity_type"`
+	EntityID   string         `json:"entity_id"`
+	CustomerID string         `json:"customer_id"`
+	SiteID     string         `json:"site_id"`
+	Detail     map[string]any `json:"detail"`
+	CreatedAt  time.Time      `json:"created_at"`
+}
+
+func toAuditEventDTO(ev domain.AuditEvent) auditEventDTO {
+	customerID, _ := ev.Metadata["customer_id"].(string)
+	detail := make(map[string]any, len(ev.Metadata))
+	for k, v := range ev.Metadata {
+		if k != "customer_id" {
+			detail[k] = v
+		}
+	}
+	return auditEventDTO{
+		EventID:    ev.AuditEventID,
+		EventType:  ev.Action,
+		EntityType: ev.SubjectType,
+		EntityID:   ev.SubjectID,
+		CustomerID: customerID,
+		SiteID:     ev.SiteID,
+		Detail:     detail,
+		CreatedAt:  ev.OccurredAt,
+	}
+}
+
+func toMeterCommandDTO(cmd domain.MeterCommand) meterCommandDTO {
+	return meterCommandDTO{
+		CommandID:      cmd.CommandID,
+		MeterID:        cmd.MeterID,
+		CommandType:    string(cmd.CommandType),
+		Status:         string(cmd.Status),
+		RequestedBy:    cmd.RequestedBy,
+		Reason:         cmd.Reason,
+		RequestedAt:    cmd.RequestedAt,
+		SentAt:         cmd.SentAt,
+		AcknowledgedAt: cmd.AcknowledgedAt,
+		FailureReason:  cmd.FailureReason,
+	}
+}
+
 type siteDTO struct {
 	SiteID         string         `json:"site_id"`
 	Name           string         `json:"name"`

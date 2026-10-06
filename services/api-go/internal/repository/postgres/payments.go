@@ -107,6 +107,150 @@ INSERT INTO audit_events (
 )
 VALUES ($1, $2, $3, $4, $5, $6::jsonb)`
 
+const listCustomerSummariesSQL = `
+SELECT
+    ma.customer_id,
+    ma.assignment_id::text,
+    COALESCE(cb.remaining_kwh, 0),
+    COALESCE(cb.remaining_money_value_minor_units, 0),
+    COUNT(DISTINCT p.payment_id),
+    COALESCE(SUM(ec.kwh_granted), 0),
+    MAX(p.confirmed_at),
+    COALESCE(cb.updated_at, ma.started_at)
+FROM meter_assignments ma
+LEFT JOIN credit_balances cb ON cb.assignment_id = ma.assignment_id
+LEFT JOIN energy_credits ec ON ec.assignment_id = ma.assignment_id
+LEFT JOIN payments p ON p.customer_id = ma.customer_id AND p.status = 'confirmed'
+WHERE ma.ended_at IS NULL
+GROUP BY ma.customer_id, ma.assignment_id, cb.remaining_kwh,
+    cb.remaining_money_value_minor_units, cb.updated_at, ma.started_at
+ORDER BY COALESCE(cb.updated_at, ma.started_at) DESC`
+
+const listMeterCommandsSQL = `
+SELECT command_id::text, meter_id, command_type, status,
+    requested_by, reason, requested_at, sent_at,
+    acknowledged_at, failure_reason
+FROM meter_commands
+ORDER BY requested_at DESC
+LIMIT 100`
+
+const listAuditEventsSQL = `
+SELECT ae.audit_event_id::text, ae.site_id, ae.actor_id, ae.action,
+    ae.subject_type, ae.subject_id, ae.occurred_at, ae.metadata,
+    ma.customer_id
+FROM audit_events ae
+LEFT JOIN meter_assignments ma ON ma.site_id = ae.site_id AND ma.ended_at IS NULL
+ORDER BY ae.occurred_at DESC
+LIMIT 200`
+
+const listAuditEventsByCustomerSQL = `
+SELECT ae.audit_event_id::text, ae.site_id, ae.actor_id, ae.action,
+    ae.subject_type, ae.subject_id, ae.occurred_at, ae.metadata,
+    ma.customer_id
+FROM audit_events ae
+JOIN meter_assignments ma ON ma.site_id = ae.site_id AND ma.ended_at IS NULL
+WHERE ma.customer_id = $1
+ORDER BY ae.occurred_at DESC
+LIMIT 200`
+
+func (s *Store) ListCustomerSummaries(ctx context.Context) ([]domain.CustomerSummary, error) {
+	ctx, cancel := s.withTimeout(ctx)
+	defer cancel()
+
+	rows, err := s.pool.Query(ctx, listCustomerSummariesSQL)
+	if err != nil {
+		return nil, fmt.Errorf("list customer summaries: %w", err)
+	}
+	defer rows.Close()
+
+	var summaries []domain.CustomerSummary
+	for rows.Next() {
+		var cs domain.CustomerSummary
+		if err := rows.Scan(
+			&cs.CustomerID, &cs.AssignmentID,
+			&cs.RemainingKWh, &cs.RemainingMoneyValueMinorUnits,
+			&cs.TotalPayments, &cs.TotalKWhPurchased,
+			&cs.LastPaymentAt, &cs.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan customer summary: %w", err)
+		}
+		summaries = append(summaries, cs)
+	}
+	return summaries, rows.Err()
+}
+
+func (s *Store) ListMeterCommands(ctx context.Context) ([]domain.MeterCommand, error) {
+	ctx, cancel := s.withTimeout(ctx)
+	defer cancel()
+
+	rows, err := s.pool.Query(ctx, listMeterCommandsSQL)
+	if err != nil {
+		return nil, fmt.Errorf("list meter commands: %w", err)
+	}
+	defer rows.Close()
+
+	var commands []domain.MeterCommand
+	for rows.Next() {
+		var cmd domain.MeterCommand
+		if err := rows.Scan(
+			&cmd.CommandID, &cmd.MeterID, &cmd.CommandType, &cmd.Status,
+			&cmd.RequestedBy, &cmd.Reason, &cmd.RequestedAt,
+			&cmd.SentAt, &cmd.AcknowledgedAt, &cmd.FailureReason,
+		); err != nil {
+			return nil, fmt.Errorf("scan meter command: %w", err)
+		}
+		commands = append(commands, cmd)
+	}
+	return commands, rows.Err()
+}
+
+func (s *Store) ListAuditEvents(ctx context.Context, customerID string) ([]domain.AuditEvent, error) {
+	ctx, cancel := s.withTimeout(ctx)
+	defer cancel()
+
+	var query string
+	var args []any
+	if customerID != "" {
+		query = listAuditEventsByCustomerSQL
+		args = []any{customerID}
+	} else {
+		query = listAuditEventsSQL
+	}
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list audit events: %w", err)
+	}
+	defer rows.Close()
+
+	var events []domain.AuditEvent
+	for rows.Next() {
+		var ev domain.AuditEvent
+		var metadataJSON []byte
+		var customerIDVal *string
+		if err := rows.Scan(
+			&ev.AuditEventID, &ev.SiteID, &ev.ActorID, &ev.Action,
+			&ev.SubjectType, &ev.SubjectID, &ev.OccurredAt, &metadataJSON,
+			&customerIDVal,
+		); err != nil {
+			return nil, fmt.Errorf("scan audit event: %w", err)
+		}
+		if metadataJSON != nil {
+			if err := json.Unmarshal(metadataJSON, &ev.Metadata); err != nil {
+				return nil, fmt.Errorf("unmarshal audit metadata: %w", err)
+			}
+		}
+		if customerIDVal != nil {
+			if ev.Metadata == nil {
+				ev.Metadata = make(map[string]any)
+			}
+			ev.Metadata["customer_id"] = *customerIDVal
+		}
+		events = append(events, ev)
+	}
+	return events, rows.Err()
+}
+
 type paymentTx struct {
 	tx           pgx.Tx
 	outboxTopics OutboxTopics

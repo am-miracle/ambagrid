@@ -328,6 +328,18 @@ func (f *fakePaymentRepository) RunPaymentTx(_ context.Context, fn func(PaymentT
 	return fn(f.fakeTx)
 }
 
+func (f *fakePaymentRepository) ListCustomerSummaries(_ context.Context) ([]domain.CustomerSummary, error) {
+	return nil, nil
+}
+
+func (f *fakePaymentRepository) ListMeterCommands(_ context.Context) ([]domain.MeterCommand, error) {
+	return nil, nil
+}
+
+func (f *fakePaymentRepository) ListAuditEvents(_ context.Context, _ string) ([]domain.AuditEvent, error) {
+	return nil, nil
+}
+
 func newPaymentTestFixture() *fakePaymentTx {
 	confirmedAt := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	return &fakePaymentTx{

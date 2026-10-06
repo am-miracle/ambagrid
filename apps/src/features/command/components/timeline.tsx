@@ -59,11 +59,11 @@ export function Timeline({
 	for (let t = Math.ceil(from / hour) * hour; t <= to; t += hour) hours.push(t);
 
 	return (
-		<div className="tl">
-			<div className="tl-controls">
+		<div className="flex-1 min-w-0 flex flex-col">
+			<div className="flex items-center gap-3 mb-2">
 				<button
 					type="button"
-					className="play"
+					className="w-7 h-7 border border-border text-primary grid place-items-center flex-none hover:border-primary hover:bg-accent"
 					onClick={onTogglePlay}
 					aria-label={playing ? "Pause replay" : "Play replay"}
 				>
@@ -78,14 +78,16 @@ export function Timeline({
 						</svg>
 					)}
 				</button>
-				<div className="tl-readout mono">
-					<b>{formatClock(at)}</b>
-					<span>{live ? "live edge" : `T-${formatDuration(to - at)}`}</span>
+				<div className="flex items-baseline gap-[9px] mono">
+					<b className="text-[17px] font-medium">{formatClock(at)}</b>
+					<span className="text-[11px] text-muted-foreground">
+						{live ? "live edge" : `T-${formatDuration(to - at)}`}
+					</span>
 				</div>
 			</div>
 
 			<div
-				className="tl-track"
+				className="relative flex-1 min-h-[52px] border-y border-(--edge) cursor-ew-resize touch-none bg-gradient-to-b from-[rgba(143,246,255,0.02)] to-transparent"
 				ref={ref}
 				onPointerDown={drag}
 				role="slider"
@@ -105,7 +107,7 @@ export function Timeline({
 				{bands?.map((b) => (
 					<div
 						key={b.from}
-						className="tl-band"
+						className="absolute top-0 bottom-0 pointer-events-none"
 						style={{
 							left: `${pct(b.from)}%`,
 							width: `${pct(b.to) - pct(b.from)}%`,
@@ -115,31 +117,48 @@ export function Timeline({
 					/>
 				))}
 				{hours.map((h) => (
-					<div key={h} className="tl-tick" style={{ left: `${pct(h)}%` }}>
-						<span className="mono">{formatClock(h)}</span>
+					<div
+						key={h}
+						className="absolute top-0 bottom-0 border-l border-(--edge) pointer-events-none"
+						style={{ left: `${pct(h)}%` }}
+					>
+						<span className="absolute bottom-[2px] left-1 text-[9.5px] text-muted-foreground mono">
+							{formatClock(h)}
+						</span>
 					</div>
 				))}
 				{events.map((e) => (
 					<div
 						key={`${e.at}-${e.siteId}-${e.text}`}
-						className={`tl-ev${e.at <= at ? " past" : ""}`}
+						className={`tl-ev absolute top-2 w-[2px] h-[22px] -translate-x-px${e.at <= at ? " opacity-100" : " opacity-35"}`}
 						style={{
 							left: `${pct(e.at)}%`,
 							background: STATUS_COLOR[e.status],
 						}}
 					>
-						<div className="tl-ev-tip">
-							<span className="mono">{formatClock(e.at)}</span> {e.text}
+						<div className="tl-ev-tip absolute bottom-[30px] -left-2 w-max max-w-[260px] bg-[rgba(6,12,18,0.96)] border border-border px-[9px] py-[5px] text-[11.5px] z-5 text-foreground">
+							<span className="mono text-[10.5px] text-muted-foreground mr-[5px]">
+								{formatClock(e.at)}
+							</span>{" "}
+							{e.text}
 						</div>
 					</div>
 				))}
-				<div className="tl-fill" style={{ width: `${pct(at)}%` }} />
-				<div className="tl-head" style={{ left: `${pct(at)}%` }}>
-					<span className="tl-head-dot" />
+				<div
+					className="absolute top-0 bottom-0 left-0 bg-[rgba(143,246,255,0.05)] pointer-events-none"
+					style={{ width: `${pct(at)}%` }}
+				/>
+				<div
+					className="absolute top-0 bottom-0 w-px bg-primary pointer-events-none shadow-[0_0_12px_var(--cyan)]"
+					style={{ left: `${pct(at)}%` }}
+				>
+					<span className="absolute -top-1 -left-1 w-[9px] h-[9px] bg-primary rotate-45" />
 				</div>
 			</div>
 
-			<div className="tl-legend mono">{legend}</div>
+			<div className="text-[10.5px] text-muted-foreground mt-[6px] mono">
+				{legend}
+			</div>
 		</div>
 	);
 }

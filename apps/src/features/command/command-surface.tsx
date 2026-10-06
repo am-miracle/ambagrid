@@ -8,6 +8,7 @@ import { AlertDetail } from "./components/alert-detail";
 import { AlertInbox } from "./components/alert-inbox";
 import { FilterRail } from "./components/filter-rail";
 import { PaymentPanel } from "./components/payment-panel";
+import { RevenuePanel } from "./components/revenue-panel";
 import { SiteCard } from "./components/site-card";
 import { Timeline } from "./components/timeline";
 import { type FleetKpis, Topbar } from "./components/topbar";
@@ -36,8 +37,6 @@ import { Boot, Sparkline, StatusDot } from "./ui";
 import { useAlertSeries } from "./use-alert-series";
 import { useFleet } from "./use-fleet";
 
-import "./command.css";
-
 const WEIGHT: Record<Status, number> = {
 	healthy: 1,
 	warning: 0.78,
@@ -53,7 +52,6 @@ const ALL_STATUSES: Record<Status, boolean> = {
 const ALL_KINDS = Object.fromEntries(
 	ASSET_TYPES.map((k) => [k, true]),
 ) as Record<AssetType, boolean>;
-// Scrubbing within this distance of now snaps back to live.
 const LIVE_SNAP_MS = 30_000;
 const PLAYBACK_FRAMES = 290;
 
@@ -81,6 +79,7 @@ export function CommandSurface() {
 	const [inboxOpen, setInboxOpen] = useState(false);
 	const [paymentOpen, setPaymentOpen] = useState(false);
 	const [scenario, setScenario] = useState(false);
+	const [inboxTab, setInboxTab] = useState<"alerts" | "revenue">("alerts");
 
 	const camRef = useRef<CameraApi | null>(null);
 	const timersRef = useRef<number[]>([]);
@@ -238,7 +237,6 @@ export function CommandSurface() {
 		toastTimer.current = window.setTimeout(() => setToast(null), 3600);
 	}, []);
 
-	// Alert arrival: toast each critical alert that opens after first load.
 	const seenAlerts = useRef<Set<string> | null>(null);
 	useEffect(() => {
 		if (!fleet.ready) return;
@@ -308,7 +306,6 @@ export function CommandSurface() {
 		setPlaying(true);
 	};
 
-	// Guided replay of the most recent critical alert inside the window.
 	const replayTarget = useMemo(
 		() =>
 			[...fleet.alerts]
@@ -394,7 +391,10 @@ export function CommandSurface() {
 	const selected = selectedSite ? sitesById.get(selectedSite) : undefined;
 
 	return (
-		<div className={`app${focusMode ? " focus" : ""}`} ref={rootRef}>
+		<div
+			className="cmd-surface grid grid-cols-[210px_1fr_374px] grid-rows-[62px_1fr_154px] h-dvh bg-[radial-gradient(1200px_700px_at_50%_40%,#0a1621_0%,#05090e_68%)]"
+			ref={rootRef}
+		>
 			{!booted && <Boot lines={bootLines} onDone={() => setBooted(true)} />}
 
 			<Topbar
@@ -431,7 +431,7 @@ export function CommandSurface() {
 				onReplay={runScenario}
 			/>
 
-			<main className="stage">
+			<main className="cmd-stage col-start-2 row-start-2 relative overflow-hidden">
 				<CommandScene
 					sites={sceneSites}
 					links={links}
@@ -448,18 +448,25 @@ export function CommandSurface() {
 				/>
 
 				{fleet.error && (
-					<div className="stage-banner">
-						<b>Operator API unreachable.</b> {fleet.error.message}. Start the
-						API with <span className="mono">make api-serve</span>, or run the
-						app with <span className="mono">VITE_USE_MOCKS=true</span>.
+					<div className="absolute top-14 left-1/2 -translate-x-1/2 max-w-[min(620px,90%)] py-2.5 px-3.5 bg-[rgba(40,8,14,0.92)] border border-[rgba(255,77,94,0.5)] text-[12.5px] leading-normal z-35">
+						<b className="text-[#ff8b96] font-semibold">
+							Operator API unreachable.
+						</b>{" "}
+						{fleet.error.message}. Start the API with{" "}
+						<span className="mono">make api-serve</span>, or run the app with{" "}
+						<span className="mono">VITE_USE_MOCKS=true</span>.
 					</div>
 				)}
 
 				{focusMode && focusSite && (
-					<div className="focus-tag mono">
+					<div className="absolute top-3.5 left-4 text-[11.5px] text-primary border border-border bg-[rgba(5,12,18,0.8)] py-1.25 px-2.5 flex gap-2.5 items-center tracking-[0.4px] mono">
 						focus · {focusSite.name}
 						{alertObj ? ` · ${alertObj.asset_id}` : ""}
-						<button type="button" onClick={() => setFocusMode(false)}>
+						<button
+							type="button"
+							className="text-muted-foreground text-[11px] hover:text-foreground"
+							onClick={() => setFocusMode(false)}
+						>
 							exit
 						</button>
 					</div>
@@ -467,31 +474,31 @@ export function CommandSurface() {
 
 				{hover && hoverSite && !scenario && (
 					<div
-						className="tip"
+						className="fixed z-60 pointer-events-none bg-[rgba(6,12,18,0.94)] border border-border py-2.25 px-2.75 min-w-42.5 shadow-[0_18px_40px_rgba(0,0,0,0.55)]"
 						style={{ left: hover.x + 14, top: hover.y - 10 }}
 					>
-						<div className="tip-head">
+						<div className="flex items-center gap-1.75 font-semibold text-[13.5px] mb-1.5">
 							<StatusDot status={statuses[hoverSite.id]} />
 							{hoverSite.name}
 						</div>
-						<div className="tip-grid mono">
-							<span>Load</span>
+						<div className="grid grid-cols-[1fr_auto] gap-x-3.5 gap-y-0.5 text-[11.5px] mono">
+							<span className="text-muted-foreground">Load</span>
 							<b>{hoverSite.loadKw.toFixed(1)} kW</b>
-							<span>SoC</span>
+							<span className="text-muted-foreground">SoC</span>
 							<b>
 								{hoverSite.soc === null
 									? "—"
 									: `${Math.round(hoverSite.soc * 100)}%`}
 							</b>
-							<span>Irradiance</span>
+							<span className="text-muted-foreground">Irradiance</span>
 							<b>
 								{hoverSite.irradiance === null
 									? "—"
 									: `${Math.round(hoverSite.irradiance)} W/m²`}
 							</b>
-							<span>Meters</span>
+							<span className="text-muted-foreground">Meters</span>
 							<b>{hoverSite.meters.length}</b>
-							<span>Disconnected</span>
+							<span className="text-muted-foreground">Disconnected</span>
 							<b>{hoverSite.disconnected}</b>
 						</div>
 					</div>
@@ -511,7 +518,7 @@ export function CommandSurface() {
 
 				{toast && (
 					<output
-						className="toast"
+						className="absolute top-3.5 left-1/2 -translate-x-1/2 flex items-center gap-2.25 py-2.25 px-3.75 bg-[rgba(6,12,18,0.95)] border text-[13px] shadow-[0_16px_40px_rgba(0,0,0,0.6)] animate-[toast-in_0.45s_cubic-bezier(0.2,0.9,0.3,1.4)] max-w-[min(560px,88%)] z-40"
 						style={{ borderColor: STATUS_COLOR[toast.status] }}
 					>
 						<StatusDot status={toast.status} />
@@ -520,7 +527,9 @@ export function CommandSurface() {
 				)}
 			</main>
 
-			<aside className={`inbox panel-anim${inboxOpen ? " open" : ""}`}>
+			<aside
+				className={`cmd-inbox col-start-3 row-start-2 row-end-4 border-l border-(--edge) bg-(--deck) backdrop-blur-[10px] flex flex-col min-h-0 z-20 panel-anim${inboxOpen ? " open" : ""}`}
+			>
 				{alertObj ? (
 					<AlertDetail
 						key={alertObj.alert_id}
@@ -537,18 +546,40 @@ export function CommandSurface() {
 						onOpenRelated={openAlert}
 					/>
 				) : (
-					<AlertInbox
-						alerts={openAlerts}
-						at={at}
-						sitesById={sitesById}
-						assetTypeOf={assetTypeOf}
-						onOpen={openAlert}
-						onClose={() => setInboxOpen(false)}
-					/>
+					<>
+						<div className="flex gap-1 px-4 pt-2.5 pb-0">
+							{(["alerts", "revenue"] as const).map((t) => (
+								<button
+									key={t}
+									type="button"
+									className={`mono text-[11px] py-0.75 px-2.5 border ${
+										inboxTab === t
+											? "text-primary-foreground bg-primary border-primary"
+											: "text-muted-foreground border-border hover:text-foreground hover:border-foreground"
+									}`}
+									onClick={() => setInboxTab(t)}
+								>
+									{t === "alerts" ? "Alerts" : "Revenue"}
+								</button>
+							))}
+						</div>
+						{inboxTab === "alerts" ? (
+							<AlertInbox
+								alerts={openAlerts}
+								at={at}
+								sitesById={sitesById}
+								assetTypeOf={assetTypeOf}
+								onOpen={openAlert}
+								onClose={() => setInboxOpen(false)}
+							/>
+						) : (
+							<RevenuePanel />
+						)}
+					</>
 				)}
 			</aside>
 
-			<footer className="timeline panel-anim">
+			<footer className="cmd-timeline col-start-2 row-start-3 border-t border-(--edge) bg-(--deck) backdrop-blur-[10px] flex gap-4.5 py-3 px-5 pb-3.5 min-w-0 panel-anim">
 				<Timeline
 					from={windowStart}
 					to={now}
@@ -566,10 +597,14 @@ export function CommandSurface() {
 					onTogglePlay={togglePlay}
 				/>
 				{alertObj && series && (
-					<div className="telemetry">
-						<div className="tel-head">
-							<span>{alertObj.asset_id}</span>
-							<span className="mono muted">{humanizeKind(alertObj.kind)}</span>
+					<div className="cmd-telemetry shrink-0 basis-67 border-l border-(--edge) pl-4.5 min-w-0">
+						<div className="flex justify-between gap-2.5 text-xs mb-1">
+							<span className="text-primary font-mono text-[11.5px]">
+								{alertObj.asset_id}
+							</span>
+							<span className="mono muted text-[11px]">
+								{humanizeKind(alertObj.kind)}
+							</span>
 						</div>
 						<Sparkline
 							series={series}

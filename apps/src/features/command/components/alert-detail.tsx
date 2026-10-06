@@ -29,6 +29,26 @@ interface Activity {
 	text: string;
 }
 
+const STATE_STYLE: Record<string, { color: string; borderColor: string }> = {
+	open: { color: "#ff8b96", borderColor: "rgba(255,77,94,0.4)" },
+	resolved: { color: "var(--healthy)", borderColor: "rgba(57,215,192,0.4)" },
+};
+
+const SEV_HERO: Record<
+	string,
+	{ borderLeftColor: string; background: string }
+> = {
+	critical: {
+		borderLeftColor: "var(--critical)",
+		background: "linear-gradient(90deg, rgba(255,77,94,0.09), transparent 70%)",
+	},
+	warning: {
+		borderLeftColor: "var(--warning)",
+		background:
+			"linear-gradient(90deg, rgba(245,165,36,0.08), transparent 70%)",
+	},
+};
+
 export function AlertDetail({
 	alert,
 	site,
@@ -51,7 +71,6 @@ export function AlertDetail({
 	const ref = useRef<HTMLDivElement | null>(null);
 	const { data: detail } = useAlert(alert.alert_id);
 
-	// The parent keys this panel by alert, so each alert re-enters.
 	useEffect(() => {
 		gsap.fromTo(
 			ref.current,
@@ -86,54 +105,77 @@ export function AlertDetail({
 		.filter((entry) => entry.at <= at)
 		.sort((a, b) => b.at - a.at);
 
+	const stateKey = openNow ? "open" : "resolved";
+
 	return (
-		<div className="detail" ref={ref}>
-			<div className="panel-head">
-				<button type="button" className="back" onClick={onBack}>
+		<div className="overflow-y-auto min-h-0" ref={ref}>
+			<div className="flex items-center gap-2.5 py-3.25 px-4 border-b border-(--edge)">
+				<button
+					type="button"
+					className="text-muted-foreground text-[12.5px] flex-1 text-left hover:text-primary"
+					onClick={onBack}
+				>
 					← Inbox
 				</button>
-				<span className={`state ${openNow ? "open" : "resolved"}`}>
-					{openNow ? "open" : "resolved"}
+				<span
+					className="font-mono text-[10px] py-px px-1.5 border text-muted-foreground"
+					style={STATE_STYLE[stateKey]}
+				>
+					{stateKey}
 				</span>
 			</div>
 
-			<div className={`detail-hero sev-${alert.severity}`}>
-				<div className="mono detail-id">
+			<div
+				className="py-3.5 px-4 border-l-[3px] border-l-transparent"
+				style={SEV_HERO[alert.severity]}
+			>
+				<div className="mono text-[10.5px] text-muted-foreground">
 					{shortId(alert.alert_id)} · opened {formatClock(openedAt(alert))} ·{" "}
 					{formatDuration(at - openedAt(alert))} ago
 				</div>
-				<h3>{alertTitle(alert, asset?.assetType)}</h3>
-				<div className="detail-where mono">
+				<h3 className="font-heading text-[21px] font-semibold my-1.5 mb-1 leading-[1.15]">
+					{alertTitle(alert, asset?.assetType)}
+				</h3>
+				<div className="text-[11px] text-primary mono">
 					{site?.name ?? alert.site_id} · {alert.asset_id}
 					{asset && ` · ${ASSET_TYPE_LABEL[asset.assetType]}`}
 				</div>
-				<p className="detail-summary">{alertSummary(alert)}</p>
+				<p className="text-[13px] leading-[1.55] text-[#b9cbd9] mt-2.5">
+					{alertSummary(alert)}
+				</p>
 			</div>
 
-			<div className="detail-stats mono">
-				<div>
-					<span>Kind</span>
-					<b>{alert.kind}</b>
+			<div className="px-4 my-3.5 flex flex-col gap-1.5 mono">
+				<div className="flex justify-between gap-3.5 text-[11.5px] border-b border-[rgba(122,186,212,0.07)] pb-1.25">
+					<span className="text-muted-foreground">Kind</span>
+					<b className="font-medium text-right">{alert.kind}</b>
 				</div>
-				<div>
-					<span>Severity</span>
-					<b style={{ color: STATUS_COLOR[severityStatus(alert.severity)] }}>
+				<div className="flex justify-between gap-3.5 text-[11.5px] border-b border-[rgba(122,186,212,0.07)] pb-1.25">
+					<span className="text-muted-foreground">Severity</span>
+					<b
+						className="font-medium text-right"
+						style={{ color: STATUS_COLOR[severityStatus(alert.severity)] }}
+					>
 						{alert.severity}
 					</b>
 				</div>
 				{asset?.reportedHouseholdId && (
-					<div>
-						<span>Household</span>
-						<b>{asset.reportedHouseholdId}</b>
+					<div className="flex justify-between gap-3.5 text-[11.5px] border-b border-[rgba(122,186,212,0.07)] pb-1.25">
+						<span className="text-muted-foreground">Household</span>
+						<b className="font-medium text-right">
+							{asset.reportedHouseholdId}
+						</b>
 					</div>
 				)}
-				<div>
-					<span>Source event</span>
-					<b>{alert.source_event_id ?? "—"}</b>
+				<div className="flex justify-between gap-3.5 text-[11.5px] border-b border-[rgba(122,186,212,0.07)] pb-1.25">
+					<span className="text-muted-foreground">Source event</span>
+					<b className="font-medium text-right">
+						{alert.source_event_id ?? "—"}
+					</b>
 				</div>
-				<div>
-					<span>Resolved by</span>
-					<b>
+				<div className="flex justify-between gap-3.5 text-[11.5px] border-b border-[rgba(122,186,212,0.07)] pb-1.25">
+					<span className="text-muted-foreground">Resolved by</span>
+					<b className="font-medium text-right">
 						{alert.resolved_by === null
 							? "—"
 							: alert.resolved_by === SYSTEM_ACTOR
@@ -144,7 +186,7 @@ export function AlertDetail({
 			</div>
 
 			{series && (
-				<div className="detail-chart">
+				<div className="px-4 pb-2">
 					<Sparkline
 						series={series}
 						now={at}
@@ -154,8 +196,12 @@ export function AlertDetail({
 				</div>
 			)}
 
-			<div className="detail-links">
-				<Link to="/assets/$assetId" params={{ assetId: alert.asset_id }}>
+			<div className="px-4 pb-3 text-xs">
+				<Link
+					className="text-primary no-underline hover:underline"
+					to="/assets/$assetId"
+					params={{ assetId: alert.asset_id }}
+				>
 					Open asset telemetry →
 				</Link>
 			</div>
@@ -165,9 +211,9 @@ export function AlertDetail({
 			)}
 
 			{alert.resolution_note && !isOpenAt(alert, at) && (
-				<div className="resolution">
-					<span className="mono">resolution</span>
-					<b>
+				<div className="mx-4 mb-3.5 py-2.25 px-3 border border-[rgba(57,215,192,0.35)] bg-[rgba(57,215,192,0.07)] flex gap-2.5 items-baseline">
+					<span className="mono text-[10px] text-success">resolution</span>
+					<b className="text-[13.5px] font-medium">
 						{alert.resolved_by === SYSTEM_ACTOR
 							? alertSummary({ ...alert, reason: alert.resolution_note })
 							: alert.resolution_note}
@@ -175,32 +221,49 @@ export function AlertDetail({
 				</div>
 			)}
 
-			<div className="hist">
-				<div className="rail-title">Activity</div>
+			<div className="px-4 pb-4">
+				<div className="font-heading text-[11.5px] tracking-[0.6px] text-muted-foreground mb-2">
+					Activity
+				</div>
 				{activity.map((h) => (
-					<div key={h.id} className={`hist-item ${h.kind}`}>
-						<span className="mono hist-time">{formatClock(h.at)}</span>
+					<div
+						key={h.id}
+						className="flex gap-2.5py-2 border-t border-[rgba(122,186,212,0.07)]"
+					>
+						<span className="mono text-[10.5px] text-muted-foreground pt-0.5 shrink-0 w-9.5">
+							{formatClock(h.at)}
+						</span>
 						<div>
-							<div className="hist-actor mono">{h.actor}</div>
-							<div className="hist-text">{h.text}</div>
+							<div
+								className={`mono text-[10.5px] ${h.kind === "system" ? "text-muted-foreground" : "text-primary"}`}
+							>
+								{h.actor}
+							</div>
+							<div className="text-[12.5px] leading-normal text-[#b9cbd9] mt-0.5">
+								{h.text}
+							</div>
 						</div>
 					</div>
 				))}
 			</div>
 
 			{related.length > 0 && (
-				<div className="hist">
-					<div className="rail-title">Same asset, earlier</div>
+				<div className="px-4 pb-4">
+					<div className="font-heading text-[11.5px] tracking-[0.6px] text-muted-foreground mb-2">
+						Same asset, earlier
+					</div>
 					{related.map((r) => (
 						<button
 							type="button"
 							key={r.alert_id}
-							className="related"
+							className="group flex gap-2 items-center w-full text-left py-2 border-t border-[rgba(122,186,212,0.07)] text-[12.5px]"
 							onClick={() => onOpenRelated(r)}
 						>
 							<StatusDot status={severityStatus(r.severity)} size={6} />
-							<span>{new Date(r.opened_at).toLocaleDateString()}</span>
-							<span className="mono muted">
+							<span className="group-hover:text-primary">
+								{new Date(r.opened_at).toLocaleDateString()}
+							</span>
+							<span className="mono muted ml-auto text-[11px]">
 								{r.status === "open"
 									? "open"
 									: r.resolved_by === SYSTEM_ACTOR
@@ -215,8 +278,6 @@ export function AlertDetail({
 	);
 }
 
-// Resolution is the one operator command the API exposes. Acknowledge and
-// assign are not backend states yet, so they are not offered here.
 function ResolveForm({ alertId }: { alertId: string }) {
 	const actorId = useActorId();
 	const resolve = useResolveAlert(alertId);
@@ -225,17 +286,21 @@ function ResolveForm({ alertId }: { alertId: string }) {
 
 	return (
 		<form
-			className="resolve-form"
+			className="px-4 pb-3.5 flex flex-col gap-1.5"
 			onSubmit={(e) => {
 				e.preventDefault();
 				if (actorId && note.trim())
 					resolve.mutate({ actorId, note: note.trim() });
 			}}
 		>
-			<label className="rail-title" htmlFor={`note-${alertId}`}>
+			<label
+				className="font-heading text-[11.5px] tracking-[0.6px] text-muted-foreground mb-2"
+				htmlFor={`note-${alertId}`}
+			>
 				Resolve as {actorId || "…"}
 			</label>
 			<textarea
+				className="flex-1 min-w-0 bg-[rgba(4,8,13,0.8)] border border-border text-foreground py-1.25 px-2 text-[13px] font-sans resize-y focus:outline-none focus:border-primary"
 				id={`note-${alertId}`}
 				value={note}
 				onChange={(e) => setNote(e.target.value)}
@@ -243,22 +308,24 @@ function ResolveForm({ alertId }: { alertId: string }) {
 				rows={2}
 			/>
 			{!actorId && (
-				<p className="form-note">Set an operator id in the left rail first.</p>
+				<p className="m-0 text-[11.5px] text-warning leading-[1.45]">
+					Set an operator id in the left rail first.
+				</p>
 			)}
 			{error?.status === 409 && (
-				<p className="form-note">
+				<p className="m-0 text-[11.5px] text-warning leading-[1.45]">
 					Already resolved by someone else. The record above has refreshed.
 				</p>
 			)}
 			{error && error.status !== 409 && (
-				<p className="form-note">
+				<p className="m-0 text-[11.5px] text-warning leading-[1.45]">
 					{error.message} (request {error.requestId})
 				</p>
 			)}
-			<div className="actions">
+			<div className="flex gap-1.5">
 				<button
 					type="submit"
-					className="resolve"
+					className="flex-1 border py-2 px-1 text-[12.5px] hover:enabled:border-primary hover:enabled:text-primary enabled:border-[rgba(57,215,192,0.45)] enabled:text-success"
 					disabled={resolve.isPending || !actorId || !note.trim()}
 				>
 					{resolve.isPending ? "Resolving…" : "Resolve"}
