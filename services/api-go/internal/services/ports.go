@@ -26,6 +26,9 @@ type SiteRepository interface {
 
 type PaymentRepository interface {
 	RunPaymentTx(ctx context.Context, fn func(PaymentTx) (domain.ApplyPaymentResult, error)) (domain.ApplyPaymentResult, error)
+	ListCustomerSummaries(ctx context.Context) ([]domain.CustomerSummary, error)
+	ListMeterCommands(ctx context.Context) ([]domain.MeterCommand, error)
+	ListAuditEvents(ctx context.Context, customerID string) ([]domain.AuditEvent, error)
 }
 
 type PaymentTx interface {

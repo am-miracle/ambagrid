@@ -1,8 +1,8 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { type ComponentProps, useEffect, useId, useRef, useState } from "react";
 import { gsap, prefersReducedMotion } from "#/lib/motion";
+import { cn } from "#/lib/utils";
 import { formatClock, STATUS_COLOR, type Status } from "./model";
 
-// Writes textContent directly so ticking values never re-render React.
 export function AnimatedNumber({
 	value,
 	decimals = 0,
@@ -56,7 +56,11 @@ export function Sparkline({
 	const uid = useId();
 	const pts = series.points.filter((p) => p[0] <= now);
 	if (pts.length < 2) {
-		return <div className="spark-empty">Waiting for telemetry</div>;
+		return (
+			<div className="text-xs text-muted-foreground py-5">
+				Waiting for telemetry
+			</div>
+		);
 	}
 	const xs = series.points.map((p) => p[0]);
 	const ys = series.points.map((p) => p[1]);
@@ -80,8 +84,9 @@ export function Sparkline({
 	const last = pts[pts.length - 1];
 
 	return (
-		<div className="spark" style={{ height }}>
+		<div className="relative flex flex-col" style={{ height }}>
 			<svg
+				className="w-full flex-1 min-h-0 block"
 				viewBox={`0 0 ${W} ${H}`}
 				preserveAspectRatio="none"
 				aria-hidden="true"
@@ -134,14 +139,14 @@ export function Sparkline({
 					vectorEffect="non-scaling-stroke"
 				/>
 			</svg>
-			<div className="spark-meta">
+			<div className="flex justify-between text-[11.5px] text-muted-foreground mt-1.25">
 				<span>{series.label}</span>
 				<span className="mono">
 					{last[1].toFixed(1)} {series.unit}
 				</span>
 			</div>
 			{threshold !== undefined && (
-				<div className="spark-note">
+				<div className="text-[11px] text-warning mt-0.75 leading-[1.4]">
 					{breach
 						? `Reached the ${threshold}${series.unit} limit at ${formatClock(breach[0])}`
 						: `Below the ${threshold}${series.unit} limit`}
@@ -154,19 +159,69 @@ export function Sparkline({
 export function StatusDot({
 	status,
 	size = 8,
+	className,
 }: {
 	status: Status;
 	size?: number;
+	className?: string;
 }) {
 	return (
 		<span
-			className="sdot"
+			className={cn("inline-block rounded-full flex-none", className)}
 			style={{
 				width: size,
 				height: size,
 				background: STATUS_COLOR[status],
 				boxShadow: `0 0 ${size}px ${STATUS_COLOR[status]}`,
 			}}
+		/>
+	);
+}
+
+export function PanelHeader({ className, ...props }: ComponentProps<"div">) {
+	return (
+		<div
+			className={cn(
+				"flex items-center gap-2.5 py-3.25 px-4 border-b border-(--edge)",
+				className,
+			)}
+			{...props}
+		/>
+	);
+}
+
+export function PanelTitle({ className, ...props }: ComponentProps<"h2">) {
+	return (
+		<h2
+			className={cn(
+				"font-heading text-base font-semibold m-0 flex-1",
+				className,
+			)}
+			{...props}
+		/>
+	);
+}
+
+export function SectionTitle({ className, ...props }: ComponentProps<"h3">) {
+	return (
+		<h3
+			className={cn(
+				"font-heading text-[11.5px] tracking-[0.6px] font-normal text-muted-foreground m-0 mb-2",
+				className,
+			)}
+			{...props}
+		/>
+	);
+}
+
+export function EmptyState({ className, ...props }: ComponentProps<"div">) {
+	return (
+		<div
+			className={cn(
+				"py-10 px-6 text-center text-muted-foreground text-[13px] leading-[1.6]",
+				className,
+			)}
+			{...props}
 		/>
 	);
 }
@@ -237,7 +292,10 @@ export function Boot({
 	}, [lineCount]);
 
 	return (
-		<div className="boot" ref={ref}>
+		<div
+			className="fixed inset-0 z-100 bg-background flex flex-col items-center justify-center gap-3.5"
+			ref={ref}
+		>
 			<svg width="180" height="180" viewBox="0 0 180 180" aria-hidden="true">
 				{BOOT_NODES.map((n) => (
 					<line
@@ -279,8 +337,13 @@ export function Boot({
 				/>
 				<circle className="boot-node" cx="90" cy="90" r="3" fill="#8FF6FF" />
 			</svg>
-			<div className="boot-title">AmbaGrid Control</div>
-			<div className="boot-line mono" aria-live="polite">
+			<div className="font-heading text-[22px] tracking-[1.4px] font-semibold">
+				AmbaGrid Control
+			</div>
+			<div
+				className="text-xs text-muted-foreground h-4 mono"
+				aria-live="polite"
+			>
 				{lines[line]}
 			</div>
 		</div>

@@ -298,6 +298,61 @@ func (a API) handleApplyDevPayment(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a API) handleListDevCustomers(w http.ResponseWriter, r *http.Request) {
+	customers, err := a.Payments.ListCustomers(r.Context())
+	if err != nil {
+		writeError(w, r, a.logger(), err)
+		return
+	}
+	items := make([]customerSummaryDTO, 0, len(customers))
+	for _, cs := range customers {
+		items = append(items, toCustomerSummaryDTO(cs))
+	}
+	writeJSON(w, a.logger(), http.StatusOK, collectionBody[customerSummaryDTO]{
+		Data:      items,
+		Page:      pageMetadata{Limit: len(items)},
+		RequestID: RequestIDFrom(r.Context()),
+	})
+}
+
+func (a API) handleListDevCommands(w http.ResponseWriter, r *http.Request) {
+	commands, err := a.Payments.ListMeterCommands(r.Context())
+	if err != nil {
+		writeError(w, r, a.logger(), err)
+		return
+	}
+	items := make([]meterCommandDTO, 0, len(commands))
+	for _, cmd := range commands {
+		items = append(items, toMeterCommandDTO(cmd))
+	}
+	writeJSON(w, a.logger(), http.StatusOK, collectionBody[meterCommandDTO]{
+		Data:      items,
+		Page:      pageMetadata{Limit: len(items)},
+		RequestID: RequestIDFrom(r.Context()),
+	})
+}
+
+func (a API) handleListDevAuditEvents(w http.ResponseWriter, r *http.Request) {
+	var customerID string
+	if v := optionalParam(r, "customer_id"); v != nil {
+		customerID = *v
+	}
+	events, err := a.Payments.ListAuditEvents(r.Context(), customerID)
+	if err != nil {
+		writeError(w, r, a.logger(), err)
+		return
+	}
+	items := make([]auditEventDTO, 0, len(events))
+	for _, ev := range events {
+		items = append(items, toAuditEventDTO(ev))
+	}
+	writeJSON(w, a.logger(), http.StatusOK, collectionBody[auditEventDTO]{
+		Data:      items,
+		Page:      pageMetadata{Limit: len(items)},
+		RequestID: RequestIDFrom(r.Context()),
+	})
+}
+
 func (a API) handleLive(w http.ResponseWriter, r *http.Request) {
 	writeStatus(w, r, a.logger(), http.StatusOK, "ok", "")
 }

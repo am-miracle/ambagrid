@@ -123,8 +123,9 @@ export const useResolveAlert = (alertId: string) => {
 	});
 };
 
-export const useApplyDevPayment = () =>
-	useMutation({
+export const useApplyDevPayment = () => {
+	const client = useQueryClient();
+	return useMutation({
 		mutationFn: ({
 			customerId,
 			amountMinorUnits,
@@ -134,4 +135,29 @@ export const useApplyDevPayment = () =>
 			amountMinorUnits: number;
 			currency: string;
 		}) => api.applyDevPayment(customerId, amountMinorUnits, currency),
+		onSuccess: () => {
+			client.invalidateQueries({ queryKey: ["dev"] });
+		},
+	});
+};
+
+export const useDevCustomers = () =>
+	useQuery({
+		queryKey: ["dev", "customers"],
+		queryFn: () => api.listDevCustomers().then((body) => body.data),
+		refetchInterval: LIVE_TICK_MS,
+	});
+
+export const useDevAuditEvents = (customerId?: string) =>
+	useQuery({
+		queryKey: ["dev", "audit-events", customerId],
+		queryFn: () => api.listDevAuditEvents(customerId).then((body) => body.data),
+		refetchInterval: LIVE_TICK_MS,
+	});
+
+export const useDevCommands = () =>
+	useQuery({
+		queryKey: ["dev", "commands"],
+		queryFn: () => api.listDevCommands().then((body) => body.data),
+		refetchInterval: LIVE_TICK_MS,
 	});

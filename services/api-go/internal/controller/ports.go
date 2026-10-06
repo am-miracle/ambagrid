@@ -30,6 +30,9 @@ type SiteService interface {
 type PaymentService interface {
 	ApplyDevPayment(ctx context.Context, request services.ApplyDevPaymentRequest) (domain.ApplyPaymentResult, error)
 	ApplyWebhookPayment(ctx context.Context, command domain.ApplyPaymentCommand) (domain.ApplyPaymentResult, error)
+	ListCustomers(ctx context.Context) ([]domain.CustomerSummary, error)
+	ListMeterCommands(ctx context.Context) ([]domain.MeterCommand, error)
+	ListAuditEvents(ctx context.Context, customerID string) ([]domain.AuditEvent, error)
 }
 
 type HealthService interface {

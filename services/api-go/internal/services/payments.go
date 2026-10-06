@@ -51,6 +51,18 @@ func (s *PaymentService) ApplyDevPayment(ctx context.Context, request ApplyDevPa
 	})
 }
 
+func (s *PaymentService) ListCustomers(ctx context.Context) ([]domain.CustomerSummary, error) {
+	return s.payments.ListCustomerSummaries(ctx)
+}
+
+func (s *PaymentService) ListMeterCommands(ctx context.Context) ([]domain.MeterCommand, error) {
+	return s.payments.ListMeterCommands(ctx)
+}
+
+func (s *PaymentService) ListAuditEvents(ctx context.Context, customerID string) ([]domain.AuditEvent, error) {
+	return s.payments.ListAuditEvents(ctx, customerID)
+}
+
 func (s *PaymentService) ApplyWebhookPayment(ctx context.Context, command domain.ApplyPaymentCommand) (domain.ApplyPaymentResult, error) {
 	if err := validatePaymentCommand(command); err != nil {
 		return domain.ApplyPaymentResult{}, err

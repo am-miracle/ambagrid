@@ -68,7 +68,7 @@ git checkout -b feature/mqtt-adapter
 
 Use short, descriptive names:
 
-- `feature/site-dashboard`
+- `feat/site-dashboard`
 - `fix/mqtt-reconnect`
 - `docs/hardware-adapters`
 

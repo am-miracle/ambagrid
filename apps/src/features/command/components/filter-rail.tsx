@@ -2,6 +2,10 @@ import type { ReactNode } from "react";
 import { useState } from "react";
 import { ASSET_TYPE_LABEL } from "#/api/contract";
 import type { AssetType } from "#/api/types";
+import { Button } from "#/components/ui/button";
+import { Input } from "#/components/ui/input";
+import { Label } from "#/components/ui/label";
+import { Toggle } from "#/components/ui/toggle";
 import { setActorId, useActorId } from "#/lib/actor";
 import {
 	ASSET_TYPES,
@@ -9,7 +13,7 @@ import {
 	STATUS_ORDER,
 	type Status,
 } from "../model";
-import { StatusDot } from "../ui";
+import { SectionTitle, StatusDot } from "../ui";
 
 export function FilterRail({
 	open,
@@ -49,86 +53,99 @@ export function FilterRail({
 	onReplay: () => void;
 }) {
 	return (
-		<aside className={`rail panel-anim${open ? " open" : ""}`}>
+		<aside
+			className={`cmd-rail col-start-1 row-start-2 row-end-4 border-r border-(--edge) bg-(--deck) backdrop-blur-[10px] p-4 px-3 flex flex-col gap-4.5 overflow-y-auto z-20 panel-anim${open ? " open" : ""}`}
+		>
 			<RailGroup title="View">
-				<button
-					type="button"
-					className={`chip${!siteSelected ? " on" : ""}`}
-					onClick={onFleetView}
+				<Toggle
+					variant="chip"
+					pressed={!siteSelected}
+					onPressedChange={onFleetView}
 				>
 					Fleet
-				</button>
-				<button
-					type="button"
-					className={`chip${siteSelected ? " on" : ""}`}
+				</Toggle>
+				<Toggle
+					variant="chip"
+					pressed={siteSelected}
 					disabled={!siteSelected}
-					onClick={onSiteView}
+					onPressedChange={onSiteView}
 				>
 					Site
-				</button>
+				</Toggle>
 			</RailGroup>
 
 			<RailGroup title="Site status">
 				{STATUS_ORDER.map((s) => (
-					<button
-						type="button"
+					<Toggle
 						key={s}
-						className={`rail-filter${visible[s] ? " on" : ""}`}
-						aria-pressed={visible[s]}
-						onClick={() => onToggleStatus(s)}
+						className="capitalize"
+						pressed={visible[s]}
+						onPressedChange={() => onToggleStatus(s)}
 					>
-						<StatusDot status={s} />
-						<span className="rail-filter-label">{s}</span>
-						<span className="mono rail-filter-count">{statusCounts[s]}</span>
-					</button>
+						<StatusDot
+							status={s}
+							className={visible[s] ? undefined : "opacity-30"}
+						/>
+						<span className="flex-1 text-left">{s}</span>
+						<span className="mono text-[11.5px] text-muted-foreground">
+							{statusCounts[s]}
+						</span>
+					</Toggle>
 				))}
 			</RailGroup>
 
 			<RailGroup title="Alerts by asset type">
 				{ASSET_TYPES.map((k) => (
-					<button
-						type="button"
+					<Toggle
 						key={k}
-						className={`rail-filter${kinds[k] ? " on" : ""}`}
-						aria-pressed={kinds[k]}
-						onClick={() => onToggleKind(k)}
+						pressed={kinds[k]}
+						onPressedChange={() => onToggleKind(k)}
 					>
-						<span className="rail-filter-label">{ASSET_TYPE_LABEL[k]}</span>
-						<span className="mono rail-filter-count">{kindCounts[k]}</span>
-					</button>
+						<span className="flex-1 text-left">{ASSET_TYPE_LABEL[k]}</span>
+						<span className="mono text-[11.5px] text-muted-foreground">
+							{kindCounts[k]}
+						</span>
+					</Toggle>
 				))}
 			</RailGroup>
 
 			{unplaced.length > 0 && (
 				<RailGroup title="Not on the map">
 					{unplaced.map((s) => (
-						<div key={s.id} className="unplaced">
+						<div
+							key={s.id}
+							className="flex justify-between gap-2 w-full py-1 px-2 text-[12.5px] text-muted-foreground"
+						>
 							<span>{s.name}</span>
-							<span className="mono muted">{s.provisioningStatus}</span>
+							<span className="mono text-[10.5px] muted">
+								{s.provisioningStatus}
+							</span>
 						</div>
 					))}
 				</RailGroup>
 			)}
 
-			<div className="rail-foot">
+			<div className="mt-auto flex flex-col gap-2">
 				<ActorField />
-				<button
-					type="button"
-					className={`chip wide${focusMode ? " on" : ""}`}
-					onClick={onToggleFocus}
+				<Toggle
+					variant="chip"
+					className="w-full"
+					pressed={focusMode}
+					onPressedChange={onToggleFocus}
 					disabled={!canFocus}
 				>
 					Alert focus mode
-				</button>
-				<button
-					type="button"
-					className="primary wide"
+				</Toggle>
+				<Button
+					variant="command"
+					size="lg"
+					className="w-full"
 					onClick={onReplay}
 					disabled={!canReplay || replaying}
 				>
 					{replaying ? "Replaying…" : "Run incident replay"}
-				</button>
-				<div className="rail-hint">
+				</Button>
+				<div className="text-[11px] text-muted-foreground leading-normal">
 					Drag the field to orbit. Scroll to zoom.
 				</div>
 			</div>
@@ -144,44 +161,43 @@ function RailGroup({
 	children: ReactNode;
 }) {
 	return (
-		<div className="rail-group">
-			<div className="rail-title">{title}</div>
-			<div className="rail-body">{children}</div>
+		<div>
+			<SectionTitle>{title}</SectionTitle>
+			<div className="flex flex-wrap gap-1">{children}</div>
 		</div>
 	);
 }
 
-// Stand-in for the gateway-injected X-Actor-Id until operator auth exists.
 function ActorField() {
 	const actorId = useActorId();
 	const [draft, setDraft] = useState(actorId);
 	return (
 		<form
-			className="actor"
+			className="flex flex-col"
 			onSubmit={(e) => {
 				e.preventDefault();
 				if (draft.trim()) setActorId(draft);
 			}}
 		>
-			<label className="rail-title" htmlFor="actor-id">
+			<Label className="mb-2" htmlFor="actor-id">
 				Operator id
-			</label>
-			<div className="actor-row">
-				<input
+			</Label>
+			<div className="flex gap-1">
+				<Input
 					id="actor-id"
-					className="mono"
+					className="mono flex-1"
 					value={draft}
 					onChange={(e) => setDraft(e.target.value)}
 					placeholder="operator-0101"
 					autoComplete="off"
 				/>
-				<button
+				<Button
 					type="submit"
-					className="chip"
+					variant="muted"
 					disabled={!draft.trim() || draft.trim() === actorId}
 				>
 					Set
-				</button>
+				</Button>
 			</div>
 		</form>
 	);

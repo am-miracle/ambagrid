@@ -42,6 +42,9 @@ func (a API) Handler() http.Handler {
 	a.handleRoute(mux, http.MethodPost, "/v1/alerts/{alert_id}/resolve", a.handleResolveAlert)
 	if a.DevMode {
 		a.handleRoute(mux, http.MethodPost, "/v1/dev/payments", a.handleApplyDevPayment)
+		a.handleRoute(mux, http.MethodGet, "/v1/dev/customers", a.handleListDevCustomers)
+		a.handleRoute(mux, http.MethodGet, "/v1/dev/commands", a.handleListDevCommands)
+		a.handleRoute(mux, http.MethodGet, "/v1/dev/audit-events", a.handleListDevAuditEvents)
 	}
 
 	for _, wh := range a.Webhooks {

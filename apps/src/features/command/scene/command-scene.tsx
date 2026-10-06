@@ -692,8 +692,12 @@ export function CommandScene(props: SceneProps) {
 	}, []);
 
 	return (
-		<div className="scene" ref={wrapRef}>
+		<div
+			className={`absolute inset-0${props.focusMode ? " scene-focus-overlay" : ""}`}
+			ref={wrapRef}
+		>
 			<canvas
+				className="block touch-none"
 				ref={canvasRef}
 				role="img"
 				aria-label="Fleet map of sites by status. The alert inbox lists the same information."

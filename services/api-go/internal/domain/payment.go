@@ -115,6 +115,17 @@ type MeterAssignment struct {
 	RelayClosed  bool
 }
 
+type CustomerSummary struct {
+	CustomerID                    string
+	AssignmentID                  string
+	RemainingKWh                  float64
+	RemainingMoneyValueMinorUnits int64
+	TotalPayments                 int64
+	TotalKWhPurchased             float64
+	LastPaymentAt                 *time.Time
+	UpdatedAt                     time.Time
+}
+
 type ApplyPaymentCommand struct {
 	Provider          string
 	ExternalReference string
