@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import type { Alert } from "#/api/types";
+import { Button } from "#/components/ui/button";
 import { formatAge } from "#/lib/grid-tick";
 import { gsap } from "#/lib/motion";
 import {
@@ -58,14 +59,15 @@ export function SiteCard({
 						{site.id} · {site.region}
 					</div>
 				</div>
-				<button
-					type="button"
-					className="text-muted-foreground text-[18px] leading-none px-[2px] hover:text-foreground"
+				<Button
+					variant="ghost"
+					size="inline"
+					className="text-[18px] leading-none px-0.5"
 					onClick={onClose}
 					aria-label="Close site"
 				>
 					×
-				</button>
+				</Button>
 			</div>
 			<div className="grid grid-cols-3 gap-[10px] my-3">
 				<FlowCell

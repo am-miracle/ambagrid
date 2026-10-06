@@ -1,11 +1,14 @@
-import { useState } from "react";
+import type { ReactNode } from "react";
 import {
 	useDevAuditEvents,
 	useDevCommands,
 	useDevCustomers,
 } from "#/api/queries";
 import type { AuditEvent, CustomerSummary, MeterCommand } from "#/api/types";
+import { Badge } from "#/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "#/components/ui/tabs";
 import { formatDuration } from "#/lib/format";
+import { EmptyState, PanelHeader, PanelTitle } from "../ui";
 
 type Tab = "customers" | "commands" | "audit";
 
@@ -15,20 +18,13 @@ const TAB_LABELS: Record<Tab, string> = {
 	audit: "Audit Trail",
 };
 
-const COMMAND_STATUS_STYLE: Record<
-	string,
-	{ color: string; borderColor: string }
+const COMMAND_STATUS_BADGE: Partial<
+	Record<string, "warning" | "info" | "success" | "critical">
 > = {
-	requested: {
-		color: "var(--warning)",
-		borderColor: "rgba(245,165,36,0.4)",
-	},
-	sent: { color: "var(--cyan)", borderColor: "rgba(143,246,255,0.35)" },
-	acknowledged: {
-		color: "var(--healthy)",
-		borderColor: "rgba(57,215,192,0.4)",
-	},
-	failed: { color: "#ff8b96", borderColor: "rgba(255,77,94,0.4)" },
+	requested: "warning",
+	sent: "info",
+	acknowledged: "success",
+	failed: "critical",
 };
 
 const EVENT_LABELS: Record<string, string> = {
@@ -70,20 +66,33 @@ function eventDetail(event: AuditEvent): string {
 const EMPTY_MSG =
 	"No payments recorded yet. Use the Test payment button to start.";
 
-function CustomersTab({ data }: { data: CustomerSummary[] }) {
-	if (data.length === 0)
-		return (
-			<div className="py-10 px-6 text-center text-muted-foreground text-[13px] leading-[1.6]">
-				{EMPTY_MSG}
-			</div>
-		);
+function Rows({ count, children }: { count: number; children: ReactNode }) {
+	if (count === 0) return <EmptyState>{EMPTY_MSG}</EmptyState>;
+	return <div className="flex-1 overflow-y-auto min-h-0">{children}</div>;
+}
+
+function Row({ children }: { children: ReactNode }) {
 	return (
-		<div className="flex-1 overflow-y-auto min-h-0">
+		<div className="py-2.25 px-4 border-b border-[rgba(122,186,212,0.07)]">
+			{children}
+		</div>
+	);
+}
+
+function Stat({ label, children }: { label: string; children: ReactNode }) {
+	return (
+		<div className="flex justify-between text-[11px]">
+			<span className="text-muted-foreground">{label}</span>
+			<span className="mono text-[13px]">{children}</span>
+		</div>
+	);
+}
+
+function CustomersTab({ data }: { data: CustomerSummary[] }) {
+	return (
+		<Rows count={data.length}>
 			{data.map((c) => (
-				<div
-					key={c.customer_id}
-					className="py-2.25 px-4 border-b border-[rgba(122,186,212,0.07)]"
-				>
+				<Row key={c.customer_id}>
 					<div className="flex justify-between items-baseline mb-1">
 						<span className="mono text-[13px]">{c.customer_id}</span>
 						<span className="text-[11px] text-muted-foreground">
@@ -91,64 +100,33 @@ function CustomersTab({ data }: { data: CustomerSummary[] }) {
 						</span>
 					</div>
 					<div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
-						<div className="flex justify-between text-[11px]">
-							<span className="text-muted-foreground">Balance</span>
-							<span className="mono text-[13px]">
-								{c.remaining_kwh.toFixed(2)} kWh
-							</span>
-						</div>
-						<div className="flex justify-between text-[11px]">
-							<span className="text-muted-foreground">Value</span>
-							<span className="mono text-[13px]">
-								{formatNGN(c.remaining_money_value_minor_units)}
-							</span>
-						</div>
-						<div className="flex justify-between text-[11px]">
-							<span className="text-muted-foreground">Payments</span>
-							<span className="mono text-[13px]">{c.total_payments}</span>
-						</div>
-						<div className="flex justify-between text-[11px]">
-							<span className="text-muted-foreground">Purchased</span>
-							<span className="mono text-[13px]">
-								{c.total_kwh_purchased.toFixed(2)} kWh
-							</span>
-						</div>
+						<Stat label="Balance">{c.remaining_kwh.toFixed(2)} kWh</Stat>
+						<Stat label="Value">
+							{formatNGN(c.remaining_money_value_minor_units)}
+						</Stat>
+						<Stat label="Payments">{c.total_payments}</Stat>
+						<Stat label="Purchased">
+							{c.total_kwh_purchased.toFixed(2)} kWh
+						</Stat>
 					</div>
-				</div>
+				</Row>
 			))}
-		</div>
+		</Rows>
 	);
 }
 
 function CommandsTab({ data }: { data: MeterCommand[] }) {
-	if (data.length === 0)
-		return (
-			<div className="py-10 px-6 text-center text-muted-foreground text-[13px] leading-[1.6]">
-				{EMPTY_MSG}
-			</div>
-		);
 	return (
-		<div className="flex-1 overflow-y-auto min-h-0">
+		<Rows count={data.length}>
 			{data.map((cmd) => (
-				<div
-					key={cmd.command_id}
-					className="py-2.25 px-4 border-b border-[rgba(122,186,212,0.07)]"
-				>
+				<Row key={cmd.command_id}>
 					<div className="flex justify-between items-center mb-1">
 						<span className="mono text-[13px] capitalize">
 							{cmd.command_type}
 						</span>
-						<span
-							className="font-mono text-[10px] py-px px-1.5 border text-muted-foreground"
-							style={
-								COMMAND_STATUS_STYLE[cmd.status] ?? {
-									color: "var(--muted)",
-									borderColor: "var(--edge)",
-								}
-							}
-						>
+						<Badge variant={COMMAND_STATUS_BADGE[cmd.status] ?? "outline"}>
 							{cmd.status}
-						</span>
+						</Badge>
 					</div>
 					<div className="flex justify-between text-[11px] text-muted-foreground">
 						<span className="mono">{cmd.meter_id}</span>
@@ -164,26 +142,17 @@ function CommandsTab({ data }: { data: MeterCommand[] }) {
 							{cmd.failure_reason}
 						</div>
 					)}
-				</div>
+				</Row>
 			))}
-		</div>
+		</Rows>
 	);
 }
 
 function AuditTab({ data }: { data: AuditEvent[] }) {
-	if (data.length === 0)
-		return (
-			<div className="py-10 px-6 text-center text-muted-foreground text-[13px] leading-[1.6]">
-				{EMPTY_MSG}
-			</div>
-		);
 	return (
-		<div className="flex-1 overflow-y-auto min-h-0">
+		<Rows count={data.length}>
 			{data.map((ev) => (
-				<div
-					key={ev.event_id}
-					className="py-2.25 px-4 border-b border-[rgba(122,186,212,0.07)]"
-				>
+				<Row key={ev.event_id}>
 					<div className="flex justify-between items-baseline mb-0.5">
 						<span className="text-[13px]">
 							{EVENT_LABELS[ev.event_type] ?? ev.event_type}
@@ -196,47 +165,43 @@ function AuditTab({ data }: { data: AuditEvent[] }) {
 						<span className="mono">{ev.customer_id}</span>
 						<span className="mono">{eventDetail(ev)}</span>
 					</div>
-				</div>
+				</Row>
 			))}
-		</div>
+		</Rows>
 	);
 }
 
 export function RevenuePanel() {
-	const [tab, setTab] = useState<Tab>("customers");
 	const { data: customers = [] } = useDevCustomers();
 	const { data: commands = [] } = useDevCommands();
 	const { data: auditEvents = [] } = useDevAuditEvents();
 
 	return (
 		<>
-			<div className="flex items-center gap-2.5 py-3.25 px-4 border-b border-(--edge)">
-				<h2 className="font-heading text-base font-semibold m-0 flex-1">
-					Revenue
-				</h2>
+			<PanelHeader>
+				<PanelTitle>Revenue</PanelTitle>
 				<span className="mono muted text-[11.5px]">
 					{customers.length} customers
 				</span>
-			</div>
-			<div className="flex gap-1 px-4 py-2 border-b border-(--edge)">
-				{(Object.keys(TAB_LABELS) as Tab[]).map((t) => (
-					<button
-						key={t}
-						type="button"
-						className={`mono text-[11px] py-0.75 px-2.5 border ${
-							tab === t
-								? "text-primary-foreground bg-primary border-primary"
-								: "text-muted-foreground border-border hover:text-foreground hover:border-foreground"
-						}`}
-						onClick={() => setTab(t)}
-					>
-						{TAB_LABELS[t]}
-					</button>
-				))}
-			</div>
-			{tab === "customers" && <CustomersTab data={customers} />}
-			{tab === "commands" && <CommandsTab data={commands} />}
-			{tab === "audit" && <AuditTab data={auditEvents} />}
+			</PanelHeader>
+			<Tabs defaultValue="customers" className="flex-1">
+				<TabsList className="px-4 py-2 border-b border-(--edge)">
+					{(Object.keys(TAB_LABELS) as Tab[]).map((t) => (
+						<TabsTrigger key={t} value={t}>
+							{TAB_LABELS[t]}
+						</TabsTrigger>
+					))}
+				</TabsList>
+				<TabsContent value="customers">
+					<CustomersTab data={customers} />
+				</TabsContent>
+				<TabsContent value="commands">
+					<CommandsTab data={commands} />
+				</TabsContent>
+				<TabsContent value="audit">
+					<AuditTab data={auditEvents} />
+				</TabsContent>
+			</Tabs>
 		</>
 	);
 }

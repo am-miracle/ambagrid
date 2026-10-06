@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAssetAlertHistory } from "#/api/queries";
 import type { Alert, AssetType } from "#/api/types";
+import { Button } from "#/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "#/components/ui/tabs";
 import { humanizeKind } from "#/lib/format";
 import { useNow } from "#/lib/grid-tick";
 import { gsap } from "#/lib/motion";
@@ -462,13 +464,14 @@ export function CommandSurface() {
 					<div className="absolute top-3.5 left-4 text-[11.5px] text-primary border border-border bg-[rgba(5,12,18,0.8)] py-1.25 px-2.5 flex gap-2.5 items-center tracking-[0.4px] mono">
 						focus · {focusSite.name}
 						{alertObj ? ` · ${alertObj.asset_id}` : ""}
-						<button
-							type="button"
-							className="text-muted-foreground text-[11px] hover:text-foreground"
+						<Button
+							variant="ghost"
+							size="inline"
+							className="text-[11px]"
 							onClick={() => setFocusMode(false)}
 						>
 							exit
-						</button>
+						</Button>
 					</div>
 				)}
 
@@ -546,24 +549,12 @@ export function CommandSurface() {
 						onOpenRelated={openAlert}
 					/>
 				) : (
-					<>
-						<div className="flex gap-1 px-4 pt-2.5 pb-0">
-							{(["alerts", "revenue"] as const).map((t) => (
-								<button
-									key={t}
-									type="button"
-									className={`mono text-[11px] py-0.75 px-2.5 border ${
-										inboxTab === t
-											? "text-primary-foreground bg-primary border-primary"
-											: "text-muted-foreground border-border hover:text-foreground hover:border-foreground"
-									}`}
-									onClick={() => setInboxTab(t)}
-								>
-									{t === "alerts" ? "Alerts" : "Revenue"}
-								</button>
-							))}
-						</div>
-						{inboxTab === "alerts" ? (
+					<Tabs value={inboxTab} onValueChange={setInboxTab} className="flex-1">
+						<TabsList className="px-4 pt-2.5">
+							<TabsTrigger value="alerts">Alerts</TabsTrigger>
+							<TabsTrigger value="revenue">Revenue</TabsTrigger>
+						</TabsList>
+						<TabsContent value="alerts">
 							<AlertInbox
 								alerts={openAlerts}
 								at={at}
@@ -572,10 +563,11 @@ export function CommandSurface() {
 								onOpen={openAlert}
 								onClose={() => setInboxOpen(false)}
 							/>
-						) : (
+						</TabsContent>
+						<TabsContent value="revenue">
 							<RevenuePanel />
-						)}
-					</>
+						</TabsContent>
+					</Tabs>
 				)}
 			</aside>
 

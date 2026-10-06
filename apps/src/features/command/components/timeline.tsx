@@ -1,5 +1,6 @@
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { useRef } from "react";
+import { Button } from "#/components/ui/button";
 import { formatDuration } from "#/lib/format";
 import {
 	type FleetEvent,
@@ -61,9 +62,9 @@ export function Timeline({
 	return (
 		<div className="flex-1 min-w-0 flex flex-col">
 			<div className="flex items-center gap-3 mb-2">
-				<button
-					type="button"
-					className="w-7 h-7 border border-border text-primary grid place-items-center flex-none hover:border-primary hover:bg-accent"
+				<Button
+					size="icon"
+					className="text-primary hover:bg-accent"
 					onClick={onTogglePlay}
 					aria-label={playing ? "Pause replay" : "Play replay"}
 				>
@@ -77,7 +78,7 @@ export function Timeline({
 							<path d="M2 1l9 5-9 5z" fill="currentColor" />
 						</svg>
 					)}
-				</button>
+				</Button>
 				<div className="flex items-baseline gap-[9px] mono">
 					<b className="text-[17px] font-medium">{formatClock(at)}</b>
 					<span className="text-[11px] text-muted-foreground">

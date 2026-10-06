@@ -1,7 +1,10 @@
 import type { Alert, AssetType } from "#/api/types";
+import { Badge } from "#/components/ui/badge";
+import { Button } from "#/components/ui/button";
 import { formatDuration } from "#/lib/format";
 import { LIVE_TICK_MS } from "#/lib/grid-tick";
 import { alertTitle, type FleetSite, openedAt } from "../model";
+import { EmptyState, PanelHeader, PanelTitle } from "../ui";
 
 const SEV_BAR_STYLE: Record<string, React.CSSProperties> = {
 	critical: {
@@ -10,13 +13,6 @@ const SEV_BAR_STYLE: Record<string, React.CSSProperties> = {
 	},
 	warning: { background: "var(--warning)" },
 };
-
-const SEV_STATE_STYLE: Record<string, { color: string; borderColor: string }> =
-	{
-		critical: { color: "#ff8b96", borderColor: "rgba(255,77,94,0.4)" },
-		warning: { color: "var(--warning)", borderColor: "rgba(245,165,36,0.4)" },
-		info: { color: "var(--cyan)", borderColor: "rgba(143,246,255,0.35)" },
-	};
 
 export function AlertInbox({
 	alerts,
@@ -36,27 +32,26 @@ export function AlertInbox({
 	const critical = alerts.filter((a) => a.severity === "critical").length;
 	return (
 		<>
-			<div className="flex items-center gap-2.5 py-3.25 px-4 border-b border-(--edge)">
-				<h2 className="font-heading text-base font-semibold m-0 flex-1">
-					Alert inbox
-				</h2>
+			<PanelHeader>
+				<PanelTitle>Alert inbox</PanelTitle>
 				<span className="mono muted text-[11.5px]">{alerts.length} open</span>
-				<button
-					type="button"
-					className="cmd-only-mobile text-muted-foreground text-[18px] leading-none px-0.5 hover:text-foreground"
+				<Button
+					variant="ghost"
+					size="inline"
+					className="cmd-only-mobile text-[18px] leading-none px-0.5"
 					onClick={onClose}
 					aria-label="Close inbox"
 				>
 					×
-				</button>
-			</div>
+				</Button>
+			</PanelHeader>
 			<div className="flex-1 overflow-y-auto min-h-0">
 				{alerts.length === 0 && (
-					<div className="py-10 px-6 text-center text-muted-foreground text-[13px] leading-[1.6]">
+					<EmptyState>
 						<div className="w-11.5 h-11.5 mx-auto mb-4 border border-border border-t-success rounded-full animate-[spin_3.2s_linear_infinite]" />
 						No open alerts at this point in time. Scrub the timeline to replay
 						the last 12 hours.
-					</div>
+					</EmptyState>
 				)}
 				{alerts.map((a) => (
 					<button
@@ -81,12 +76,7 @@ export function AlertInbox({
 							<span className="text-[11.5px] text-muted-foreground">
 								{formatDuration(at - openedAt(a))}
 							</span>
-							<span
-								className="font-mono text-[10px] py-px px-1.5 border border-border text-muted-foreground"
-								style={SEV_STATE_STYLE[a.severity]}
-							>
-								{a.severity}
-							</span>
+							<Badge variant={a.severity}>{a.severity}</Badge>
 						</div>
 					</button>
 				))}
