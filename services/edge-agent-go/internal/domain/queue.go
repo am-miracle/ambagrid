@@ -1,7 +1,10 @@
-// Package domain defines the edge agent's durable queue vocabulary.
+// domain defines the edge agent's durable queue vocabulary.
 package domain
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 type QueueState string
 
@@ -22,4 +25,16 @@ type QueueStats struct {
 	FilesystemFreeBytes  int64
 	OldestAge            time.Duration
 	State                QueueState
+}
+
+// Queue is the durable store-and-forward lifecycle shared by the collector
+// (write side) and the uploader (read side). Both depend on this interface
+// rather than defining their own, so the SQLite store satisfies one contract.
+type Queue interface {
+	Persist(ctx context.Context, event Event) (uint64, error)
+	MarkPendingUpload(ctx context.Context, sequence uint64) error
+	Ready(ctx context.Context, limit int, maxBytes int64) ([]Record, error)
+	MarkUploaded(ctx context.Context, sequence uint64, uploadedAt time.Time) error
+	Ack(ctx context.Context, sequence uint64) error
+	MarkFailed(ctx context.Context, sequence uint64, retryAt time.Time, cause string) error
 }

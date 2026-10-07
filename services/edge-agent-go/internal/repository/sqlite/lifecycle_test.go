@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"edge-agent-go/internal/domain"
 	queuesqlite "edge-agent-go/internal/repository/sqlite"
@@ -23,22 +24,27 @@ func TestQueueEventLifecycle(t *testing.T) {
 	}
 	assertRecordStatus(t, store, sequence, domain.StatusPersisted)
 
-	for _, transition := range []struct {
-		status domain.EventStatus
-		apply  func(context.Context, uint64) error
-	}{
-		{domain.StatusPendingUpload, store.MarkPendingUpload},
-		{domain.StatusUploaded, store.MarkUploaded},
-		{domain.StatusAcknowledged, store.Ack},
-		{domain.StatusExpired, store.Expire},
-	} {
-		if err := transition.apply(ctx, sequence); err != nil {
-			t.Fatalf("transition to %s: %v", transition.status, err)
-		}
-		assertRecordStatus(t, store, sequence, transition.status)
+	if err := store.MarkPendingUpload(ctx, sequence); err != nil {
+		t.Fatalf("transition to pending_upload: %v", err)
 	}
+	assertRecordStatus(t, store, sequence, domain.StatusPendingUpload)
 
-	if err := store.MarkUploaded(ctx, sequence); !errors.Is(err, domain.ErrInvalidTransition) {
+	if err := store.MarkUploaded(ctx, sequence, time.Now().UTC()); err != nil {
+		t.Fatalf("transition to uploaded: %v", err)
+	}
+	assertRecordStatus(t, store, sequence, domain.StatusUploaded)
+
+	if err := store.Ack(ctx, sequence); err != nil {
+		t.Fatalf("transition to acknowledged: %v", err)
+	}
+	assertRecordStatus(t, store, sequence, domain.StatusAcknowledged)
+
+	if err := store.Expire(ctx, sequence); err != nil {
+		t.Fatalf("transition to expired: %v", err)
+	}
+	assertRecordStatus(t, store, sequence, domain.StatusExpired)
+
+	if err := store.MarkUploaded(ctx, sequence, time.Now().UTC()); !errors.Is(err, domain.ErrInvalidTransition) {
 		t.Fatalf("transition expired event error = %v, want ErrInvalidTransition", err)
 	}
 	stats, err := store.Stats(ctx)

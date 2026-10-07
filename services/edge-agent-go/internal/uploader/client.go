@@ -1,0 +1,141 @@
+// client.go is the HTTP transport for uploading telemetry batches to the
+// ingestion service. It maps domain.Record → wire JSON, sends the batch, and
+// classifies responses as retryable (network/5xx) or terminal (401).
+package uploader
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"time"
+
+	"edge-agent-go/internal/domain"
+)
+
+type IngestClient struct {
+	endpoint   string
+	apiKey     string
+	httpClient *http.Client
+}
+
+func NewIngestClient(endpoint, apiKey string, timeout time.Duration) *IngestClient {
+	return &IngestClient{
+		endpoint: endpoint,
+		apiKey:   apiKey,
+		httpClient: &http.Client{
+			Timeout: timeout,
+		},
+	}
+}
+
+type batchRequest struct {
+	Records []wireRecord `json:"records"`
+}
+
+type wireRecord struct {
+	Sequence       uint64    `json:"sequence"`
+	SiteID         string    `json:"site_id"`
+	GatewayID      string    `json:"gateway_id"`
+	DeviceID       string    `json:"device_id"`
+	AssetType      string    `json:"asset_type"`
+	MQTTTopic      string    `json:"mqtt_topic"`
+	Payload        []byte    `json:"payload"`
+	Priority       int       `json:"priority"`
+	EventTimestamp time.Time `json:"event_timestamp"`
+	EdgeReceivedAt time.Time `json:"edge_received_at"`
+	UploadedAt     time.Time `json:"uploaded_at"`
+}
+
+type BatchResponse struct {
+	Accepted  []uint64      `json:"accepted"`
+	Rejected  []RecordError `json:"rejected,omitempty"`
+	RequestID string        `json:"request_id"`
+}
+
+type RecordError struct {
+	Index    int    `json:"index"`
+	Sequence uint64 `json:"sequence"`
+	Code     string `json:"code"`
+	Message  string `json:"message"`
+}
+
+type UploadResult struct {
+	Response   *BatchResponse
+	StatusCode int
+	Retryable  bool
+}
+
+func (c *IngestClient) Upload(ctx context.Context, records []domain.Record, uploadedAt time.Time) (*UploadResult, error) {
+	wire := make([]wireRecord, len(records))
+	for i, r := range records {
+		wire[i] = wireRecord{
+			Sequence:       r.Sequence,
+			SiteID:         r.SiteID,
+			GatewayID:      r.GatewayID,
+			DeviceID:       r.DeviceID,
+			AssetType:      string(r.AssetType),
+			MQTTTopic:      r.MQTTTopic,
+			Payload:        r.Payload,
+			Priority:       int(r.Priority),
+			EventTimestamp: r.EventTimestamp,
+			EdgeReceivedAt: r.EdgeReceivedAt,
+			UploadedAt:     uploadedAt,
+		}
+	}
+
+	body, err := json.Marshal(batchRequest{Records: wire})
+	if err != nil {
+		return nil, fmt.Errorf("marshal upload batch: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create upload request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return &UploadResult{Retryable: true}, fmt.Errorf("send upload request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return &UploadResult{StatusCode: resp.StatusCode, Retryable: true}, fmt.Errorf("read upload response: %w", err)
+	}
+
+	// 401 is terminal — retrying with the same key will never succeed.
+	if resp.StatusCode == http.StatusUnauthorized {
+		return &UploadResult{StatusCode: resp.StatusCode, Retryable: false},
+			fmt.Errorf("authentication failed (HTTP %d)", resp.StatusCode)
+	}
+
+	if resp.StatusCode >= 500 {
+		return &UploadResult{StatusCode: resp.StatusCode, Retryable: true},
+			fmt.Errorf("server error (HTTP %d): %s", resp.StatusCode, truncate(string(respBody), 256))
+	}
+
+	var batchResp BatchResponse
+	if err := json.Unmarshal(respBody, &batchResp); err != nil {
+		return &UploadResult{StatusCode: resp.StatusCode, Retryable: true},
+			fmt.Errorf("decode upload response: %w", err)
+	}
+
+	return &UploadResult{
+		Response:   &batchResp,
+		StatusCode: resp.StatusCode,
+		Retryable:  false,
+	}, nil
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}

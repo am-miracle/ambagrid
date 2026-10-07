@@ -26,6 +26,8 @@ func NewAPIKeyAuth(entries []APIKeyEntry) *APIKeyAuth {
 	return &APIKeyAuth{keys: keys}
 }
 
+// Authenticate checks every registered key with constant-time comparison to
+// avoid leaking which key prefix matched via timing.
 func (a *APIKeyAuth) Authenticate(r *http.Request) (string, error) {
 	key := extractBearerToken(r)
 	if key == "" {

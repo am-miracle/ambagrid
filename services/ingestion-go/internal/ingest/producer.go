@@ -22,6 +22,9 @@ func NewKafkaProducer(client *kgo.Client, topic string, timeout time.Duration) *
 	return &KafkaProducer{client: client, topic: topic, timeout: timeout}
 }
 
+// Produce transcodes the JSON payload to the same binary protobuf the MQTT
+// bridge emits, so downstream consumers see a uniform wire format regardless
+// of whether the record arrived via MQTT or HTTP.
 func (p *KafkaProducer) Produce(ctx context.Context, siteID string, rec IngestRecord) error {
 	value, err := transcodePayload(rec.Payload)
 	if err != nil {

@@ -7,7 +7,7 @@ import (
 	"edge-agent-go/internal/domain"
 )
 
-const schemaVersion = 2
+const schemaVersion = 3
 
 const schema = `
 CREATE TABLE IF NOT EXISTS edge_identity (
@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS queue_events (
     event_at_ms         INTEGER NOT NULL,
     received_at_ms      INTEGER NOT NULL,
     persisted_at_ms     INTEGER NOT NULL,
+    uploaded_at_ms      INTEGER,
     status              TEXT NOT NULL CHECK (status IN ('persisted', 'pending_upload', 'uploaded', 'acknowledged', 'expired')),
     attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
     next_attempt_at_ms  INTEGER,
@@ -46,6 +47,10 @@ ALTER TABLE queue_events ADD COLUMN status TEXT NOT NULL DEFAULT 'pending_upload
     CHECK (status IN ('persisted', 'pending_upload', 'uploaded', 'acknowledged', 'expired'));
 DROP INDEX IF EXISTS queue_events_ready;
 CREATE INDEX queue_events_ready ON queue_events(status, next_attempt_at_ms, sequence);
+`
+
+const migrateV2ToV3 = `
+ALTER TABLE queue_events ADD COLUMN uploaded_at_ms INTEGER;
 `
 
 func (s *Store) initialize(ctx context.Context) error {
@@ -77,14 +82,31 @@ func (s *Store) migrateSchema(ctx context.Context, version int) error {
 	}
 	defer tx.Rollback()
 
-	statement := schema
-	description := "create queue schema"
-	if version == 1 {
-		statement = migrateV1ToV2
-		description = "migrate queue schema from version 1 to 2"
-	}
-	if _, err := tx.ExecContext(ctx, statement); err != nil {
-		return fmt.Errorf("%s: %w", description, err)
+	// Fresh databases get the full schema; existing ones apply only the
+	// incremental migrations they haven't seen yet. The base schema already
+	// includes all columns, so running incremental ALTERs on version 0
+	// would fail with duplicate column errors.
+	if version == 0 {
+		if _, err := tx.ExecContext(ctx, schema); err != nil {
+			return fmt.Errorf("create queue schema: %w", err)
+		}
+	} else {
+		incremental := []struct {
+			from      int
+			statement string
+			desc      string
+		}{
+			{1, migrateV1ToV2, "migrate queue schema from version 1 to 2"},
+			{2, migrateV2ToV3, "migrate queue schema from version 2 to 3"},
+		}
+		for _, m := range incremental {
+			if version > m.from {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, m.statement); err != nil {
+				return fmt.Errorf("%s: %w", m.desc, err)
+			}
+		}
 	}
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
 		return fmt.Errorf("record queue schema version: %w", err)

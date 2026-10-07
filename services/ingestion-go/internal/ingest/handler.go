@@ -1,3 +1,6 @@
+// ingest receives telemetry batches from edge agents over HTTP, deduplicates
+// on (site_id, sequence), validates each record, and forwards accepted records
+// to Kafka as protobuf — the same wire format the MQTT bridge produces.
 package ingest
 
 import (
@@ -125,6 +128,9 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		// TryInsert returns (true, nil) on first insert, (false, nil) if
+		// already seen. Duplicates count as accepted so the edge agent
+		// advances its cursor — the data is already in Kafka.
 		stored, err := h.store.TryInsert(r.Context(), siteID, rec.Sequence)
 		if err != nil {
 			h.logger.Error("dedup store error", "error", err, "site_id", siteID, "sequence", rec.Sequence, "request_id", reqID)
@@ -143,6 +149,7 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 
 		if err := h.producer.Produce(r.Context(), siteID, rec); err != nil {
 			h.logger.Error("kafka produce failed", "error", err, "site_id", siteID, "sequence", rec.Sequence, "request_id", reqID)
+			// Roll back the dedup entry so the edge agent can retry this sequence.
 			_ = h.store.Remove(r.Context(), siteID, rec.Sequence)
 			rejected = append(rejected, RecordError{
 				Index:    i,

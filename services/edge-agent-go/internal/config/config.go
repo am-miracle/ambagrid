@@ -1,4 +1,4 @@
-// Package config loads the edge agent's deployment settings from the environment.
+// config loads the edge agent's deployment settings from the environment.
 package config
 
 import (
@@ -25,6 +25,7 @@ const (
 type Config struct {
 	Queue      QueueConfig
 	Collector  CollectorConfig
+	Uploader   UploaderConfig
 	HealthAddr string
 }
 
@@ -32,6 +33,19 @@ type CollectorConfig struct {
 	Enabled  bool
 	Region   string
 	Interval time.Duration
+}
+
+type UploaderConfig struct {
+	Enabled       bool
+	Endpoint      string
+	APIKey        string
+	BatchSize     int
+	BatchMaxBytes int64
+	PollInterval  time.Duration
+	Timeout       time.Duration
+	BaseDelay     time.Duration
+	MaxDelay      time.Duration
+	MaxRetries    int
 }
 
 type QueueConfig struct {
@@ -75,6 +89,39 @@ func FromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	uploaderEnabled, err := envBool("EDGE_UPLOADER_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	uploaderBatchSize, err := envInt("EDGE_UPLOADER_BATCH_SIZE", 50)
+	if err != nil {
+		return Config{}, err
+	}
+	uploaderBatchMaxBytes, err := envInt64("EDGE_UPLOADER_BATCH_MAX_BYTES", 1<<20)
+	if err != nil {
+		return Config{}, err
+	}
+	uploaderPollInterval, err := envDuration("EDGE_UPLOADER_POLL_INTERVAL", 5*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	uploaderTimeout, err := envDuration("EDGE_UPLOADER_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	uploaderBaseDelay, err := envDuration("EDGE_UPLOADER_BASE_DELAY", 1*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	uploaderMaxDelay, err := envDuration("EDGE_UPLOADER_MAX_DELAY", 5*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	uploaderMaxRetries, err := envInt("EDGE_UPLOADER_MAX_RETRIES", 20)
+	if err != nil {
+		return Config{}, err
+	}
+
 	collectorEnabled, err := envBool("EDGE_SIMULATOR_ENABLED", defaultCollectorEnabled)
 	if err != nil {
 		return Config{}, err
@@ -84,7 +131,7 @@ func FromEnv() (Config, error) {
 		return Config{}, err
 	}
 
-	return Config{
+	cfg := Config{
 		Queue: QueueConfig{
 			Path:                   envString("EDGE_QUEUE_PATH", defaultQueuePath),
 			SiteID:                 siteID,
@@ -100,8 +147,31 @@ func FromEnv() (Config, error) {
 			Region:   envString("EDGE_REGION", defaultRegion),
 			Interval: collectorInterval,
 		},
+		Uploader: UploaderConfig{
+			Enabled:       uploaderEnabled,
+			Endpoint:      envString("EDGE_UPLOADER_ENDPOINT", ""),
+			APIKey:        os.Getenv("EDGE_UPLOADER_API_KEY"),
+			BatchSize:     uploaderBatchSize,
+			BatchMaxBytes: uploaderBatchMaxBytes,
+			PollInterval:  uploaderPollInterval,
+			Timeout:       uploaderTimeout,
+			BaseDelay:     uploaderBaseDelay,
+			MaxDelay:      uploaderMaxDelay,
+			MaxRetries:    uploaderMaxRetries,
+		},
 		HealthAddr: envString("EDGE_HEALTH_ADDR", defaultHealthAddr),
-	}, nil
+	}
+
+	if cfg.Uploader.Enabled {
+		if cfg.Uploader.Endpoint == "" {
+			return Config{}, fmt.Errorf("EDGE_UPLOADER_ENDPOINT must be set when uploader is enabled")
+		}
+		if cfg.Uploader.APIKey == "" {
+			return Config{}, fmt.Errorf("EDGE_UPLOADER_API_KEY must be set when uploader is enabled")
+		}
+	}
+
+	return cfg, nil
 }
 
 func envBool(key string, fallback bool) (bool, error) {

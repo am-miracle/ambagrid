@@ -1,3 +1,9 @@
+// edge-agent-go runs on-site near physical hardware. It collects readings from
+// meters, batteries, and inverters, persists them in a SQLite durable queue,
+// and uploads batches to the ingestion service over HTTP. The queue survives
+// power loss and connectivity gaps — records are only removed after the server
+// acknowledges them. All configuration is environment-based so the same binary
+// runs across sites with different identities and endpoints.
 package main
 
 import (
@@ -17,6 +23,7 @@ import (
 	"edge-agent-go/internal/config"
 	"edge-agent-go/internal/health"
 	queuesqlite "edge-agent-go/internal/repository/sqlite"
+	"edge-agent-go/internal/uploader"
 )
 
 func main() {
@@ -53,12 +60,13 @@ func run() (runErr error) {
 		}
 	}()
 
-	var collectorWG sync.WaitGroup
-	collectorCtx, cancelCollector := context.WithCancel(ctx)
+	var workerWG sync.WaitGroup
+	workerCtx, cancelWorkers := context.WithCancel(ctx)
 	defer func() {
-		cancelCollector()
-		collectorWG.Wait()
+		cancelWorkers()
+		workerWG.Wait()
 	}()
+
 	if cfg.Collector.Enabled {
 		telemetryCollector, err := collector.New(collector.Config{
 			SiteID:   cfg.Queue.SiteID,
@@ -68,10 +76,32 @@ func run() (runErr error) {
 		if err != nil {
 			return fmt.Errorf("configure telemetry collector: %w", err)
 		}
-		collectorWG.Add(1)
+		workerWG.Add(1)
 		go func() {
-			defer collectorWG.Done()
-			telemetryCollector.Run(collectorCtx)
+			defer workerWG.Done()
+			telemetryCollector.Run(workerCtx)
+		}()
+	}
+
+	if cfg.Uploader.Enabled {
+		client := uploader.NewIngestClient(
+			cfg.Uploader.Endpoint,
+			cfg.Uploader.APIKey,
+			cfg.Uploader.Timeout,
+		)
+		ul := uploader.New(uploader.Config{
+			BatchSize:     cfg.Uploader.BatchSize,
+			BatchMaxBytes: cfg.Uploader.BatchMaxBytes,
+			PollInterval:  cfg.Uploader.PollInterval,
+			BaseDelay:     cfg.Uploader.BaseDelay,
+			MaxDelay:      cfg.Uploader.MaxDelay,
+			MaxRetries:    cfg.Uploader.MaxRetries,
+		}, durableQueue, client)
+		workerWG.Add(1)
+		go func() {
+			defer workerWG.Done()
+			slog.Info("uploader started", "endpoint", cfg.Uploader.Endpoint)
+			ul.Run(workerCtx)
 		}()
 	}
 

@@ -17,7 +17,7 @@ func (s *Store) Ready(ctx context.Context, limit int, maxBytes int64) ([]domain.
 	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT sequence, site_id, gateway_id, device_id, asset_type, mqtt_topic, payload, priority, status,
-       event_at_ms, received_at_ms, persisted_at_ms, attempt_count,
+       event_at_ms, received_at_ms, persisted_at_ms, uploaded_at_ms, attempt_count,
        next_attempt_at_ms, COALESCE(last_error, '')
 FROM queue_events
 WHERE status = ?
@@ -41,11 +41,11 @@ LIMIT ?`, domain.StatusPendingUpload, time.Now().UTC().UnixMilli(), limit)
 	for rows.Next() {
 		var record domain.Record
 		var eventMS, receivedMS, persistedMS int64
-		var nextAttemptMS sql.NullInt64
+		var uploadedMS, nextAttemptMS sql.NullInt64
 		if err := rows.Scan(
 			&record.Sequence, &record.SiteID, &record.GatewayID, &record.DeviceID, &record.AssetType,
 			&record.MQTTTopic, &record.Payload, &record.Priority, &record.Status, &eventMS,
-			&receivedMS, &persistedMS, &record.AttemptCount, &nextAttemptMS,
+			&receivedMS, &persistedMS, &uploadedMS, &record.AttemptCount, &nextAttemptMS,
 			&record.LastError,
 		); err != nil {
 			return nil, fmt.Errorf("scan ready event: %w", err)
@@ -56,6 +56,10 @@ LIMIT ?`, domain.StatusPendingUpload, time.Now().UTC().UnixMilli(), limit)
 		record.EventTimestamp = time.UnixMilli(eventMS).UTC()
 		record.EdgeReceivedAt = time.UnixMilli(receivedMS).UTC()
 		record.PersistedAt = time.UnixMilli(persistedMS).UTC()
+		if uploadedMS.Valid {
+			t := time.UnixMilli(uploadedMS.Int64).UTC()
+			record.UploadedAt = &t
+		}
 		if nextAttemptMS.Valid {
 			next := time.UnixMilli(nextAttemptMS.Int64).UTC()
 			record.NextAttemptAt = &next
@@ -72,16 +76,16 @@ LIMIT ?`, domain.StatusPendingUpload, time.Now().UTC().UnixMilli(), limit)
 func (s *Store) Record(ctx context.Context, sequence uint64) (domain.Record, error) {
 	var record domain.Record
 	var eventMS, receivedMS, persistedMS int64
-	var nextAttemptMS sql.NullInt64
+	var uploadedMS, nextAttemptMS sql.NullInt64
 	err := s.db.QueryRowContext(ctx, `
 SELECT sequence, site_id, gateway_id, device_id, asset_type, mqtt_topic, payload, priority, status,
-       event_at_ms, received_at_ms, persisted_at_ms, attempt_count,
+       event_at_ms, received_at_ms, persisted_at_ms, uploaded_at_ms, attempt_count,
        next_attempt_at_ms, COALESCE(last_error, '')
 FROM queue_events
 WHERE sequence = ?`, sequence).Scan(
 		&record.Sequence, &record.SiteID, &record.GatewayID, &record.DeviceID, &record.AssetType,
 		&record.MQTTTopic, &record.Payload, &record.Priority, &record.Status, &eventMS,
-		&receivedMS, &persistedMS, &record.AttemptCount, &nextAttemptMS, &record.LastError,
+		&receivedMS, &persistedMS, &uploadedMS, &record.AttemptCount, &nextAttemptMS, &record.LastError,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Record{}, fmt.Errorf("%w: sequence %d", domain.ErrEventNotFound, sequence)
@@ -92,6 +96,10 @@ WHERE sequence = ?`, sequence).Scan(
 	record.EventTimestamp = time.UnixMilli(eventMS).UTC()
 	record.EdgeReceivedAt = time.UnixMilli(receivedMS).UTC()
 	record.PersistedAt = time.UnixMilli(persistedMS).UTC()
+	if uploadedMS.Valid {
+		t := time.UnixMilli(uploadedMS.Int64).UTC()
+		record.UploadedAt = &t
+	}
 	if nextAttemptMS.Valid {
 		next := time.UnixMilli(nextAttemptMS.Int64).UTC()
 		record.NextAttemptAt = &next

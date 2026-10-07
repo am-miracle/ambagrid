@@ -1,4 +1,4 @@
-// Package collector reads hardware adapters and persists normalized telemetry.
+// collector reads hardware adapters and persists normalized telemetry.
 package collector
 
 import (
@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	"edge-agent-go/internal/domain"
 )
 
 type Config struct {
@@ -18,12 +20,12 @@ type Config struct {
 
 type Collector struct {
 	cfg     Config
-	queue   Queue
+	queue   domain.Queue
 	sources []Source
 	now     func() time.Time
 }
 
-func New(cfg Config, queue Queue, sources ...Source) (*Collector, error) {
+func New(cfg Config, queue domain.Queue, sources ...Source) (*Collector, error) {
 	if strings.TrimSpace(cfg.SiteID) == "" || strings.TrimSpace(cfg.Region) == "" {
 		return nil, errors.New("collector site ID and region are required")
 	}

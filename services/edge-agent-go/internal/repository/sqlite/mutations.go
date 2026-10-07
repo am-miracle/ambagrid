@@ -96,8 +96,34 @@ func (s *Store) MarkPendingUpload(ctx context.Context, sequence uint64) error {
 	return s.transition(ctx, sequence, domain.StatusPersisted, domain.StatusPendingUpload)
 }
 
-func (s *Store) MarkUploaded(ctx context.Context, sequence uint64) error {
-	return s.transition(ctx, sequence, domain.StatusPendingUpload, domain.StatusUploaded)
+// MarkUploaded uses a dedicated UPDATE instead of the generic transition()
+// because it also stamps uploaded_at_ms in the same write.
+func (s *Store) MarkUploaded(ctx context.Context, sequence uint64, uploadedAt time.Time) error {
+	result, err := s.db.ExecContext(ctx, `
+UPDATE queue_events
+SET status = ?, uploaded_at_ms = ?, next_attempt_at_ms = NULL, last_error = NULL
+WHERE sequence = ? AND status = ?`, domain.StatusUploaded, uploadedAt.UTC().UnixMilli(), sequence, domain.StatusPendingUpload)
+	if err != nil {
+		return fmt.Errorf("mark queue event %d uploaded: %w", sequence, err)
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read upload mark result: %w", err)
+	}
+	if updated > 0 {
+		return nil
+	}
+	var current domain.EventStatus
+	if err := s.db.QueryRowContext(ctx, "SELECT status FROM queue_events WHERE sequence = ?", sequence).Scan(&current); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: sequence %d", domain.ErrEventNotFound, sequence)
+		}
+		return fmt.Errorf("read queue event %d status: %w", sequence, err)
+	}
+	if current == domain.StatusUploaded {
+		return nil
+	}
+	return fmt.Errorf("%w: sequence %d is %s, expected %s before %s", domain.ErrInvalidTransition, sequence, current, domain.StatusPendingUpload, domain.StatusUploaded)
 }
 
 func (s *Store) Ack(ctx context.Context, sequence uint64) error {

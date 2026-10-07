@@ -123,7 +123,7 @@ func TestCommittedEventsSurviveRestartWithoutReusingSequence(t *testing.T) {
 		t.Fatalf("reloaded identity = (%s, %s, %d), want (%s, %s, %d)", records[0].SiteID, records[0].GatewayID, records[0].Sequence, cfg.SiteID, cfg.GatewayID, first)
 	}
 
-	if err := q.MarkUploaded(ctx, first); err != nil {
+	if err := q.MarkUploaded(ctx, first, time.Now().UTC()); err != nil {
 		t.Fatalf("mark first event uploaded: %v", err)
 	}
 	if err := q.Ack(ctx, first); err != nil {

@@ -1,3 +1,6 @@
+// dedup.go tracks seen (site_id, sequence) pairs in memory. This is sufficient
+// for single-instance deployments; a multi-replica setup would swap this for a
+// Redis or database-backed implementation behind the DedupStore interface.
 package ingest
 
 import (
