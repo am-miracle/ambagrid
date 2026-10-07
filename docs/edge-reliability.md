@@ -135,3 +135,24 @@ Network goes down
   -> edge agent replays events
   -> upstream records show original timestamps and replay status
 ```
+
+## Edge Queue Prototype
+
+The first Milestone 3 component lives in `services/edge-agent-go`. It provides:
+
+- a power-loss durable SQLite queue in WAL mode with full commit syncing
+- stable site and gateway identity plus non-reused, increasing sequence numbers
+- per-device ordered reads, acknowledgement, and retry scheduling
+- a hard SQLite page limit, a filesystem free-space reserve, and a reserved
+  capacity band for critical events
+- local `/health` and Prometheus `/metrics` endpoints
+- a simulated smart meter, battery BMS, and solar inverter collector
+- normalized records carrying the site-local sequence, measurement and receive
+  timestamps, device identity, asset type, payload, and lifecycle status
+
+The collector persists each normalized reading before promoting it to
+`pending_upload`. On restart, committed `persisted` rows are recovered into the
+upload queue. Upload remains the next step; it should mark a record `uploaded`
+after publishing and `acknowledged` only after the upstream broker confirms
+delivery. The database is bound to one site identity, making `(site_id,
+sequence)` the stable idempotency key for this deployment model.

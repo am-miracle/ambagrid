@@ -54,6 +54,7 @@ proto/                 shared telemetry contracts
 scripts/               local developer tools and simulators
 services/api-go/       Go read API (asset state, alerts)
 services/ingestion-go/ MQTT to Redpanda bridge
+services/edge-agent-go/ Site-local durable telemetry queue
 services/engine-rust/  Rust grid engine
 docs/                  architecture and hardware notes
 ```
@@ -86,6 +87,14 @@ For the ingestion service:
 
 ```bash
 cd services/ingestion-go
+gofmt -w .
+go test ./...
+```
+
+For the edge agent:
+
+```bash
+cd services/edge-agent-go
 gofmt -w .
 go test ./...
 ```
