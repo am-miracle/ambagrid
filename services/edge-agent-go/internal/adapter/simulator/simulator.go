@@ -1,4 +1,4 @@
-// Package simulator supplies deterministic meter, battery, and inverter readings.
+// simulator supplies deterministic meter, battery, and inverter readings.
 package simulator
 
 import (

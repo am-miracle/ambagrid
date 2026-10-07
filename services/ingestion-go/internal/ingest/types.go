@@ -17,6 +17,8 @@ type IngestRecord struct {
 	Priority       int       `json:"priority"`
 	EventTimestamp time.Time `json:"event_timestamp"`
 	EdgeReceivedAt time.Time `json:"edge_received_at"`
+	UploadedAt     time.Time `json:"uploaded_at"`
+	Replay         bool      `json:"replay"`
 }
 
 type BatchResponse struct {

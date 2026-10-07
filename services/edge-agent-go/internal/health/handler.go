@@ -1,4 +1,4 @@
-// Package health exposes local health and Prometheus metrics for the edge queue.
+// health exposes local health and Prometheus metrics for the edge queue.
 package health
 
 import (

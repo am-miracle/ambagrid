@@ -192,6 +192,9 @@ func validateRecord(rec IngestRecord, expectedSiteID string) error {
 	if strings.TrimSpace(rec.SiteID) == "" {
 		errs = append(errs, "site_id is required")
 	}
+	if strings.TrimSpace(rec.GatewayID) == "" {
+		errs = append(errs, "gateway_id is required")
+	}
 	if strings.TrimSpace(rec.DeviceID) == "" {
 		errs = append(errs, "device_id is required")
 	}
@@ -203,6 +206,9 @@ func validateRecord(rec IngestRecord, expectedSiteID string) error {
 	}
 	if rec.EventTimestamp.IsZero() {
 		errs = append(errs, "event_timestamp is required")
+	}
+	if rec.UploadedAt.IsZero() {
+		errs = append(errs, "uploaded_at is required")
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("%s", strings.Join(errs, "; "))

@@ -1,4 +1,4 @@
-// Package sqlite persists the edge agent's durable store-and-forward queue.
+// sqlite persists the edge agent's durable store-and-forward queue.
 package sqlite
 
 import (

@@ -3,6 +3,7 @@ package ingest
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -39,8 +40,14 @@ func (p *KafkaProducer) Produce(ctx context.Context, siteID string, rec IngestRe
 			{Key: "mqtt_topic", Value: []byte(rec.MQTTTopic)},
 			{Key: "region", Value: regionFromTopic(rec.MQTTTopic)},
 			{Key: "site_id", Value: []byte(siteID)},
+			{Key: "gateway_id", Value: []byte(rec.GatewayID)},
 			{Key: "device_type", Value: []byte(rec.AssetType)},
 			{Key: "device_id", Value: []byte(rec.DeviceID)},
+			{Key: "sequence", Value: []byte(strconv.FormatUint(rec.Sequence, 10))},
+			{Key: "event_timestamp", Value: []byte(rec.EventTimestamp.UTC().Format(time.RFC3339Nano))},
+			{Key: "edge_received_at", Value: []byte(rec.EdgeReceivedAt.UTC().Format(time.RFC3339Nano))},
+			{Key: "uploaded_at", Value: []byte(rec.UploadedAt.UTC().Format(time.RFC3339Nano))},
+			{Key: "replay", Value: []byte(strconv.FormatBool(rec.Replay))},
 			{Key: "source", Value: []byte("http")},
 		},
 	}
@@ -63,13 +70,10 @@ func transcodePayload(payload []byte) ([]byte, error) {
 }
 
 func regionFromTopic(mqttTopic string) []byte {
-	idx := 0
 	for i, c := range mqttTopic {
 		if c == '/' {
 			return []byte(mqttTopic[:i])
 		}
-		idx = i
 	}
-	_ = idx
 	return []byte(mqttTopic)
 }

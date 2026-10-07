@@ -57,6 +57,8 @@ func validRecord(seq uint64, siteID string) ingest.IngestRecord {
 		Priority:       0,
 		EventTimestamp: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		EdgeReceivedAt: time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC),
+		UploadedAt:     time.Date(2026, 1, 1, 0, 0, 2, 0, time.UTC),
+		Replay:         false,
 	}
 }
 

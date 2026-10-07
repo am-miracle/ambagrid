@@ -47,7 +47,14 @@ type wireRecord struct {
 	EventTimestamp time.Time `json:"event_timestamp"`
 	EdgeReceivedAt time.Time `json:"edge_received_at"`
 	UploadedAt     time.Time `json:"uploaded_at"`
+	Replay         bool      `json:"replay"`
 }
+
+// replayThreshold is the minimum gap between event_timestamp and uploaded_at
+// that marks a record as replayed rather than real-time. Chosen to be well
+// above normal collection-to-upload latency but short enough to catch any
+// meaningful buffering.
+const replayThreshold = 2 * time.Minute
 
 type BatchResponse struct {
 	Accepted  []uint64      `json:"accepted"`
@@ -83,6 +90,7 @@ func (c *IngestClient) Upload(ctx context.Context, records []domain.Record, uplo
 			EventTimestamp: r.EventTimestamp,
 			EdgeReceivedAt: r.EdgeReceivedAt,
 			UploadedAt:     uploadedAt,
+			Replay:         uploadedAt.Sub(r.EventTimestamp) >= replayThreshold,
 		}
 	}
 

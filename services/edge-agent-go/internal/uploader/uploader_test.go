@@ -231,6 +231,58 @@ func TestUploader_UploadedAtTimestamp(t *testing.T) {
 	cancel()
 }
 
+func TestUploader_ReplayFlag(t *testing.T) {
+	var received struct {
+		Records []struct {
+			Sequence uint64 `json:"sequence"`
+			Replay   bool   `json:"replay"`
+		} `json:"records"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&received)
+		accepted := make([]uint64, len(received.Records))
+		for i, r := range received.Records {
+			accepted[i] = r.Sequence
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(uploader.BatchResponse{Accepted: accepted})
+	}))
+	defer server.Close()
+
+	// Old record: event_timestamp far in the past → replay=true
+	old := testRecord(1)
+	old.EventTimestamp = time.Now().UTC().Add(-3 * time.Hour)
+
+	// Fresh record: event_timestamp just now → replay=false
+	fresh := testRecord(2)
+	fresh.EventTimestamp = time.Now().UTC().Add(-10 * time.Second)
+
+	queue := newFakeQueue([]domain.Record{old, fresh})
+	client := uploader.NewIngestClient(server.URL+"/v1/ingest", "test-key", 5*time.Second)
+	ul := uploader.New(uploader.Config{
+		BatchSize:     50,
+		BatchMaxBytes: 1 << 20,
+		PollInterval:  time.Hour,
+	}, queue, client)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go ul.Run(ctx)
+	time.Sleep(500 * time.Millisecond)
+	cancel()
+
+	if len(received.Records) != 2 {
+		t.Fatalf("expected 2 records, got %d", len(received.Records))
+	}
+	if !received.Records[0].Replay {
+		t.Error("old record (3h delay) should have replay=true")
+	}
+	if received.Records[1].Replay {
+		t.Error("fresh record (10s delay) should have replay=false")
+	}
+}
+
 func TestUploader_EmptyQueue(t *testing.T) {
 	queue := newFakeQueue(nil)
 	client := uploader.NewIngestClient("http://localhost:0/v1/ingest", "test-key", 5*time.Second)
