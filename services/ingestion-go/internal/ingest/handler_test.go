@@ -193,6 +193,22 @@ func TestIngest_ValidationErrors(t *testing.T) {
 	}
 }
 
+func TestIngest_RejectsCriticalCodeForWrongAssetType(t *testing.T) {
+	h := newHandler(
+		&stubAuth{siteID: "site-01"},
+		ingest.NewMemoryDedupStore(),
+		&stubProducer{},
+	)
+
+	rec := validRecord(1, "site-01")
+	rec.CriticalCode = "INVERTER_FAILURE"
+	w := postBatch(h, []ingest.IngestRecord{rec})
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestIngest_SiteMismatch(t *testing.T) {
 	h := newHandler(
 		&stubAuth{siteID: "site-01"},

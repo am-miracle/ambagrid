@@ -18,7 +18,7 @@ func (s *Store) Ready(ctx context.Context, limit int, maxBytes int64) ([]domain.
 	rows, err := s.db.QueryContext(ctx, `
 SELECT sequence, site_id, gateway_id, device_id, asset_type, mqtt_topic, payload, priority, status,
        event_at_ms, received_at_ms, persisted_at_ms, uploaded_at_ms, attempt_count,
-       next_attempt_at_ms, COALESCE(last_error, '')
+       next_attempt_at_ms, COALESCE(last_error, ''), COALESCE(critical_code, ''), critical_value
 FROM queue_events
 WHERE status = ?
   AND (next_attempt_at_ms IS NULL OR next_attempt_at_ms <= ?)
@@ -42,11 +42,12 @@ LIMIT ?`, domain.StatusPendingUpload, time.Now().UTC().UnixMilli(), limit)
 		var record domain.Record
 		var eventMS, receivedMS, persistedMS int64
 		var uploadedMS, nextAttemptMS sql.NullInt64
+		var criticalValue sql.NullFloat64
 		if err := rows.Scan(
 			&record.Sequence, &record.SiteID, &record.GatewayID, &record.DeviceID, &record.AssetType,
 			&record.MQTTTopic, &record.Payload, &record.Priority, &record.Status, &eventMS,
 			&receivedMS, &persistedMS, &uploadedMS, &record.AttemptCount, &nextAttemptMS,
-			&record.LastError,
+			&record.LastError, &record.CriticalCode, &criticalValue,
 		); err != nil {
 			return nil, fmt.Errorf("scan ready event: %w", err)
 		}
@@ -64,6 +65,10 @@ LIMIT ?`, domain.StatusPendingUpload, time.Now().UTC().UnixMilli(), limit)
 			next := time.UnixMilli(nextAttemptMS.Int64).UTC()
 			record.NextAttemptAt = &next
 		}
+		if criticalValue.Valid {
+			value := criticalValue.Float64
+			record.CriticalValue = &value
+		}
 		records = append(records, record)
 		totalBytes += int64(len(record.Payload))
 	}
@@ -77,15 +82,17 @@ func (s *Store) Record(ctx context.Context, sequence uint64) (domain.Record, err
 	var record domain.Record
 	var eventMS, receivedMS, persistedMS int64
 	var uploadedMS, nextAttemptMS sql.NullInt64
+	var criticalValue sql.NullFloat64
 	err := s.db.QueryRowContext(ctx, `
 SELECT sequence, site_id, gateway_id, device_id, asset_type, mqtt_topic, payload, priority, status,
        event_at_ms, received_at_ms, persisted_at_ms, uploaded_at_ms, attempt_count,
-       next_attempt_at_ms, COALESCE(last_error, '')
+       next_attempt_at_ms, COALESCE(last_error, ''), COALESCE(critical_code, ''), critical_value
 FROM queue_events
 WHERE sequence = ?`, sequence).Scan(
 		&record.Sequence, &record.SiteID, &record.GatewayID, &record.DeviceID, &record.AssetType,
 		&record.MQTTTopic, &record.Payload, &record.Priority, &record.Status, &eventMS,
 		&receivedMS, &persistedMS, &uploadedMS, &record.AttemptCount, &nextAttemptMS, &record.LastError,
+		&record.CriticalCode, &criticalValue,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Record{}, fmt.Errorf("%w: sequence %d", domain.ErrEventNotFound, sequence)
@@ -103,6 +110,10 @@ WHERE sequence = ?`, sequence).Scan(
 	if nextAttemptMS.Valid {
 		next := time.UnixMilli(nextAttemptMS.Int64).UTC()
 		record.NextAttemptAt = &next
+	}
+	if criticalValue.Valid {
+		value := criticalValue.Float64
+		record.CriticalValue = &value
 	}
 	return record, nil
 }

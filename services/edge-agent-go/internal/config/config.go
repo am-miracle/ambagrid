@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -26,7 +27,22 @@ type Config struct {
 	Queue      QueueConfig
 	Collector  CollectorConfig
 	Uploader   UploaderConfig
+	SMS        SMSConfig
 	HealthAddr string
+}
+
+type SMSConfig struct {
+	Enabled          bool
+	Destination      string
+	ModemID          string
+	PollInterval     time.Duration
+	FailureThreshold int
+	OfflineAfter     time.Duration
+	MaxAttempts      int
+	HourlyLimit      int
+	DailyLimit       int
+	RetryInterval    time.Duration
+	BatteryOverheatC float64
 }
 
 type CollectorConfig struct {
@@ -121,6 +137,42 @@ func FromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	smsEnabled, err := envBool("EDGE_SMS_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	smsPollInterval, err := envDuration("EDGE_SMS_POLL_INTERVAL", 5*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	smsOfflineAfter, err := envDuration("EDGE_SMS_OFFLINE_AFTER", 2*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	smsRetryInterval, err := envDuration("EDGE_SMS_RETRY_INTERVAL", 5*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	smsFailureThreshold, err := envInt("EDGE_SMS_FAILURE_THRESHOLD", 3)
+	if err != nil {
+		return Config{}, err
+	}
+	smsMaxAttempts, err := envInt("EDGE_SMS_MAX_ATTEMPTS", 3)
+	if err != nil {
+		return Config{}, err
+	}
+	smsHourlyLimit, err := envInt("EDGE_SMS_HOURLY_LIMIT", 6)
+	if err != nil {
+		return Config{}, err
+	}
+	smsDailyLimit, err := envInt("EDGE_SMS_DAILY_LIMIT", 20)
+	if err != nil {
+		return Config{}, err
+	}
+	batteryOverheatC, err := envFloat("EDGE_SMS_BATTERY_OVERHEAT_C", 55)
+	if err != nil {
+		return Config{}, err
+	}
 
 	collectorEnabled, err := envBool("EDGE_SIMULATOR_ENABLED", defaultCollectorEnabled)
 	if err != nil {
@@ -159,6 +211,12 @@ func FromEnv() (Config, error) {
 			MaxDelay:      uploaderMaxDelay,
 			MaxRetries:    uploaderMaxRetries,
 		},
+		SMS: SMSConfig{
+			Enabled: smsEnabled, Destination: envString("EDGE_SMS_DESTINATION", ""), ModemID: envString("EDGE_SMS_MODEM_ID", "0"),
+			PollInterval: smsPollInterval, FailureThreshold: smsFailureThreshold, OfflineAfter: smsOfflineAfter,
+			MaxAttempts: smsMaxAttempts, HourlyLimit: smsHourlyLimit, DailyLimit: smsDailyLimit,
+			RetryInterval: smsRetryInterval, BatteryOverheatC: batteryOverheatC,
+		},
 		HealthAddr: envString("EDGE_HEALTH_ADDR", defaultHealthAddr),
 	}
 
@@ -170,8 +228,29 @@ func FromEnv() (Config, error) {
 			return Config{}, fmt.Errorf("EDGE_UPLOADER_API_KEY must be set when uploader is enabled")
 		}
 	}
+	if cfg.SMS.Enabled && cfg.SMS.Destination == "" {
+		return Config{}, fmt.Errorf("EDGE_SMS_DESTINATION must be set when SMS fallback is enabled")
+	}
+	if cfg.SMS.FailureThreshold < 1 || cfg.SMS.MaxAttempts < 1 || cfg.SMS.HourlyLimit < 1 || cfg.SMS.DailyLimit < 1 || cfg.SMS.BatteryOverheatC <= 0 {
+		return Config{}, fmt.Errorf("SMS fallback thresholds and limits must be positive")
+	}
 
 	return cfg, nil
+}
+
+func envFloat(key string, fallback float64) (float64, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a number: %w", key, err)
+	}
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0, fmt.Errorf("%s must be finite", key)
+	}
+	return value, nil
 }
 
 func envBool(key string, fallback bool) (bool, error) {

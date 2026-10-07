@@ -21,6 +21,8 @@ type Event struct {
 	Priority       Priority
 	EventTimestamp time.Time
 	EdgeReceivedAt time.Time
+	CriticalCode   string
+	CriticalValue  *float64
 }
 
 // Record is a persisted Event enriched with queue lifecycle metadata.
@@ -45,4 +47,6 @@ type Record struct {
 	AttemptCount   int
 	NextAttemptAt  *time.Time
 	LastError      string
+	CriticalCode   string
+	CriticalValue  *float64
 }

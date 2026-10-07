@@ -50,3 +50,7 @@ type PaymentTx interface {
 type HealthRepository interface {
 	Ping(ctx context.Context) error
 }
+
+type FallbackRepository interface {
+	ReceiveSMS(context.Context, domain.CriticalFallbackEvent, domain.SMSReceipt) (bool, error)
+}

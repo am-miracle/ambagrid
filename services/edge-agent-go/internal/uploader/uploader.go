@@ -24,10 +24,17 @@ type Config struct {
 }
 
 type Uploader struct {
-	cfg    Config
-	queue  domain.Queue
-	client *IngestClient
-	now    func() time.Time
+	cfg     Config
+	queue   domain.Queue
+	client  *IngestClient
+	now     func() time.Time
+	tracker UploadTracker
+}
+
+type UploadTracker interface {
+	RecordFallbackUploadFailure(context.Context, uint64) error
+	RecordFallbackUploadSuccess(context.Context, uint64, time.Time) error
+	RecordUploadContactSuccess(context.Context, time.Time) error
 }
 
 func New(cfg Config, queue domain.Queue, client *IngestClient) *Uploader {
@@ -49,7 +56,11 @@ func New(cfg Config, queue domain.Queue, client *IngestClient) *Uploader {
 	if cfg.MaxRetries <= 0 {
 		cfg.MaxRetries = 20
 	}
-	return &Uploader{cfg: cfg, queue: queue, client: client, now: time.Now}
+	u := &Uploader{cfg: cfg, queue: queue, client: client, now: time.Now}
+	if tracker, ok := queue.(UploadTracker); ok {
+		u.tracker = tracker
+	}
+	return u
 }
 
 func (u *Uploader) Run(ctx context.Context) {
@@ -114,12 +125,17 @@ func (u *Uploader) uploadBatch(ctx context.Context) (int, error) {
 		u.handleFailure(ctx, records, result, err)
 		return 0, err
 	}
+	if u.tracker != nil {
+		if err := u.tracker.RecordUploadContactSuccess(ctx, uploadedAt); err != nil {
+			slog.Error("record upload contact", "error", err)
+		}
+	}
 
-	u.processResponse(ctx, records, result)
+	u.processResponse(ctx, records, result, uploadedAt)
 	return len(records), nil
 }
 
-func (u *Uploader) processResponse(ctx context.Context, records []domain.Record, result *UploadResult) {
+func (u *Uploader) processResponse(ctx context.Context, records []domain.Record, result *UploadResult, uploadedAt time.Time) {
 	if result.Response == nil {
 		return
 	}
@@ -136,6 +152,12 @@ func (u *Uploader) processResponse(ctx context.Context, records []domain.Record,
 
 	for _, r := range records {
 		if acceptedSet[r.Sequence] {
+			if u.tracker != nil {
+				if err := u.tracker.RecordFallbackUploadSuccess(ctx, r.Sequence, uploadedAt); err != nil {
+					slog.Error("record critical upload success", "sequence", r.Sequence, "error", err)
+					continue
+				}
+			}
 			if err := u.queue.Ack(ctx, r.Sequence); err != nil {
 				slog.Error("ack record", "sequence", r.Sequence, "error", err)
 			}
@@ -148,6 +170,7 @@ func (u *Uploader) processResponse(ctx context.Context, records []domain.Record,
 			if err := u.queue.MarkFailed(ctx, r.Sequence, retryAt, cause); err != nil {
 				slog.Error("mark failed", "sequence", r.Sequence, "error", err)
 			}
+			u.recordFallbackFailure(ctx, r.Sequence)
 			slog.Warn("record rejected by server",
 				"sequence", r.Sequence,
 				"code", rej.Code,
@@ -168,6 +191,16 @@ func (u *Uploader) handleFailure(ctx context.Context, records []domain.Record, r
 		if err := u.queue.MarkFailed(ctx, r.Sequence, retryAt, cause); err != nil {
 			slog.Error("mark failed after upload error", "sequence", r.Sequence, "error", err)
 		}
+		u.recordFallbackFailure(ctx, r.Sequence)
+	}
+}
+
+func (u *Uploader) recordFallbackFailure(ctx context.Context, sequence uint64) {
+	if u.tracker == nil {
+		return
+	}
+	if err := u.tracker.RecordFallbackUploadFailure(ctx, sequence); err != nil {
+		slog.Error("record critical upload failure", "sequence", sequence, "error", err)
 	}
 }
 

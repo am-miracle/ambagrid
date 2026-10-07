@@ -7,7 +7,7 @@ import (
 	"edge-agent-go/internal/domain"
 )
 
-const schemaVersion = 3
+const schemaVersion = 4
 
 const schema = `
 CREATE TABLE IF NOT EXISTS edge_identity (
@@ -33,11 +33,50 @@ CREATE TABLE IF NOT EXISTS queue_events (
     status              TEXT NOT NULL CHECK (status IN ('persisted', 'pending_upload', 'uploaded', 'acknowledged', 'expired')),
     attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
     next_attempt_at_ms  INTEGER,
-    last_error          TEXT
+    last_error          TEXT,
+    critical_code       TEXT,
+    critical_value      REAL
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS queue_events_ready
     ON queue_events(status, next_attempt_at_ms, sequence);
+
+CREATE TABLE IF NOT EXISTS fallback_incidents (
+    event_key             TEXT PRIMARY KEY,
+    sequence              INTEGER NOT NULL UNIQUE,
+    site_id               TEXT NOT NULL,
+    asset_id              TEXT NOT NULL,
+    code                  TEXT NOT NULL,
+    temperature_c         REAL,
+    event_at_ms           INTEGER NOT NULL,
+    opened_at_ms          INTEGER NOT NULL,
+    resolved_at_ms        INTEGER,
+    normal_delivered_at_ms INTEGER,
+    sms_sent_at_ms        INTEGER,
+    upload_failures       INTEGER NOT NULL DEFAULT 0,
+    sms_attempt_count     INTEGER NOT NULL DEFAULT 0,
+    next_sms_attempt_at_ms INTEGER,
+    last_error            TEXT
+) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS fallback_incidents_active
+    ON fallback_incidents(asset_id, code) WHERE resolved_at_ms IS NULL;
+
+CREATE TABLE IF NOT EXISTS fallback_attempts (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_key       TEXT NOT NULL REFERENCES fallback_incidents(event_key),
+    attempted_at_ms INTEGER NOT NULL,
+    succeeded       INTEGER CHECK (succeeded IN (0, 1)),
+    failure_reason  TEXT,
+    UNIQUE(event_key, attempted_at_ms)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS edge_sync_state (
+    singleton                 INTEGER PRIMARY KEY CHECK (singleton = 1),
+    last_upload_success_at_ms INTEGER
+) STRICT;
+
+INSERT OR IGNORE INTO edge_sync_state(singleton) VALUES (1);
 `
 
 const migrateV1ToV2 = `
@@ -51,6 +90,43 @@ CREATE INDEX queue_events_ready ON queue_events(status, next_attempt_at_ms, sequ
 
 const migrateV2ToV3 = `
 ALTER TABLE queue_events ADD COLUMN uploaded_at_ms INTEGER;
+`
+
+const migrateV3ToV4 = `
+ALTER TABLE queue_events ADD COLUMN critical_code TEXT;
+ALTER TABLE queue_events ADD COLUMN critical_value REAL;
+CREATE TABLE fallback_incidents (
+    event_key             TEXT PRIMARY KEY,
+    sequence              INTEGER NOT NULL UNIQUE,
+    site_id               TEXT NOT NULL,
+    asset_id              TEXT NOT NULL,
+    code                  TEXT NOT NULL,
+    temperature_c         REAL,
+    event_at_ms           INTEGER NOT NULL,
+    opened_at_ms          INTEGER NOT NULL,
+    resolved_at_ms        INTEGER,
+    normal_delivered_at_ms INTEGER,
+    sms_sent_at_ms        INTEGER,
+    upload_failures       INTEGER NOT NULL DEFAULT 0,
+    sms_attempt_count     INTEGER NOT NULL DEFAULT 0,
+    next_sms_attempt_at_ms INTEGER,
+    last_error            TEXT
+) STRICT;
+CREATE UNIQUE INDEX fallback_incidents_active
+    ON fallback_incidents(asset_id, code) WHERE resolved_at_ms IS NULL;
+CREATE TABLE fallback_attempts (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_key       TEXT NOT NULL REFERENCES fallback_incidents(event_key),
+    attempted_at_ms INTEGER NOT NULL,
+    succeeded       INTEGER CHECK (succeeded IN (0, 1)),
+    failure_reason  TEXT,
+    UNIQUE(event_key, attempted_at_ms)
+) STRICT;
+CREATE TABLE edge_sync_state (
+    singleton                 INTEGER PRIMARY KEY CHECK (singleton = 1),
+    last_upload_success_at_ms INTEGER
+) STRICT;
+INSERT INTO edge_sync_state(singleton) VALUES (1);
 `
 
 func (s *Store) initialize(ctx context.Context) error {
@@ -72,7 +148,10 @@ func (s *Store) initialize(ctx context.Context) error {
 	if err := s.ensureIdentity(ctx); err != nil {
 		return err
 	}
-	return s.recoverPersisted(ctx)
+	if err := s.recoverPersisted(ctx); err != nil {
+		return err
+	}
+	return s.recoverFallbackIncidents(ctx)
 }
 
 func (s *Store) migrateSchema(ctx context.Context, version int) error {
@@ -98,6 +177,7 @@ func (s *Store) migrateSchema(ctx context.Context, version int) error {
 		}{
 			{1, migrateV1ToV2, "migrate queue schema from version 1 to 2"},
 			{2, migrateV2ToV3, "migrate queue schema from version 2 to 3"},
+			{3, migrateV3ToV4, "migrate queue schema from version 3 to 4"},
 		}
 		for _, m := range incremental {
 			if version > m.from {

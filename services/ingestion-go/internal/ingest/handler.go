@@ -239,6 +239,32 @@ func validateRecord(rec IngestRecord, expectedSiteID string) error {
 	if rec.UploadedAt.IsZero() {
 		errs = append(errs, "uploaded_at is required")
 	}
+	if rec.CriticalCode != "" {
+		switch rec.CriticalCode {
+		case "BATTERY_OVERHEAT":
+			if rec.AssetType != "battery_bms" {
+				errs = append(errs, "battery overheat requires a battery asset")
+			}
+			if rec.CriticalValue == nil {
+				errs = append(errs, "critical_value is required for battery overheat")
+			}
+		case "INVERTER_FAILURE":
+			if rec.AssetType != "solar_inverter" {
+				errs = append(errs, "inverter failure requires an inverter asset")
+			}
+			if rec.CriticalValue != nil {
+				errs = append(errs, "critical_value is only valid for battery overheat")
+			}
+		case "TAMPER_DETECTED", "SITE_OUTAGE":
+			if rec.CriticalValue != nil {
+				errs = append(errs, "critical_value is only valid for battery overheat")
+			}
+		default:
+			errs = append(errs, "critical_code is not supported")
+		}
+	} else if rec.CriticalValue != nil {
+		errs = append(errs, "critical_value requires critical_code")
+	}
 	if len(errs) > 0 {
 		return fmt.Errorf("%s", strings.Join(errs, "; "))
 	}

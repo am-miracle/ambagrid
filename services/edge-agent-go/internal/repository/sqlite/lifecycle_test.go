@@ -62,6 +62,23 @@ func TestQueueEventLifecycle(t *testing.T) {
 	}
 }
 
+func TestUploadFailureReturnsUploadedEventToPending(t *testing.T) {
+	ctx := context.Background()
+	store := openTestQueue(t)
+	defer store.Close()
+	sequence, err := store.Enqueue(ctx, testEvent([]byte("reading"), domain.PriorityNormal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkUploaded(ctx, sequence, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkFailed(ctx, sequence, time.Now().Add(time.Minute), "network unavailable"); err != nil {
+		t.Fatal(err)
+	}
+	assertRecordStatus(t, store, sequence, domain.StatusPendingUpload)
+}
+
 func TestOpenRecoversPersistedEventsForUpload(t *testing.T) {
 	t.Parallel()
 

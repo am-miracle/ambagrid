@@ -59,6 +59,8 @@ type wireRecord struct {
 	EdgeReceivedAt time.Time `json:"edge_received_at"`
 	UploadedAt     time.Time `json:"uploaded_at"`
 	Replay         bool      `json:"replay"`
+	CriticalCode   string    `json:"critical_code,omitempty"`
+	CriticalValue  *float64  `json:"critical_value,omitempty"`
 }
 
 // replayThreshold is the minimum gap between event_timestamp and uploaded_at
@@ -102,6 +104,8 @@ func (c *IngestClient) Upload(ctx context.Context, records []domain.Record, uplo
 			EdgeReceivedAt: r.EdgeReceivedAt,
 			UploadedAt:     uploadedAt,
 			Replay:         uploadedAt.Sub(r.EventTimestamp) >= replayThreshold,
+			CriticalCode:   r.CriticalCode,
+			CriticalValue:  r.CriticalValue,
 		}
 	}
 

@@ -97,7 +97,6 @@ func FromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-
 	cfg := Config{
 		MQTTBroker:             envString("MQTT_BROKER", "tcp://localhost:1883"),
 		MQTTTopicFilter:        envString("MQTT_TOPIC_FILTER", "africa-west/+/+/+/telemetry"),

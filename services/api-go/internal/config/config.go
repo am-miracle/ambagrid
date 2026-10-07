@@ -33,10 +33,24 @@ type Config struct {
 	PaymentConfirmedTopic      string
 	CreditIssuedTopic          string
 	MeterCommandRequestedTopic string
+	AlertOpenedTopic           string
 
-	PaystackSecretKey string
+	PaystackSecretKey     string
+	SMSEnabled            bool
+	SMSWebhookSecret      string
+	SMSSenders            map[string]SMSSender
+	SMSOutboundCostMinor  int64
+	SMSInboundCostMinor   int64
+	SMSNumberRentalMinor  int64
+	SMSMonthlyBudgetMinor int64
+	SMSCurrency           string
 
 	DevMode bool
+}
+
+type SMSSender struct {
+	SiteID    string
+	GatewayID string
 }
 
 // FromEnv loads defaults and rejects missing or invalid values.
@@ -96,6 +110,22 @@ func FromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	smsOutboundCost, err := envInt64("API_SMS_OUTBOUND_COST_MINOR", 0)
+	if err != nil {
+		return Config{}, err
+	}
+	smsInboundCost, err := envInt64("API_SMS_INBOUND_COST_MINOR", 0)
+	if err != nil {
+		return Config{}, err
+	}
+	smsNumberRental, err := envInt64("API_SMS_NUMBER_RENTAL_MINOR", 0)
+	if err != nil {
+		return Config{}, err
+	}
+	smsMonthlyBudget, err := envInt64("API_SMS_MONTHLY_BUDGET_MINOR", 0)
+	if err != nil {
+		return Config{}, err
+	}
 
 	cfg := Config{
 		HTTPAddr:                   envString("API_HTTP_ADDR", ":8081"),
@@ -118,7 +148,16 @@ func FromEnv() (Config, error) {
 		PaymentConfirmedTopic:      envConfiguredString("PAYMENT_CONFIRMED_TOPIC", "payment.confirmed"),
 		CreditIssuedTopic:          envConfiguredString("CREDIT_ISSUED_TOPIC", "credit.issued"),
 		MeterCommandRequestedTopic: envConfiguredString("METER_COMMAND_REQUESTED_TOPIC", "meter.command.requested"),
+		AlertOpenedTopic:           envConfiguredString("ALERT_OPENED_TOPIC", "alert.opened"),
 		PaystackSecretKey:          envString("PAYSTACK_SECRET_KEY", ""),
+		SMSEnabled:                 envBool("API_SMS_ENABLED"),
+		SMSWebhookSecret:           envString("API_SMS_WEBHOOK_SECRET", ""),
+		SMSSenders:                 parseSMSSenders(os.Getenv("API_SMS_SENDERS")),
+		SMSOutboundCostMinor:       smsOutboundCost,
+		SMSInboundCostMinor:        smsInboundCost,
+		SMSNumberRentalMinor:       smsNumberRental,
+		SMSMonthlyBudgetMinor:      smsMonthlyBudget,
+		SMSCurrency:                strings.ToUpper(envString("API_SMS_CURRENCY", "")),
 		DevMode:                    envBool("API_DEV_MODE"),
 	}
 
@@ -161,8 +200,30 @@ func FromEnv() (Config, error) {
 	if cfg.MeterCommandRequestedTopic == "" {
 		return Config{}, fmt.Errorf("METER_COMMAND_REQUESTED_TOPIC must not be empty")
 	}
+	if cfg.AlertOpenedTopic == "" {
+		return Config{}, fmt.Errorf("ALERT_OPENED_TOPIC must not be empty")
+	}
+	if cfg.SMSEnabled && (cfg.SMSWebhookSecret == "" || len(cfg.SMSSenders) == 0) {
+		return Config{}, fmt.Errorf("API_SMS_WEBHOOK_SECRET and API_SMS_SENDERS must be set when SMS fallback is enabled")
+	}
+	if cfg.SMSEnabled && (cfg.SMSOutboundCostMinor <= 0 || cfg.SMSInboundCostMinor <= 0 ||
+		cfg.SMSNumberRentalMinor < 0 || cfg.SMSMonthlyBudgetMinor <= 0 || len(cfg.SMSCurrency) != 3) {
+		return Config{}, fmt.Errorf("SMS cost settings and a three-letter currency are required when SMS fallback is enabled")
+	}
 
 	return cfg, nil
+}
+
+func parseSMSSenders(raw string) map[string]SMSSender {
+	result := make(map[string]SMSSender)
+	for _, entry := range strings.Split(raw, ",") {
+		number, value, ok := strings.Cut(strings.TrimSpace(entry), "=")
+		siteID, gatewayID, identityOK := strings.Cut(value, ":")
+		if ok && identityOK && number != "" && siteID != "" && gatewayID != "" {
+			result[number] = SMSSender{SiteID: siteID, GatewayID: gatewayID}
+		}
+	}
+	return result
 }
 
 func envString(key, fallback string) string {
@@ -202,6 +263,18 @@ func envInt(key string, fallback int) (int, error) {
 		return fallback, nil
 	}
 	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer: %q", key, raw)
+	}
+	return value, nil
+}
+
+func envInt64(key string, fallback int64) (int64, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
 		return 0, fmt.Errorf("%s must be an integer: %q", key, raw)
 	}

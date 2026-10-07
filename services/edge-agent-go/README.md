@@ -20,6 +20,7 @@ services:
 - `internal/uploader` drains the queue in sequence order and POSTs batches to
   the ingestion service; retries with exponential backoff on failure.
 - `internal/health` owns the HTTP health endpoint and Prometheus collector.
+- `internal/fallback` formats critical alerts and sends them through ModemManager.
 - `main.go` only wires configuration, adapters, storage, and HTTP transport.
 
 ## Run
@@ -72,6 +73,16 @@ gateways default to a 256 MiB filesystem reserve.
 | `EDGE_UPLOADER_BASE_DELAY` | `1s` | Initial backoff delay after a failed upload. |
 | `EDGE_UPLOADER_MAX_DELAY` | `5m` | Ceiling on exponential backoff. |
 | `EDGE_UPLOADER_MAX_RETRIES` | `20` | Max retry attempts before a record is abandoned. |
+| `EDGE_SMS_ENABLED` | `false` | Enable one-way SMS fallback for critical alerts. |
+| `EDGE_SMS_DESTINATION` | required when enabled | Platform phone number that receives fallback messages. |
+| `EDGE_SMS_MODEM_ID` | `0` | ModemManager modem identifier passed to `mmcli`. |
+| `EDGE_SMS_FAILURE_THRESHOLD` | `3` | Failed data uploads before a critical alert qualifies for SMS. |
+| `EDGE_SMS_OFFLINE_AFTER` | `2m` | Time without a successful upload before SMS qualifies. |
+| `EDGE_SMS_MAX_ATTEMPTS` | `3` | Maximum SMS attempts for one active incident. |
+| `EDGE_SMS_HOURLY_LIMIT` | `6` | Site-wide attempt limit over one hour. |
+| `EDGE_SMS_DAILY_LIMIT` | `20` | Site-wide attempt limit over 24 hours. |
+| `EDGE_SMS_RETRY_INTERVAL` | `5m` | Delay after a failed modem send. |
+| `EDGE_SMS_BATTERY_OVERHEAT_C` | `55` | Battery temperature that opens a critical fallback incident. |
 
 Each collection cycle writes one normalized record for a smart meter, battery
 BMS, and solar inverter. Records carry their site ID, site-local sequence,
@@ -120,3 +131,8 @@ that has stopped contacting the platform.
 
 Delivery is intentionally at-least-once. A process crash after upstream
 delivery and before `Ack` causes a safe duplicate rather than data loss.
+
+Critical battery overheat, inverter failure, tamper, and site outage events are
+stored as durable incidents. After three failed uploads or two minutes without
+a successful upload, the edge agent sends a single-segment versioned SMS. A
+successful normal replay removes the incident from the fallback candidate set.

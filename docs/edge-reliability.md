@@ -80,29 +80,18 @@ Useful indicators:
 
 ## SMS Fallback
 
-SMS should carry critical alerts only. It should not be used for routine telemetry.
+SMS carries a small allowlist of critical alerts when normal data upload is
+unavailable. It is one-way and alert-only; routine telemetry never uses it.
 
 Example shape:
 
 ```text
-AMBAGRID|v=1|site=ng-kaji-01|asset=batt-01|code=BATTERY_OVERHEAT|temp=68.2|ts=1730000000
+AMBAGRID|v=1|site=ng-kaji-01|asset=batt-01|seq=18422|code=BATTERY_OVERHEAT|temp=68.2|ts=1730000000
 ```
 
-Use cases:
-
-- battery overheat
-- inverter offline
-- full-site outage
-- tamper alarm
-- gateway online/offline heartbeat when data service is unavailable
-
-SMS messages should be:
-
-- short
-- versioned
-- structured
-- idempotent where possible
-- tied to known site and asset IDs
+The qualifying codes, send thresholds, idempotency contract, provider shape,
+rate limits, and cost controls are defined in
+[Critical alert fallback design](critical-alert-fallback.md).
 
 ## OTA Updates
 

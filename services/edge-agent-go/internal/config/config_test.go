@@ -49,3 +49,12 @@ func TestFromEnvRequiresStableEdgeIdentity(t *testing.T) {
 		t.Fatal("FromEnv() error = nil, want missing identity error")
 	}
 }
+
+func TestFromEnvRejectsNonFiniteBatteryThreshold(t *testing.T) {
+	t.Setenv("EDGE_SITE_ID", "site-01")
+	t.Setenv("EDGE_GATEWAY_ID", "gateway-01")
+	t.Setenv("EDGE_SMS_BATTERY_OVERHEAT_C", "NaN")
+	if _, err := config.FromEnv(); err == nil {
+		t.Fatal("FromEnv() accepted NaN battery threshold")
+	}
+}

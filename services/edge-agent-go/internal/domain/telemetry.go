@@ -12,6 +12,9 @@ type Reading struct {
 	RelayClosed         bool
 	BatterySOCPct       float64
 	SolarIrradiance     float64
+	InverterFailed      bool
+	TamperDetected      bool
+	SiteOutage          *bool
 }
 
 type ElectricalMetrics struct {

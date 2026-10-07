@@ -23,6 +23,8 @@ type IngestRecord struct {
 	EdgeReceivedAt time.Time `json:"edge_received_at"`
 	UploadedAt     time.Time `json:"uploaded_at"`
 	Replay         bool      `json:"replay"`
+	CriticalCode   string    `json:"critical_code,omitempty"`
+	CriticalValue  *float64  `json:"critical_value,omitempty"`
 }
 
 type BatchResponse struct {

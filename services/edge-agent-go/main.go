@@ -21,6 +21,7 @@ import (
 	"edge-agent-go/internal/adapter/simulator"
 	"edge-agent-go/internal/collector"
 	"edge-agent-go/internal/config"
+	"edge-agent-go/internal/fallback"
 	"edge-agent-go/internal/health"
 	queuesqlite "edge-agent-go/internal/repository/sqlite"
 	"edge-agent-go/internal/uploader"
@@ -69,9 +70,10 @@ func run() (runErr error) {
 
 	if cfg.Collector.Enabled {
 		telemetryCollector, err := collector.New(collector.Config{
-			SiteID:   cfg.Queue.SiteID,
-			Region:   cfg.Collector.Region,
-			Interval: cfg.Collector.Interval,
+			SiteID:           cfg.Queue.SiteID,
+			Region:           cfg.Collector.Region,
+			Interval:         cfg.Collector.Interval,
+			BatteryOverheatC: cfg.SMS.BatteryOverheatC,
 		}, durableQueue, simulator.New())
 		if err != nil {
 			return fmt.Errorf("configure telemetry collector: %w", err)
@@ -80,6 +82,21 @@ func run() (runErr error) {
 		go func() {
 			defer workerWG.Done()
 			telemetryCollector.Run(workerCtx)
+		}()
+	}
+
+	if cfg.SMS.Enabled {
+		coordinator := fallback.NewCoordinator(fallback.Config{
+			Destination: cfg.SMS.Destination, PollInterval: cfg.SMS.PollInterval,
+			FailureThreshold: cfg.SMS.FailureThreshold, OfflineAfter: cfg.SMS.OfflineAfter,
+			MaxAttempts: cfg.SMS.MaxAttempts, HourlyLimit: cfg.SMS.HourlyLimit,
+			DailyLimit: cfg.SMS.DailyLimit, RetryInterval: cfg.SMS.RetryInterval,
+		}, durableQueue, fallback.NewModemManagerSender(cfg.SMS.ModemID, nil))
+		workerWG.Add(1)
+		go func() {
+			defer workerWG.Done()
+			slog.Info("SMS fallback started", "modem", cfg.SMS.ModemID)
+			coordinator.Run(workerCtx)
 		}()
 	}
 

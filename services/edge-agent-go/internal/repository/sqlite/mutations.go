@@ -70,11 +70,12 @@ func (s *Store) insert(ctx context.Context, event domain.Event, status domain.Ev
 	result, err := tx.ExecContext(ctx, `
 INSERT INTO queue_events(
 	    site_id, gateway_id, device_id, asset_type, mqtt_topic, payload, payload_bytes,
-	    priority, event_at_ms, received_at_ms, persisted_at_ms, status
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	    priority, event_at_ms, received_at_ms, persisted_at_ms, status, critical_code, critical_value
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		s.cfg.SiteID, s.cfg.GatewayID, event.DeviceID, event.AssetType, event.MQTTTopic,
 		event.Payload, len(event.Payload), event.Priority,
 		event.EventTimestamp.UnixMilli(), event.EdgeReceivedAt.UnixMilli(), time.Now().UTC().UnixMilli(), status,
+		nullString(event.CriticalCode), event.CriticalValue,
 	)
 	if err != nil {
 		if isSQLiteFull(err) {
@@ -90,6 +91,13 @@ INSERT INTO queue_events(
 		return 0, fmt.Errorf("commit queue event: %w", err)
 	}
 	return uint64(sequence), nil
+}
+
+func nullString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 func (s *Store) MarkPendingUpload(ctx context.Context, sequence uint64) error {
@@ -202,10 +210,11 @@ func (s *Store) MarkFailed(ctx context.Context, sequence uint64, retryAt time.Ti
 	}
 	result, err := s.db.ExecContext(ctx, `
 UPDATE queue_events
-SET attempt_count = attempt_count + 1,
+SET status = ?,
+    attempt_count = attempt_count + 1,
     next_attempt_at_ms = ?,
     last_error = ?
-WHERE sequence = ? AND status = ?`, retryAt.UTC().UnixMilli(), cause, sequence, domain.StatusPendingUpload)
+WHERE sequence = ? AND status IN (?, ?)`, domain.StatusPendingUpload, retryAt.UTC().UnixMilli(), cause, sequence, domain.StatusPendingUpload, domain.StatusUploaded)
 	if err != nil {
 		return fmt.Errorf("mark queue event %d failed: %w", sequence, err)
 	}
@@ -214,7 +223,7 @@ WHERE sequence = ? AND status = ?`, retryAt.UTC().UnixMilli(), cause, sequence, 
 		return fmt.Errorf("read failed event update result: %w", err)
 	}
 	if updated == 0 {
-		return fmt.Errorf("%w: sequence %d is not pending upload", domain.ErrInvalidTransition, sequence)
+		return fmt.Errorf("%w: sequence %d is not pending or uploaded", domain.ErrInvalidTransition, sequence)
 	}
 	return nil
 }

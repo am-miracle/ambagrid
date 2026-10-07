@@ -65,12 +65,17 @@ internal/page/                 keyset pagination and opaque cursors
 internal/controller/           HTTP: routes, middleware, DTOs, error mapping
 internal/services/             application layer and repository ports
 internal/repository/postgres/  SQL, connection pool
+internal/webhook/              signed provider payload adapters
 ```
 
 Dependencies point inward. A controller may use the services; a service may use
 its repository ports; neither the domain nor the services import `net/http` or
 `pgx`. New endpoints follow the same path: a domain type if the object is new,
 a repository query, a service method, then a handler and its DTO.
+
+Critical SMS fallback is exposed at `POST /v1/sms/inbound`. Set
+`API_SMS_ENABLED=true`, `API_SMS_WEBHOOK_SECRET`, and `API_SMS_SENDERS` plus the
+cost settings documented in [the fallback design](../../docs/critical-alert-fallback.md).
 
 ## Tests
 
