@@ -54,6 +54,12 @@ func TestQueueEventLifecycle(t *testing.T) {
 	if stats.Depth != 0 {
 		t.Fatalf("active queue depth = %d, want 0", stats.Depth)
 	}
+	if stats.LastEventTimestamp == nil {
+		t.Fatal("last event timestamp was lost after the queue drained")
+	}
+	if stats.OldestPendingAt != nil {
+		t.Fatalf("oldest pending timestamp = %v, want nil for a drained queue", stats.OldestPendingAt)
+	}
 }
 
 func TestOpenRecoversPersistedEventsForUpload(t *testing.T) {

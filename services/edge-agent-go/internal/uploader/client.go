@@ -32,7 +32,18 @@ func NewIngestClient(endpoint, apiKey string, timeout time.Duration) *IngestClie
 }
 
 type batchRequest struct {
-	Records []wireRecord `json:"records"`
+	GatewayID          string       `json:"gateway_id"`
+	QueueDepth         int64        `json:"queue_depth"`
+	OldestPendingAt    *time.Time   `json:"oldest_pending_at"`
+	LastEventTimestamp *time.Time   `json:"last_event_timestamp"`
+	Records            []wireRecord `json:"records"`
+}
+
+type HealthReport struct {
+	GatewayID          string
+	QueueDepth         int64
+	OldestPendingAt    *time.Time
+	LastEventTimestamp *time.Time
 }
 
 type wireRecord struct {
@@ -75,7 +86,7 @@ type UploadResult struct {
 	Retryable  bool
 }
 
-func (c *IngestClient) Upload(ctx context.Context, records []domain.Record, uploadedAt time.Time) (*UploadResult, error) {
+func (c *IngestClient) Upload(ctx context.Context, records []domain.Record, uploadedAt time.Time, health HealthReport) (*UploadResult, error) {
 	wire := make([]wireRecord, len(records))
 	for i, r := range records {
 		wire[i] = wireRecord{
@@ -94,7 +105,13 @@ func (c *IngestClient) Upload(ctx context.Context, records []domain.Record, uplo
 		}
 	}
 
-	body, err := json.Marshal(batchRequest{Records: wire})
+	body, err := json.Marshal(batchRequest{
+		GatewayID:          health.GatewayID,
+		QueueDepth:         health.QueueDepth,
+		OldestPendingAt:    health.OldestPendingAt,
+		LastEventTimestamp: health.LastEventTimestamp,
+		Records:            wire,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal upload batch: %w", err)
 	}

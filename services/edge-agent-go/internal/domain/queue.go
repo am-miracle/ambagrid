@@ -24,6 +24,8 @@ type QueueStats struct {
 	DiskBytes            int64
 	FilesystemFreeBytes  int64
 	OldestAge            time.Duration
+	OldestPendingAt      *time.Time
+	LastEventTimestamp   *time.Time
 	State                QueueState
 }
 
@@ -37,4 +39,5 @@ type Queue interface {
 	MarkUploaded(ctx context.Context, sequence uint64, uploadedAt time.Time) error
 	Ack(ctx context.Context, sequence uint64) error
 	MarkFailed(ctx context.Context, sequence uint64, retryAt time.Time, cause string) error
+	Stats(ctx context.Context) (QueueStats, error)
 }

@@ -392,7 +392,19 @@ export function assetStateAt(spec: AssetSpec, now: number): Asset {
 
 export const siteRowsById = new Map(
 	(
-		siteRows as Omit<Site, "asset_count" | "last_seen_at" | "open_alerts">[]
+		siteRows as Omit<
+			Site,
+			| "asset_count"
+			| "last_seen_at"
+			| "health_status"
+			| "last_contact_at"
+			| "last_event_timestamp"
+			| "queue_depth"
+			| "oldest_pending_at"
+			| "oldest_pending_record_age_seconds"
+			| "queue_growing"
+			| "open_alerts"
+		>[]
 	).map((row) => [row.site_id, row]),
 );
 

@@ -90,6 +90,7 @@ func run() (runErr error) {
 			cfg.Uploader.Timeout,
 		)
 		ul := uploader.New(uploader.Config{
+			GatewayID:     cfg.Queue.GatewayID,
 			BatchSize:     cfg.Uploader.BatchSize,
 			BatchMaxBytes: cfg.Uploader.BatchMaxBytes,
 			PollInterval:  cfg.Uploader.PollInterval,

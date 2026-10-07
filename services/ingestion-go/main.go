@@ -10,6 +10,8 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"ingestion-go/internal/bridge"
 	"ingestion-go/internal/config"
 	"ingestion-go/internal/ingest"
@@ -64,6 +66,15 @@ func runHTTPIngest(ctx context.Context, cfg config.Config) error {
 	}
 	defer kafkaClient.Close()
 
+	pool, err := pgxpool.New(ctx, cfg.HTTP.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	if err := pool.Ping(ctx); err != nil {
+		return err
+	}
+
 	authEntries := make([]ingest.APIKeyEntry, len(cfg.HTTP.APIKeys))
 	for i, e := range cfg.HTTP.APIKeys {
 		authEntries[i] = ingest.APIKeyEntry{Key: e.Key, SiteID: e.SiteID}
@@ -73,6 +84,7 @@ func runHTTPIngest(ctx context.Context, cfg config.Config) error {
 		Auth:     ingest.NewAPIKeyAuth(authEntries),
 		Store:    ingest.NewMemoryDedupStore(),
 		Producer: ingest.NewKafkaProducer(kafkaClient, cfg.KafkaTopic, cfg.ProduceTimeout),
+		Health:   ingest.NewPostgresSiteHealthStore(pool),
 		Logger:   logger,
 		MaxBody:  cfg.HTTP.MaxBodyBytes,
 	})

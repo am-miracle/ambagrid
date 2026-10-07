@@ -3,6 +3,7 @@ package ingest
 import (
 	"context"
 	"net/http"
+	"time"
 )
 
 type Authenticator interface {
@@ -16,4 +17,17 @@ type DedupStore interface {
 
 type Producer interface {
 	Produce(ctx context.Context, siteID string, rec IngestRecord) error
+}
+
+type SiteHealthReport struct {
+	SiteID             string
+	GatewayID          string
+	ContactAt          time.Time
+	LastEventTimestamp *time.Time
+	QueueDepth         int64
+	OldestPendingAt    *time.Time
+}
+
+type SiteHealthStore interface {
+	RecordContact(ctx context.Context, report SiteHealthReport) error
 }

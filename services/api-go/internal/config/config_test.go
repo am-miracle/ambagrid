@@ -33,6 +33,9 @@ func TestFromEnvAppliesDefaults(t *testing.T) {
 	if cfg.DefaultPageSize != 50 || cfg.MaxPageSize != 200 {
 		t.Fatalf("page sizes = %d/%d", cfg.DefaultPageSize, cfg.MaxPageSize)
 	}
+	if cfg.SiteOfflineAfter != 2*time.Minute || cfg.SiteEventStaleAfter != 2*time.Minute {
+		t.Fatalf("site health thresholds = %s/%s", cfg.SiteOfflineAfter, cfg.SiteEventStaleAfter)
+	}
 	if cfg.AlertResolvedTopic != "alert.resolved" {
 		t.Fatalf("AlertResolvedTopic = %q", cfg.AlertResolvedTopic)
 	}

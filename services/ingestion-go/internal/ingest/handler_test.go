@@ -28,6 +28,16 @@ type stubProducer struct {
 	err      error
 }
 
+type stubHealth struct {
+	reports []ingest.SiteHealthReport
+	err     error
+}
+
+func (s *stubHealth) RecordContact(_ context.Context, report ingest.SiteHealthReport) error {
+	s.reports = append(s.reports, report)
+	return s.err
+}
+
 func (s *stubProducer) Produce(_ context.Context, _ string, rec ingest.IngestRecord) error {
 	if s.err != nil {
 		return s.err
@@ -41,6 +51,7 @@ func newHandler(auth ingest.Authenticator, store ingest.DedupStore, producer ing
 		Auth:     auth,
 		Store:    store,
 		Producer: producer,
+		Health:   &stubHealth{},
 		MaxBody:  1 << 20,
 	})
 }
@@ -63,7 +74,16 @@ func validRecord(seq uint64, siteID string) ingest.IngestRecord {
 }
 
 func postBatch(handler http.Handler, records []ingest.IngestRecord) *httptest.ResponseRecorder {
-	batch := ingest.BatchRequest{Records: records}
+	var lastEvent *time.Time
+	for _, record := range records {
+		if lastEvent == nil || record.EventTimestamp.After(*lastEvent) {
+			t := record.EventTimestamp
+			lastEvent = &t
+		}
+	}
+	batch := ingest.BatchRequest{
+		GatewayID: "gw-01", LastEventTimestamp: lastEvent, Records: records,
+	}
 	body, _ := json.Marshal(batch)
 	req := httptest.NewRequest(http.MethodPost, "/v1/ingest", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer test-key")
@@ -221,17 +241,23 @@ func TestIngest_PartialFailure(t *testing.T) {
 	}
 }
 
-func TestIngest_EmptyBatch(t *testing.T) {
-	h := newHandler(
-		&stubAuth{siteID: "site-01"},
-		ingest.NewMemoryDedupStore(),
-		&stubProducer{},
-	)
+func TestIngest_EmptyBatchIsAHeartbeat(t *testing.T) {
+	health := &stubHealth{}
+	h := ingest.NewHandler(ingest.HandlerConfig{
+		Auth: &stubAuth{siteID: "site-01"}, Store: ingest.NewMemoryDedupStore(),
+		Producer: &stubProducer{}, Health: health, MaxBody: 1 << 20,
+	})
 
 	w := postBatch(h, []ingest.IngestRecord{})
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if len(health.reports) != 1 || health.reports[0].SiteID != "site-01" || health.reports[0].GatewayID != "gw-01" {
+		t.Fatalf("heartbeat report = %+v", health.reports)
+	}
+	if health.reports[0].ContactAt.IsZero() {
+		t.Fatal("heartbeat did not record contact time")
 	}
 }
 

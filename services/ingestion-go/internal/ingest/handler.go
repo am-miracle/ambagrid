@@ -22,6 +22,7 @@ type Handler struct {
 	auth     Authenticator
 	store    DedupStore
 	producer Producer
+	health   SiteHealthStore
 	logger   *slog.Logger
 	maxBody  int64
 }
@@ -30,6 +31,7 @@ type HandlerConfig struct {
 	Auth     Authenticator
 	Store    DedupStore
 	Producer Producer
+	Health   SiteHealthStore
 	Logger   *slog.Logger
 	MaxBody  int64
 }
@@ -47,6 +49,7 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		auth:     cfg.Auth,
 		store:    cfg.Store,
 		producer: cfg.Producer,
+		health:   cfg.Health,
 		logger:   logger,
 		maxBody:  maxBody,
 	}
@@ -99,12 +102,22 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(batch.Records) == 0 {
-		writeErrorResponse(w, reqID, http.StatusBadRequest, "invalid_argument", "records array must not be empty")
+	if err := validateHealth(batch); err != nil {
+		writeErrorResponse(w, reqID, http.StatusBadRequest, "invalid_argument", err.Error())
 		return
 	}
 
-	var accepted []uint64
+	if err := h.health.RecordContact(r.Context(), SiteHealthReport{
+		SiteID: siteID, GatewayID: batch.GatewayID, ContactAt: time.Now().UTC(),
+		LastEventTimestamp: batch.LastEventTimestamp, QueueDepth: batch.QueueDepth,
+		OldestPendingAt: batch.OldestPendingAt,
+	}); err != nil {
+		h.logger.Error("record site health", "error", err, "site_id", siteID, "request_id", reqID)
+		writeErrorResponse(w, reqID, http.StatusInternalServerError, "internal", "failed to record site health")
+		return
+	}
+
+	accepted := make([]uint64, 0, len(batch.Records))
 	var rejected []RecordError
 
 	for i, rec := range batch.Records {
@@ -182,6 +195,22 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 		Rejected:  rejected,
 		RequestID: reqID,
 	})
+}
+
+func validateHealth(batch BatchRequest) error {
+	if strings.TrimSpace(batch.GatewayID) == "" {
+		return errors.New("gateway_id is required")
+	}
+	if batch.QueueDepth < 0 {
+		return errors.New("queue_depth must not be negative")
+	}
+	if batch.QueueDepth == 0 && batch.OldestPendingAt != nil {
+		return errors.New("oldest_pending_at must be null when queue_depth is zero")
+	}
+	if batch.QueueDepth > 0 && batch.OldestPendingAt == nil {
+		return errors.New("oldest_pending_at is required when queue_depth is positive")
+	}
+	return nil
 }
 
 func validateRecord(rec IngestRecord, expectedSiteID string) error {

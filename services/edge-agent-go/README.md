@@ -112,5 +112,11 @@ The uploader:
 4. Calls `Ack` for each sequence the server accepts, `MarkFailed` with
    exponential backoff for rejections or transport errors.
 
+Every upload includes the current queue depth, oldest pending timestamp, and
+most recent measurement timestamp. When the queue is empty, the uploader still
+sends this envelope as a heartbeat on its normal poll interval. This lets the
+server distinguish a connected gateway with delayed measurements from a site
+that has stopped contacting the platform.
+
 Delivery is intentionally at-least-once. A process crash after upstream
 delivery and before `Ack` causes a safe duplicate rather than data loss.

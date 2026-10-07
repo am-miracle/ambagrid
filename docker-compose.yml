@@ -118,10 +118,12 @@ services:
       # 1-partition topic that caps throughput. redpanda-topics owns creation.
       KAFKA_ALLOW_AUTO_TOPIC: "false"
       INGESTION_LOG_EVERY_N: 25
+      DATABASE_URL: postgres://ambagrid_admin:ambagrid_secure_pass@database:5432/ambagrid_operational
     depends_on:
       - mqtt-broker
       - redpanda
       - redpanda-topics
+      - database
     networks:
       - ambagrid-network
 

@@ -26,6 +26,8 @@ type Config struct {
 	DefaultPageSize       int
 	MaxPageSize           int
 	GlobalHistoryPageSize int
+	SiteOfflineAfter      time.Duration
+	SiteEventStaleAfter   time.Duration
 
 	AlertResolvedTopic         string
 	PaymentConfirmedTopic      string
@@ -86,6 +88,14 @@ func FromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	siteOfflineAfter, err := envDuration("API_SITE_OFFLINE_AFTER", 2*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	siteEventStaleAfter, err := envDuration("API_SITE_EVENT_STALE_AFTER", 2*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
 
 	cfg := Config{
 		HTTPAddr:                   envString("API_HTTP_ADDR", ":8081"),
@@ -102,6 +112,8 @@ func FromEnv() (Config, error) {
 		DefaultPageSize:            defaultPageSize,
 		MaxPageSize:                maxPageSize,
 		GlobalHistoryPageSize:      globalHistoryPageSize,
+		SiteOfflineAfter:           siteOfflineAfter,
+		SiteEventStaleAfter:        siteEventStaleAfter,
 		AlertResolvedTopic:         envConfiguredString("ALERT_RESOLVED_TOPIC", "alert.resolved"),
 		PaymentConfirmedTopic:      envConfiguredString("PAYMENT_CONFIRMED_TOPIC", "payment.confirmed"),
 		CreditIssuedTopic:          envConfiguredString("CREDIT_ISSUED_TOPIC", "credit.issued"),

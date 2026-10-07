@@ -14,6 +14,7 @@ import (
 )
 
 type Config struct {
+	GatewayID     string
 	BatchSize     int
 	BatchMaxBytes int64
 	PollInterval  time.Duration
@@ -88,10 +89,10 @@ func (u *Uploader) uploadBatch(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if len(records) == 0 {
-		return 0, nil
+	stats, err := u.queue.Stats(ctx)
+	if err != nil {
+		return 0, err
 	}
-
 	// Stamp uploaded_at before the HTTP call so it reflects when the edge
 	// agent sent the data, not when the server processed it.
 	uploadedAt := u.now().UTC()
@@ -102,7 +103,13 @@ func (u *Uploader) uploadBatch(ctx context.Context) (int, error) {
 		}
 	}
 
-	result, err := u.client.Upload(ctx, records, uploadedAt)
+	// An empty batch is still sent as a gateway heartbeat.
+	result, err := u.client.Upload(ctx, records, uploadedAt, HealthReport{
+		GatewayID:          u.cfg.GatewayID,
+		QueueDepth:         stats.Depth,
+		OldestPendingAt:    stats.OldestPendingAt,
+		LastEventTimestamp: stats.LastEventTimestamp,
+	})
 	if err != nil {
 		u.handleFailure(ctx, records, result, err)
 		return 0, err

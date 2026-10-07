@@ -64,6 +64,20 @@ func (q *fakeQueue) MarkFailed(_ context.Context, sequence uint64, _ time.Time, 
 	return nil
 }
 
+func (q *fakeQueue) Stats(_ context.Context) (domain.QueueStats, error) {
+	var lastEvent *time.Time
+	for _, record := range q.records {
+		if q.acked[record.Sequence] {
+			continue
+		}
+		if lastEvent == nil || record.EventTimestamp.After(*lastEvent) {
+			t := record.EventTimestamp
+			lastEvent = &t
+		}
+	}
+	return domain.QueueStats{Depth: int64(len(q.records) - len(q.acked)), LastEventTimestamp: lastEvent}, nil
+}
+
 func testRecord(seq uint64) domain.Record {
 	return domain.Record{
 		Sequence:       seq,
@@ -204,7 +218,9 @@ func TestUploader_UploadedAtTimestamp(t *testing.T) {
 		}
 		json.NewDecoder(r.Body).Decode(&batch)
 		if len(batch.Records) == 0 {
-			t.Fatal("no records received")
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(uploader.BatchResponse{})
+			return
 		}
 		uploadedAt := batch.Records[0].UploadedAt
 		if uploadedAt.Before(before) {
@@ -239,10 +255,19 @@ func TestUploader_ReplayFlag(t *testing.T) {
 		} `json:"records"`
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&received)
-		accepted := make([]uint64, len(received.Records))
-		for i, r := range received.Records {
+		var batch struct {
+			Records []struct {
+				Sequence uint64 `json:"sequence"`
+				Replay   bool   `json:"replay"`
+			} `json:"records"`
+		}
+		json.NewDecoder(r.Body).Decode(&batch)
+		accepted := make([]uint64, len(batch.Records))
+		for i, r := range batch.Records {
 			accepted[i] = r.Sequence
+		}
+		if len(batch.Records) > 0 {
+			received = batch
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(uploader.BatchResponse{Accepted: accepted})

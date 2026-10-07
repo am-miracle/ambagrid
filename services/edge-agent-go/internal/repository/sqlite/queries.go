@@ -112,18 +112,27 @@ func (s *Store) Stats(ctx context.Context) (domain.QueueStats, error) {
 		CapacityBytes:        s.payloadCapacity(),
 		NormalAdmissionBytes: s.normalAdmissionLimit(),
 	}
-	var oldestMS sql.NullInt64
+	var oldestMS, lastEventMS sql.NullInt64
+	// Keep the latest event after acknowledged rows leave the active queue.
 	if err := s.db.QueryRowContext(ctx, `
-SELECT COUNT(*), COALESCE(SUM(payload_bytes), 0), MIN(received_at_ms)
-FROM queue_events
-WHERE status IN ('persisted', 'pending_upload', 'uploaded')`).Scan(&stats.Depth, &stats.PayloadBytes, &oldestMS); err != nil {
+SELECT COUNT(*) FILTER (WHERE status IN ('persisted', 'pending_upload', 'uploaded')),
+       COALESCE(SUM(payload_bytes) FILTER (WHERE status IN ('persisted', 'pending_upload', 'uploaded')), 0),
+       MIN(received_at_ms) FILTER (WHERE status IN ('persisted', 'pending_upload', 'uploaded')),
+       MAX(event_at_ms)
+FROM queue_events`).Scan(&stats.Depth, &stats.PayloadBytes, &oldestMS, &lastEventMS); err != nil {
 		return domain.QueueStats{}, fmt.Errorf("read queue statistics: %w", err)
 	}
 	if oldestMS.Valid {
-		stats.OldestAge = time.Since(time.UnixMilli(oldestMS.Int64))
+		oldest := time.UnixMilli(oldestMS.Int64).UTC()
+		stats.OldestPendingAt = &oldest
+		stats.OldestAge = time.Since(oldest)
 		if stats.OldestAge < 0 {
 			stats.OldestAge = 0
 		}
+	}
+	if lastEventMS.Valid {
+		lastEvent := time.UnixMilli(lastEventMS.Int64).UTC()
+		stats.LastEventTimestamp = &lastEvent
 	}
 	diskBytes, err := queueDiskBytes(s.cfg.Path)
 	if err != nil {

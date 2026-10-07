@@ -55,7 +55,7 @@ func main() {
 	api := controller.API{
 		Assets:         services.NewAssetService(store, limits),
 		Alerts:         services.NewAlertService(store, limits, globalHistoryLimits),
-		Sites:          services.NewSiteService(store, limits),
+		Sites:          services.NewSiteService(store, limits, cfg.SiteOfflineAfter, cfg.SiteEventStaleAfter),
 		Payments:       services.NewPaymentService(store),
 		Health:         services.NewHealthService(store),
 		Webhooks:       webhooks,
