@@ -145,6 +145,9 @@ Credit issuance
 
 ### Milestone 3: Edge Agent Prototype
 
+The critical SMS fallback is implemented and documented in
+[Critical alert fallback design](critical-alert-fallback.md).
+
 Expected result:
 
 ```text

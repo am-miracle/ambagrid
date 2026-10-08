@@ -358,17 +358,24 @@ func toMeterCommandDTO(cmd domain.MeterCommand) meterCommandDTO {
 }
 
 type siteDTO struct {
-	SiteID         string         `json:"site_id"`
-	Name           string         `json:"name"`
-	Country        *string        `json:"country"`
-	Region         *string        `json:"region"`
-	GridOperatorID *string        `json:"operator_id"`
-	Lat            *float64       `json:"lat"`
-	Lng            *float64       `json:"lng"`
-	Status         string         `json:"status"`
-	AssetCount     int64          `json:"asset_count"`
-	LastSeenAt     *time.Time     `json:"last_seen_at"`
-	OpenAlerts     alertCountsDTO `json:"open_alerts"`
+	SiteID                  string                  `json:"site_id"`
+	Name                    string                  `json:"name"`
+	Country                 *string                 `json:"country"`
+	Region                  *string                 `json:"region"`
+	GridOperatorID          *string                 `json:"operator_id"`
+	Lat                     *float64                `json:"lat"`
+	Lng                     *float64                `json:"lng"`
+	Status                  string                  `json:"status"`
+	AssetCount              int64                   `json:"asset_count"`
+	LastSeenAt              *time.Time              `json:"last_seen_at"`
+	HealthStatus            domain.SiteHealthStatus `json:"health_status"`
+	LastContactAt           *time.Time              `json:"last_contact_at"`
+	LastEventAt             *time.Time              `json:"last_event_timestamp"`
+	QueueDepth              int64                   `json:"queue_depth"`
+	OldestPendingAt         *time.Time              `json:"oldest_pending_at"`
+	OldestPendingAgeSeconds *int64                  `json:"oldest_pending_record_age_seconds"`
+	QueueGrowing            bool                    `json:"queue_growing"`
+	OpenAlerts              alertCountsDTO          `json:"open_alerts"`
 }
 
 type alertCountsDTO struct {
@@ -379,17 +386,32 @@ type alertCountsDTO struct {
 }
 
 func toSiteDTO(site domain.Site) siteDTO {
+	var oldestPendingAgeSeconds *int64
+	if site.OldestPendingAt != nil {
+		seconds := int64(time.Since(*site.OldestPendingAt).Seconds())
+		if seconds < 0 {
+			seconds = 0
+		}
+		oldestPendingAgeSeconds = &seconds
+	}
 	return siteDTO{
-		SiteID:         site.SiteID,
-		Name:           site.Name,
-		Country:        site.Country,
-		Region:         site.Region,
-		GridOperatorID: site.GridOperatorID,
-		Lat:            site.Lat,
-		Lng:            site.Lng,
-		Status:         site.Status,
-		AssetCount:     site.AssetCount,
-		LastSeenAt:     site.LastSeenAt,
+		SiteID:                  site.SiteID,
+		Name:                    site.Name,
+		Country:                 site.Country,
+		Region:                  site.Region,
+		GridOperatorID:          site.GridOperatorID,
+		Lat:                     site.Lat,
+		Lng:                     site.Lng,
+		Status:                  site.Status,
+		AssetCount:              site.AssetCount,
+		LastSeenAt:              site.LastSeenAt,
+		HealthStatus:            site.HealthStatus,
+		LastContactAt:           site.LastContactAt,
+		LastEventAt:             site.LastEventAt,
+		QueueDepth:              site.QueueDepth,
+		OldestPendingAt:         site.OldestPendingAt,
+		OldestPendingAgeSeconds: oldestPendingAgeSeconds,
+		QueueGrowing:            site.QueueGrowing,
 		OpenAlerts: alertCountsDTO{
 			Total:    site.OpenAlerts.Total,
 			Critical: site.OpenAlerts.Critical,

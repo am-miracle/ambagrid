@@ -38,6 +38,10 @@ impl PortError {
 // Computed purely (see ThresholdPolicy::evaluate/recovered) before any I/O.
 pub enum PolicyOutcome {
     Open(AlertDecision),
+    OpenCritical {
+        decision: AlertDecision,
+        code: String,
+    },
     Resolve {
         kind: AlertKind,
         resolution_note: String,

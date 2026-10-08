@@ -55,15 +55,24 @@ impl IngestRepository for PostgresIngestRepository {
 
         let write = match outcome {
             PolicyOutcome::Open(decision) => {
-                let alert_opened =
-                    if find_open_alert(&mut tx, &decision.asset_id, decision.kind.as_str())
-                        .await?
-                        .is_some()
-                    {
-                        None
-                    } else {
-                        Some(open_alert(&mut tx, &decision, &self.alert_opened_topic).await?)
+                let (alert_opened, _) =
+                    find_or_open_alert(&mut tx, &decision, &self.alert_opened_topic).await?;
+                IngestWrite {
+                    alert_opened,
+                    alert_resolved: None,
+                }
+            }
+            PolicyOutcome::OpenCritical { decision, code } => {
+                let event = critical_replay(reading, &decision, &code)?;
+                lock_event(&mut tx, &event.event_key).await?;
+                let (alert_opened, alert) =
+                    match find_alert_by_fallback_event(&mut tx, &event).await? {
+                        Some(alert) => (None, alert),
+                        None => {
+                            find_or_open_alert(&mut tx, &decision, &self.alert_opened_topic).await?
+                        }
                     };
+                record_critical_replay(&mut tx, &event, alert.alert_id).await?;
                 IngestWrite {
                     alert_opened,
                     alert_resolved: None,
@@ -74,21 +83,27 @@ impl IngestRepository for PostgresIngestRepository {
                 resolution_note,
                 resolved_by,
             } => {
-                let alert_resolved =
-                    match find_open_alert(&mut tx, &reading.asset.asset_id, kind.as_str()).await? {
-                        Some(open) => Some(
-                            resolve_alert(
-                                &mut tx,
-                                open.alert_id,
-                                reading.observed_at,
-                                &resolution_note,
-                                &resolved_by,
-                                &self.alert_resolved_topic,
-                            )
-                            .await?,
-                        ),
-                        None => None,
-                    };
+                let alert_resolved = match find_open_alert(
+                    &mut tx,
+                    &reading.asset.site_id,
+                    &reading.asset.asset_id,
+                    kind.as_str(),
+                )
+                .await?
+                {
+                    Some(open) => Some(
+                        resolve_alert(
+                            &mut tx,
+                            open.alert_id,
+                            reading.observed_at,
+                            &resolution_note,
+                            &resolved_by,
+                            &self.alert_resolved_topic,
+                        )
+                        .await?,
+                    ),
+                    None => None,
+                };
                 IngestWrite {
                     alert_opened: None,
                     alert_resolved,
@@ -101,6 +116,135 @@ impl IngestRepository for PostgresIngestRepository {
 
         Ok(write)
     }
+}
+
+struct CriticalReplay {
+    event_key: String,
+    site_id: String,
+    sequence: i64,
+    asset_id: String,
+    code: String,
+    event_at: DateTime<Utc>,
+}
+
+fn critical_replay(
+    reading: &Reading,
+    decision: &AlertDecision,
+    code: &str,
+) -> Result<CriticalReplay, PortError> {
+    let event_key = decision
+        .source_event_id
+        .clone()
+        .ok_or_else(|| PortError::message("critical replay is missing source_event_id"))?;
+    let (site_id, sequence) = parse_edge_event_key(&event_key)?;
+    if site_id != reading.asset.site_id {
+        return Err(PortError::message(
+            "critical replay source site does not match reading",
+        ));
+    }
+    Ok(CriticalReplay {
+        event_key,
+        site_id,
+        sequence,
+        asset_id: decision.asset_id.clone(),
+        code: code.to_owned(),
+        event_at: reading.observed_at,
+    })
+}
+
+fn parse_edge_event_key(event_key: &str) -> Result<(String, i64), PortError> {
+    let value = event_key
+        .strip_prefix("edge:")
+        .ok_or_else(|| PortError::message("critical replay has invalid source_event_id"))?;
+    let (site_id, sequence) = value
+        .rsplit_once(':')
+        .ok_or_else(|| PortError::message("critical replay has invalid source_event_id"))?;
+    let sequence = sequence
+        .parse::<i64>()
+        .map_err(|_| PortError::message("critical replay has invalid sequence"))?;
+    if site_id.is_empty() || sequence <= 0 {
+        return Err(PortError::message(
+            "critical replay has invalid source_event_id",
+        ));
+    }
+    Ok((site_id.to_owned(), sequence))
+}
+
+async fn lock_event(tx: &mut Transaction<'_, Postgres>, event_key: &str) -> Result<(), PortError> {
+    query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(event_key)
+        .execute(&mut **tx)
+        .await
+        .map_err(PortError::storage)?;
+    Ok(())
+}
+
+async fn record_critical_replay(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &CriticalReplay,
+    alert_id: Uuid,
+) -> Result<(), PortError> {
+    let result = query(
+        r#"
+        INSERT INTO sms_fallback_events (
+            event_key, site_id, sequence, asset_id, code, event_at, alert_id, replay_received_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+        ON CONFLICT (event_key) DO UPDATE SET
+            replay_received_at = COALESCE(sms_fallback_events.replay_received_at, EXCLUDED.replay_received_at)
+        WHERE sms_fallback_events.site_id = EXCLUDED.site_id
+          AND sms_fallback_events.sequence = EXCLUDED.sequence
+          AND sms_fallback_events.asset_id = EXCLUDED.asset_id
+          AND sms_fallback_events.code = EXCLUDED.code
+          AND sms_fallback_events.alert_id = EXCLUDED.alert_id
+        "#,
+    )
+    .bind(&event.event_key)
+    .bind(&event.site_id)
+    .bind(event.sequence)
+    .bind(&event.asset_id)
+    .bind(&event.code)
+    .bind(event.event_at)
+    .bind(alert_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(PortError::storage)?;
+    if result.rows_affected() != 1 {
+        return Err(PortError::message(format!(
+            "critical replay {} conflicts with the stored event",
+            event.event_key
+        )));
+    }
+    Ok(())
+}
+
+async fn find_alert_by_fallback_event(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &CriticalReplay,
+) -> Result<Option<Alert>, PortError> {
+    let row = query(
+        r#"
+        SELECT a.alert_id, a.asset_id, a.site_id, a.kind, a.severity, a.status, a.reason,
+            a.opened_at, a.source_event_id, a.resolved_at, a.resolution_note, a.resolved_by
+        FROM sms_fallback_events AS event
+        JOIN alerts AS a ON a.alert_id = event.alert_id
+        WHERE event.event_key = $1
+          AND event.site_id = $2
+          AND event.sequence = $3
+          AND event.asset_id = $4
+          AND event.code = $5
+        "#,
+    )
+    .bind(&event.event_key)
+    .bind(&event.site_id)
+    .bind(event.sequence)
+    .bind(&event.asset_id)
+    .bind(&event.code)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(PortError::storage)?;
+
+    row.map(row_to_alert).transpose()
 }
 
 impl AlertRepository for PostgresIngestRepository {
@@ -379,11 +523,55 @@ async fn open_alert(
     Ok(alert)
 }
 
-// Scoped by kind, not just asset_id: an asset can have multiple concurrent
-// open alerts for distinct problems (e.g. overheating and low battery), and
-// a recovery reading for one kind must not resolve another.
+async fn find_or_open_alert(
+    tx: &mut Transaction<'_, Postgres>,
+    decision: &AlertDecision,
+    topic: &str,
+) -> Result<(Option<Alert>, Alert), PortError> {
+    if let Some(source_event_id) = decision.source_event_id.as_deref()
+        && let Some(alert) = find_alert_by_source_event_id(tx, source_event_id).await?
+    {
+        return Ok((None, alert));
+    }
+    if let Some(alert) = find_open_alert(
+        tx,
+        &decision.site_id,
+        &decision.asset_id,
+        decision.kind.as_str(),
+    )
+    .await?
+    {
+        return Ok((None, alert));
+    }
+    let alert = open_alert(tx, decision, topic).await?;
+    Ok((Some(alert.clone()), alert))
+}
+
+async fn find_alert_by_source_event_id(
+    tx: &mut Transaction<'_, Postgres>,
+    source_event_id: &str,
+) -> Result<Option<Alert>, PortError> {
+    let row = query(
+        r#"
+        SELECT alert_id, asset_id, site_id, kind, severity, status, reason, opened_at, source_event_id,
+            resolved_at, resolution_note, resolved_by
+        FROM alerts
+        WHERE source_event_id = $1
+        LIMIT 1
+        "#,
+    )
+    .bind(source_event_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(PortError::storage)?;
+
+    row.map(row_to_alert).transpose()
+}
+
+// Site scope matters for synthetic asset IDs such as the site-wide outage ID.
 async fn find_open_alert(
     tx: &mut Transaction<'_, Postgres>,
+    site_id: &str,
     asset_id: &str,
     kind: &str,
 ) -> Result<Option<Alert>, PortError> {
@@ -392,11 +580,12 @@ async fn find_open_alert(
         SELECT alert_id, asset_id, site_id, kind, severity, status, reason, opened_at, source_event_id,
             resolved_at, resolution_note, resolved_by
         FROM alerts
-        WHERE asset_id = $1 AND kind = $2 AND status = 'open'
+        WHERE site_id = $1 AND asset_id = $2 AND kind = $3 AND status = 'open'
         ORDER BY opened_at DESC
         LIMIT 1
         "#,
     )
+    .bind(site_id)
     .bind(asset_id)
     .bind(kind)
     .fetch_optional(&mut **tx)
@@ -699,5 +888,15 @@ mod tests {
         assert_eq!(payload.resolved_at_utc, 1_789_351_500);
         assert_eq!(payload.resolution_note, "temperature recovered");
         assert_eq!(payload.resolved_by, "system");
+    }
+
+    #[test]
+    fn canonical_edge_event_key_preserves_site_and_sequence() {
+        assert_eq!(
+            parse_edge_event_key("edge:ng-kaji-01:18422").unwrap(),
+            ("ng-kaji-01".to_string(), 18422)
+        );
+        assert!(parse_edge_event_key("telemetry.ingested:0:42").is_err());
+        assert!(parse_edge_event_key("edge:ng-kaji-01:0").is_err());
     }
 }

@@ -37,13 +37,19 @@ SELECT s.site_id,
        s.status,
        coalesce(a.asset_count, 0),
        a.last_seen_at,
+       h.last_contact_at,
+       h.last_event_timestamp,
+       coalesce(h.queue_depth, 0),
+       h.oldest_pending_at,
+       coalesce(h.queue_growing, false),
        coalesce(o.total, 0),
        coalesce(o.critical, 0),
        coalesce(o.warning, 0),
        coalesce(o.info, 0)
 FROM sites s
 LEFT JOIN asset_rollup a ON a.site_id = s.site_id
-LEFT JOIN open_alert_rollup o ON o.site_id = s.site_id`
+LEFT JOIN open_alert_rollup o ON o.site_id = s.site_id
+LEFT JOIN site_health h ON h.site_id = s.site_id`
 
 func buildListSitesQuery(afterSiteID *string, limit int) (string, []any) {
 	b := newPredicates()
@@ -87,6 +93,11 @@ func (s *Store) ListSites(ctx context.Context, query domain.SiteQuery) (page.Pag
 			&site.Status,
 			&site.AssetCount,
 			&site.LastSeenAt,
+			&site.LastContactAt,
+			&site.LastEventAt,
+			&site.QueueDepth,
+			&site.OldestPendingAt,
+			&site.QueueGrowing,
 			&site.OpenAlerts.Total,
 			&site.OpenAlerts.Critical,
 			&site.OpenAlerts.Warning,

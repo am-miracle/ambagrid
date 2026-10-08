@@ -21,8 +21,13 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **engine:** Add revenue protection storage schema (#16)
 - Add authenticated staging telemetry worker (#17)
 - Add prepaid payment processing (#18)
-- Add revenue operations dashboard
-- **ui:** Add shared control room components
+- Add revenue operations dashboard (#19)
+- **edge:** Add durable telemetry collection
+- **ingestion:** Add HTTP ingestion endpoint for edge agents
+- **edge:** Add ordered uploader with retry and dedup
+- **telemetry:** Add replay metadata to ingestion pipeline
+- **site-health:** Track gateway dashboard states
+- **alerts:** Add critical SMS fallback
 
 ### Documentation
 
