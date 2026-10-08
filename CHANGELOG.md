@@ -22,7 +22,12 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - Add authenticated staging telemetry worker (#17)
 - Add prepaid payment processing (#18)
 - Add revenue operations dashboard (#19)
-- **edge:** Add durable local queue and simulated telemetry collector
+- **edge:** Add durable telemetry collection
+- **ingestion:** Add HTTP ingestion endpoint for edge agents
+- **edge:** Add ordered uploader with retry and dedup
+- **telemetry:** Add replay metadata to ingestion pipeline
+- **site-health:** Track gateway dashboard states
+- **alerts:** Add critical SMS fallback
 
 ### Documentation
 
@@ -44,3 +49,4 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - Harden ingestion bridge package split
 
 Move ingestion bridge internals into dedicated packages with focused config, telemetry, stats, and bridge tests. Validate MQTT topic filters before deriving constraints, cover queue shutdown/resubscribe behavior, and document simulator payload fields. Harden the virtual meter simulator state model and add tests for generated readings.
+
