@@ -82,7 +82,7 @@ func runHTTPIngest(ctx context.Context, cfg config.Config) error {
 
 	handler := ingest.NewHandler(ingest.HandlerConfig{
 		Auth:     ingest.NewAPIKeyAuth(authEntries),
-		Store:    ingest.NewMemoryDedupStore(),
+		Store:    ingest.NewPostgresDedupStore(pool),
 		Producer: ingest.NewKafkaProducer(kafkaClient, cfg.KafkaTopic, cfg.ProduceTimeout),
 		Health:   ingest.NewPostgresSiteHealthStore(pool),
 		Logger:   logger,

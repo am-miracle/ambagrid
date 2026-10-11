@@ -28,6 +28,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **telemetry:** Add replay metadata to ingestion pipeline
 - **site-health:** Track gateway dashboard states
 - **alerts:** Add critical SMS fallback
+- **edge:** Persist dedup state and surface fleet health
 
 ### Documentation
 
