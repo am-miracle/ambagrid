@@ -52,5 +52,18 @@ type HealthRepository interface {
 }
 
 type FallbackRepository interface {
-	ReceiveSMS(context.Context, domain.CriticalFallbackEvent, domain.SMSReceipt) (bool, error)
+	RunFallbackTx(ctx context.Context, eventKey string, fn func(FallbackTx) (bool, error)) (bool, error)
+}
+
+type FallbackTx interface {
+	FindFallbackEvent(ctx context.Context, eventKey string) (*domain.StoredFallbackEvent, error)
+	LookupAssetType(ctx context.Context, assetID, siteID string) (string, error)
+	FindAlertBySourceEvent(ctx context.Context, sourceEventID string) (string, error)
+	FindOpenAlert(ctx context.Context, siteID, assetID, kind string) (string, error)
+	CreateAlert(ctx context.Context, cmd domain.CreateAlertCommand) (string, error)
+	PublishOutboxEvent(ctx context.Context, topic, eventType, aggregateType, aggregateID string, payload []byte) error
+	InsertFallbackEvent(ctx context.Context, cmd domain.InsertFallbackEventCommand) error
+	InsertReceipt(ctx context.Context, eventKey string, receipt domain.SMSReceipt, pricing domain.SMSPricing) (bool, error)
+	FindReceiptEventKey(ctx context.Context, providerMessageID string) (string, error)
+	GetMonthlySMSUsage(ctx context.Context, at time.Time, rentalMinor int64) (int64, error)
 }

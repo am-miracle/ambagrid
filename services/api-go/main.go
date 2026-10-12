@@ -59,12 +59,12 @@ func main() {
 		for number, identity := range cfg.SMSSenders {
 			senders[number] = webhook.SMSSender{SiteID: identity.SiteID, GatewayID: identity.GatewayID}
 		}
-		fallbackStore := postgres.NewFallbackStore(pool, cfg.AlertOpenedTopic, domain.SMSPricing{
+		fallbackStore := postgres.NewFallbackStore(pool)
+		fallbackService = services.NewFallbackService(fallbackStore, cfg.AlertOpenedTopic, domain.SMSPricing{
 			OutboundCostMinor: cfg.SMSOutboundCostMinor, InboundCostMinor: cfg.SMSInboundCostMinor,
 			NumberRentalMinor: cfg.SMSNumberRentalMinor, MonthlyBudgetMinor: cfg.SMSMonthlyBudgetMinor,
 			Currency: cfg.SMSCurrency,
 		})
-		fallbackService = services.NewFallbackService(fallbackStore)
 		smsWebhook, err = webhook.NewSMS(cfg.SMSWebhookSecret, senders)
 		if err != nil {
 			logger.Error("configure SMS webhook", "error", err)
