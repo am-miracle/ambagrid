@@ -19,21 +19,19 @@ import (
 )
 
 type Handler struct {
-	auth     Authenticator
-	store    DedupStore
-	producer Producer
-	health   SiteHealthStore
-	logger   *slog.Logger
-	maxBody  int64
+	auth      Authenticator
+	publisher Publisher
+	health    SiteHealthStore
+	logger    *slog.Logger
+	maxBody   int64
 }
 
 type HandlerConfig struct {
-	Auth     Authenticator
-	Store    DedupStore
-	Producer Producer
-	Health   SiteHealthStore
-	Logger   *slog.Logger
-	MaxBody  int64
+	Auth      Authenticator
+	Publisher Publisher
+	Health    SiteHealthStore
+	Logger    *slog.Logger
+	MaxBody   int64
 }
 
 func NewHandler(cfg HandlerConfig) *Handler {
@@ -46,12 +44,11 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		logger = slog.Default()
 	}
 	return &Handler{
-		auth:     cfg.Auth,
-		store:    cfg.Store,
-		producer: cfg.Producer,
-		health:   cfg.Health,
-		logger:   logger,
-		maxBody:  maxBody,
+		auth:      cfg.Auth,
+		publisher: cfg.Publisher,
+		health:    cfg.Health,
+		logger:    logger,
+		maxBody:   maxBody,
 	}
 }
 
@@ -141,29 +138,9 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// TryInsert returns (true, nil) on first insert, (false, nil) if
-		// already seen. Duplicates count as accepted so the edge agent
-		// advances its cursor — the data is already in Kafka.
-		stored, err := h.store.TryInsert(r.Context(), siteID, rec.Sequence)
+		dup, err := h.publisher.PublishOnce(r.Context(), siteID, rec)
 		if err != nil {
-			h.logger.Error("dedup store error", "error", err, "site_id", siteID, "sequence", rec.Sequence, "request_id", reqID)
-			rejected = append(rejected, RecordError{
-				Index:    i,
-				Sequence: rec.Sequence,
-				Code:     "internal",
-				Message:  "internal error",
-			})
-			continue
-		}
-		if !stored {
-			accepted = append(accepted, rec.Sequence)
-			continue
-		}
-
-		if err := h.producer.Produce(r.Context(), siteID, rec); err != nil {
-			h.logger.Error("kafka produce failed", "error", err, "site_id", siteID, "sequence", rec.Sequence, "request_id", reqID)
-			// Roll back the dedup entry so the edge agent can retry this sequence.
-			_ = h.store.Remove(r.Context(), siteID, rec.Sequence)
+			h.logger.Error("publish failed", "error", err, "site_id", siteID, "sequence", rec.Sequence, "request_id", reqID)
 			rejected = append(rejected, RecordError{
 				Index:    i,
 				Sequence: rec.Sequence,
@@ -172,7 +149,9 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 			})
 			continue
 		}
-
+		if dup {
+			h.logger.Debug("duplicate skipped", "site_id", siteID, "sequence", rec.Sequence, "request_id", reqID)
+		}
 		accepted = append(accepted, rec.Sequence)
 	}
 

@@ -41,7 +41,7 @@ type HTTPConfig struct {
 	APIKeys         []APIKeyEntry
 	MaxBodyBytes    int64
 	ShutdownTimeout time.Duration
-	DatabaseURL     string
+	HealthTopic     string
 }
 
 type APIKeyEntry struct {
@@ -120,7 +120,7 @@ func FromEnv() (Config, error) {
 			APIKeys:         parseAPIKeys(os.Getenv("INGEST_HTTP_API_KEYS")),
 			MaxBodyBytes:    httpMaxBody,
 			ShutdownTimeout: httpShutdownTimeout,
-			DatabaseURL:     envString("DATABASE_URL", ""),
+			HealthTopic:     envString("INGEST_HEALTH_TOPIC", "site.health"),
 		},
 		KafkaSecurity: KafkaSecurity{
 			Protocol:      strings.ToUpper(envString("KAFKA_SECURITY_PROTOCOL", ProtocolPlaintext)),
@@ -164,9 +164,6 @@ func FromEnv() (Config, error) {
 	}
 	if cfg.HTTP.Enabled && len(cfg.HTTP.APIKeys) == 0 {
 		return Config{}, fmt.Errorf("INGEST_HTTP_API_KEYS must be set when HTTP ingestion is enabled")
-	}
-	if cfg.HTTP.Enabled && cfg.HTTP.DatabaseURL == "" {
-		return Config{}, fmt.Errorf("DATABASE_URL must be set when HTTP ingestion is enabled")
 	}
 
 	return cfg, nil

@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,8 +26,31 @@ func (s *stubAuth) Authenticate(_ *http.Request) (string, error) {
 }
 
 type stubProducer struct {
+	mu       sync.Mutex
 	produced []ingest.IngestRecord
 	err      error
+}
+
+func (s *stubProducer) Produce(_ context.Context, _ string, rec ingest.IngestRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return s.err
+	}
+	s.produced = append(s.produced, rec)
+	return nil
+}
+
+func (s *stubProducer) producedCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.produced)
+}
+
+func (s *stubProducer) setErr(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.err = err
 }
 
 type stubHealth struct {
@@ -38,21 +63,12 @@ func (s *stubHealth) RecordContact(_ context.Context, report ingest.SiteHealthRe
 	return s.err
 }
 
-func (s *stubProducer) Produce(_ context.Context, _ string, rec ingest.IngestRecord) error {
-	if s.err != nil {
-		return s.err
-	}
-	s.produced = append(s.produced, rec)
-	return nil
-}
-
-func newHandler(auth ingest.Authenticator, store ingest.DedupStore, producer ingest.Producer) *ingest.Handler {
+func newHandler(auth ingest.Authenticator, producer *stubProducer) *ingest.Handler {
 	return ingest.NewHandler(ingest.HandlerConfig{
-		Auth:     auth,
-		Store:    store,
-		Producer: producer,
-		Health:   &stubHealth{},
-		MaxBody:  1 << 20,
+		Auth:      auth,
+		Publisher: ingest.NewOncePublisher(producer),
+		Health:    &stubHealth{},
+		MaxBody:   1 << 20,
 	})
 }
 
@@ -95,11 +111,7 @@ func postBatch(handler http.Handler, records []ingest.IngestRecord) *httptest.Re
 
 func TestIngest_Success(t *testing.T) {
 	producer := &stubProducer{}
-	h := newHandler(
-		&stubAuth{siteID: "site-01"},
-		ingest.NewMemoryDedupStore(),
-		producer,
-	)
+	h := newHandler(&stubAuth{siteID: "site-01"}, producer)
 
 	rec := validRecord(1, "site-01")
 	w := postBatch(h, []ingest.IngestRecord{rec})
@@ -118,17 +130,13 @@ func TestIngest_Success(t *testing.T) {
 	if len(resp.Rejected) != 0 {
 		t.Fatalf("expected no rejected, got %v", resp.Rejected)
 	}
-	if len(producer.produced) != 1 {
-		t.Fatalf("expected 1 produced, got %d", len(producer.produced))
+	if producer.producedCount() != 1 {
+		t.Fatalf("expected 1 produced, got %d", producer.producedCount())
 	}
 }
 
 func TestIngest_Unauthenticated(t *testing.T) {
-	h := newHandler(
-		&stubAuth{err: ingest.ErrUnauthorized},
-		ingest.NewMemoryDedupStore(),
-		&stubProducer{},
-	)
+	h := newHandler(&stubAuth{err: ingest.ErrUnauthorized}, &stubProducer{})
 
 	w := postBatch(h, []ingest.IngestRecord{validRecord(1, "site-01")})
 
@@ -138,9 +146,8 @@ func TestIngest_Unauthenticated(t *testing.T) {
 }
 
 func TestIngest_DuplicateDetection(t *testing.T) {
-	store := ingest.NewMemoryDedupStore()
 	producer := &stubProducer{}
-	h := newHandler(&stubAuth{siteID: "site-01"}, store, producer)
+	h := newHandler(&stubAuth{siteID: "site-01"}, producer)
 
 	w1 := postBatch(h, []ingest.IngestRecord{validRecord(1, "site-01")})
 	if w1.Code != http.StatusOK {
@@ -157,17 +164,13 @@ func TestIngest_DuplicateDetection(t *testing.T) {
 	if len(resp.Accepted) != 1 || resp.Accepted[0] != 1 {
 		t.Fatalf("duplicate should be accepted (idempotent), got accepted=%v", resp.Accepted)
 	}
-	if len(producer.produced) != 1 {
-		t.Fatalf("duplicate should not produce again, got %d produces", len(producer.produced))
+	if producer.producedCount() != 1 {
+		t.Fatalf("duplicate should not produce again, got %d produces", producer.producedCount())
 	}
 }
 
 func TestIngest_ValidationErrors(t *testing.T) {
-	h := newHandler(
-		&stubAuth{siteID: "site-01"},
-		ingest.NewMemoryDedupStore(),
-		&stubProducer{},
-	)
+	h := newHandler(&stubAuth{siteID: "site-01"}, &stubProducer{})
 
 	bad := ingest.IngestRecord{
 		Sequence:  0,
@@ -194,11 +197,7 @@ func TestIngest_ValidationErrors(t *testing.T) {
 }
 
 func TestIngest_RejectsCriticalCodeForWrongAssetType(t *testing.T) {
-	h := newHandler(
-		&stubAuth{siteID: "site-01"},
-		ingest.NewMemoryDedupStore(),
-		&stubProducer{},
-	)
+	h := newHandler(&stubAuth{siteID: "site-01"}, &stubProducer{})
 
 	rec := validRecord(1, "site-01")
 	rec.CriticalCode = "INVERTER_FAILURE"
@@ -210,11 +209,7 @@ func TestIngest_RejectsCriticalCodeForWrongAssetType(t *testing.T) {
 }
 
 func TestIngest_SiteMismatch(t *testing.T) {
-	h := newHandler(
-		&stubAuth{siteID: "site-01"},
-		ingest.NewMemoryDedupStore(),
-		&stubProducer{},
-	)
+	h := newHandler(&stubAuth{siteID: "site-01"}, &stubProducer{})
 
 	rec := validRecord(1, "site-99")
 	w := postBatch(h, []ingest.IngestRecord{rec})
@@ -232,11 +227,7 @@ func TestIngest_SiteMismatch(t *testing.T) {
 
 func TestIngest_PartialFailure(t *testing.T) {
 	producer := &stubProducer{}
-	h := newHandler(
-		&stubAuth{siteID: "site-01"},
-		ingest.NewMemoryDedupStore(),
-		producer,
-	)
+	h := newHandler(&stubAuth{siteID: "site-01"}, producer)
 
 	good := validRecord(1, "site-01")
 	bad := ingest.IngestRecord{Sequence: 0, SiteID: "site-01"}
@@ -260,8 +251,10 @@ func TestIngest_PartialFailure(t *testing.T) {
 func TestIngest_EmptyBatchIsAHeartbeat(t *testing.T) {
 	health := &stubHealth{}
 	h := ingest.NewHandler(ingest.HandlerConfig{
-		Auth: &stubAuth{siteID: "site-01"}, Store: ingest.NewMemoryDedupStore(),
-		Producer: &stubProducer{}, Health: health, MaxBody: 1 << 20,
+		Auth:      &stubAuth{siteID: "site-01"},
+		Publisher: ingest.NewOncePublisher(&stubProducer{}),
+		Health:    health,
+		MaxBody:   1 << 20,
 	})
 
 	w := postBatch(h, []ingest.IngestRecord{})
@@ -278,11 +271,7 @@ func TestIngest_EmptyBatchIsAHeartbeat(t *testing.T) {
 }
 
 func TestIngest_MalformedJSON(t *testing.T) {
-	h := newHandler(
-		&stubAuth{siteID: "site-01"},
-		ingest.NewMemoryDedupStore(),
-		&stubProducer{},
-	)
+	h := newHandler(&stubAuth{siteID: "site-01"}, &stubProducer{})
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/ingest", strings.NewReader("{invalid"))
 	req.Header.Set("Authorization", "Bearer test-key")
@@ -294,10 +283,9 @@ func TestIngest_MalformedJSON(t *testing.T) {
 	}
 }
 
-func TestIngest_ProduceFailureRollsBackDedup(t *testing.T) {
-	store := ingest.NewMemoryDedupStore()
+func TestIngest_ProduceFailureAllowsRetry(t *testing.T) {
 	producer := &stubProducer{err: errors.New("kafka down")}
-	h := newHandler(&stubAuth{siteID: "site-01"}, store, producer)
+	h := newHandler(&stubAuth{siteID: "site-01"}, producer)
 
 	w := postBatch(h, []ingest.IngestRecord{validRecord(1, "site-01")})
 
@@ -307,21 +295,17 @@ func TestIngest_ProduceFailureRollsBackDedup(t *testing.T) {
 		t.Fatalf("expected 1 rejected, got %d", len(resp.Rejected))
 	}
 
-	producer.err = nil
+	producer.setErr(nil)
 	w2 := postBatch(h, []ingest.IngestRecord{validRecord(1, "site-01")})
 	var resp2 ingest.BatchResponse
 	json.Unmarshal(w2.Body.Bytes(), &resp2)
 	if len(resp2.Accepted) != 1 {
-		t.Fatalf("after rollback, retry should succeed; accepted=%v rejected=%v", resp2.Accepted, resp2.Rejected)
+		t.Fatalf("after failure, retry should succeed; accepted=%v rejected=%v", resp2.Accepted, resp2.Rejected)
 	}
 }
 
 func TestIngest_HealthEndpoint(t *testing.T) {
-	h := newHandler(
-		&stubAuth{siteID: "site-01"},
-		ingest.NewMemoryDedupStore(),
-		&stubProducer{},
-	)
+	h := newHandler(&stubAuth{siteID: "site-01"}, &stubProducer{})
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	w := httptest.NewRecorder()
@@ -368,5 +352,67 @@ func TestAPIKeyAuth(t *testing.T) {
 				t.Fatalf("expected site %q, got %q", tt.want, got)
 			}
 		})
+	}
+}
+
+func TestOncePublisher_ConcurrentSameSequence(t *testing.T) {
+	var calls atomic.Int64
+	gate := make(chan struct{})
+	producer := &blockingProducer{gate: gate, calls: &calls}
+
+	pub := ingest.NewOncePublisher(producer)
+	rec := validRecord(1, "site-01")
+
+	var wg sync.WaitGroup
+	results := make([]publishResult, 2)
+
+	for i := range results {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			dup, err := pub.PublishOnce(context.Background(), "site-01", rec)
+			results[idx] = publishResult{dup: dup, err: err}
+		}(i)
+	}
+
+	time.Sleep(20 * time.Millisecond)
+	close(gate)
+	wg.Wait()
+
+	if calls.Load() != 1 {
+		t.Fatalf("expected exactly 1 produce call, got %d", calls.Load())
+	}
+
+	dups := 0
+	for _, r := range results {
+		if r.err != nil {
+			t.Fatalf("unexpected error: %v", r.err)
+		}
+		if r.dup {
+			dups++
+		}
+	}
+	if dups != 1 {
+		t.Fatalf("expected exactly 1 duplicate, got %d", dups)
+	}
+}
+
+type publishResult struct {
+	dup bool
+	err error
+}
+
+type blockingProducer struct {
+	gate  chan struct{}
+	calls *atomic.Int64
+}
+
+func (p *blockingProducer) Produce(ctx context.Context, _ string, _ ingest.IngestRecord) error {
+	p.calls.Add(1)
+	select {
+	case <-p.gate:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
