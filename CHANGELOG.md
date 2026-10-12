@@ -30,6 +30,10 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **alerts:** Add critical SMS fallback
 - **edge:** Persist dedup state and surface fleet health
 
+### Changed
+
+- **alerts:** Move SMS fallback request rules out of the repository
+
 ### Documentation
 
 - Add open source project foundations
@@ -40,6 +44,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 
 - **outbox:** Publish alert events durably (#12)
 - **engine:** Make outbox dependencies explicit (#14)
+- **ingestion:** Make dedup and Kafka publish atomic, drop Postgres dependency
 
 ### Maintenance
 
