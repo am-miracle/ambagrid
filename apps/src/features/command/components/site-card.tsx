@@ -38,6 +38,12 @@ export function SiteCard({
 	}, []);
 
 	const dark = status === "offline";
+	const healthTone: Status =
+		site.healthStatus === "live"
+			? "healthy"
+			: site.healthStatus === "delayed"
+				? "warning"
+				: "offline";
 	const alertingIds = useMemo(
 		() => new Set(openAlerts.map((a) => a.asset_id)),
 		[openAlerts],
@@ -113,8 +119,28 @@ export function SiteCard({
 						now,
 					)}
 				</b>
-				<span className="text-muted-foreground">Status</span>
-				<b style={{ color: STATUS_COLOR[status] }}>{status}</b>
+				<span className="text-muted-foreground">Gateway contact</span>
+				<b>
+					{formatAge(
+						site.lastContactAt
+							? new Date(site.lastContactAt).toISOString()
+							: null,
+						now,
+					)}
+				</b>
+				<span className="text-muted-foreground">Pending queue</span>
+				<b>{site.queueDepth}</b>
+				<span className="text-muted-foreground">Oldest pending</span>
+				<b>
+					{formatAge(
+						site.oldestPendingAt
+							? new Date(site.oldestPendingAt).toISOString()
+							: null,
+						now,
+					)}
+				</b>
+				<span className="text-muted-foreground">Gateway</span>
+				<b style={{ color: STATUS_COLOR[healthTone] }}>{site.healthStatus}</b>
 			</div>
 			{dark && (
 				<p className="mt-[10px] text-[11.5px] text-warning leading-[1.45]">

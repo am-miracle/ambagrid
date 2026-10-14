@@ -21,8 +21,18 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **engine:** Add revenue protection storage schema (#16)
 - Add authenticated staging telemetry worker (#17)
 - Add prepaid payment processing (#18)
-- Add revenue operations dashboard
-- **ui:** Add shared control room components
+- Add revenue operations dashboard (#19)
+- **edge:** Add durable telemetry collection
+- **ingestion:** Add HTTP ingestion endpoint for edge agents
+- **edge:** Add ordered uploader with retry and dedup
+- **telemetry:** Add replay metadata to ingestion pipeline
+- **site-health:** Track gateway dashboard states
+- **alerts:** Add critical SMS fallback
+- **edge:** Persist dedup state and surface fleet health
+
+### Changed
+
+- **alerts:** Move SMS fallback request rules out of the repository
 
 ### Documentation
 
@@ -34,6 +44,8 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 
 - **outbox:** Publish alert events durably (#12)
 - **engine:** Make outbox dependencies explicit (#14)
+- **ingestion:** Make dedup and Kafka publish atomic, drop Postgres dependency
+- **edge:** Harden fallback and replay idempotency
 
 ### Maintenance
 

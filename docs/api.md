@@ -133,6 +133,12 @@ site. It does not identify a human caller. Sites backfilled by the migration
 may return `null` until ownership is assigned; production provisioning must
 supply a GridOperator.
 
+`health_status` is derived when the response is built. A site is `offline`
+after `API_SITE_OFFLINE_AFTER` without an authenticated gateway contact. While
+contact is recent, it is `delayed` when the latest measurement is older than
+`API_SITE_EVENT_STALE_AFTER` or the pending queue is growing; otherwise it is
+`live`. Queue age is calculated from `oldest_pending_at` on each response.
+
 ```json
 {
   "site_id": "site-01",
@@ -145,6 +151,13 @@ supply a GridOperator.
   "status": "active",
   "asset_count": 3,
   "last_seen_at": "2026-09-03T01:58:31.535397+01:00",
+  "health_status": "live",
+  "last_contact_at": "2026-09-03T01:58:35.535397+01:00",
+  "last_event_timestamp": "2026-09-03T01:58:31.535397+01:00",
+  "queue_depth": 0,
+  "oldest_pending_at": null,
+  "oldest_pending_record_age_seconds": null,
+  "queue_growing": false,
   "open_alerts": { "total": 1, "critical": 1, "warning": 0, "info": 0 }
 }
 ```
@@ -372,6 +385,8 @@ is unreachable, so the replica leaves the load balancer instead.
 | `API_DEFAULT_PAGE_SIZE` | `50` | page size when `limit` is absent |
 | `API_MAX_PAGE_SIZE` | `200` | page size ceiling |
 | `API_GLOBAL_HISTORY_PAGE_SIZE` | `25` | default and ceiling for unscoped alert history |
+| `API_SITE_OFFLINE_AFTER` | `2m` | time without gateway contact before a site is offline |
+| `API_SITE_EVENT_STALE_AFTER` | `2m` | measurement lag before a contacted site is delayed |
 | `DB_MAX_CONNS` | `10` | pool ceiling per replica |
 | `DB_MIN_CONNS` | `1` | warm connections |
 | `DB_QUERY_TIMEOUT` | `3s` | bounds waiting for a connection plus executing |

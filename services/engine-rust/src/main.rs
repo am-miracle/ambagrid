@@ -3,6 +3,8 @@ mod adapters;
 mod alert_outbox;
 mod config;
 mod domain;
+#[cfg(test)]
+mod ingest_dedup_tests;
 mod meter_command_outbox;
 pub mod metrics;
 #[cfg(test)]

@@ -39,6 +39,16 @@ type HealthService interface {
 	Ready(ctx context.Context) error
 }
 
+type FallbackService interface {
+	ReceiveSMS(context.Context, domain.CriticalFallbackEvent, domain.SMSReceipt) (bool, error)
+}
+
+type SMSWebhookProvider interface {
+	SignatureHeader() string
+	VerifySignature(body []byte, signature string) error
+	Parse(body []byte) (domain.CriticalFallbackEvent, domain.SMSReceipt, error)
+}
+
 type WebhookProvider interface {
 	Name() string
 	SignatureHeader() string

@@ -128,9 +128,7 @@ func saslMechanism(sec config.KafkaSecurity) (sasl.Mechanism, error) {
 	}
 }
 
-// Run wires the MQTT subscription to the Kafka producer pool and blocks until
-// ctx is cancelled or a fatal setup error occurs.
-func Run(ctx context.Context, cfg config.Config) error {
+func NewKafkaClient(cfg config.Config) (*kgo.Client, error) {
 	kafkaOpts := []kgo.Opt{
 		kgo.SeedBrokers(cfg.KafkaBrokers...),
 		kgo.ClientID("ambagrid-ingestion-go"),
@@ -141,13 +139,23 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 	securityOpts, err := kafkaSecurityOpts(cfg.KafkaSecurity)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	kafkaOpts = append(kafkaOpts, securityOpts...)
 
-	kafkaClient, err := kgo.NewClient(kafkaOpts...)
+	client, err := kgo.NewClient(kafkaOpts...)
 	if err != nil {
-		return fmt.Errorf("create kafka client: %w", err)
+		return nil, fmt.Errorf("create kafka client: %w", err)
+	}
+	return client, nil
+}
+
+// Run wires the MQTT subscription to the Kafka producer pool and blocks until
+// ctx is cancelled or a fatal setup error occurs.
+func Run(ctx context.Context, cfg config.Config) error {
+	kafkaClient, err := NewKafkaClient(cfg)
+	if err != nil {
+		return err
 	}
 
 	// Keep MQTT callbacks non-blocking: Paho invokes handlers on its own delivery path,

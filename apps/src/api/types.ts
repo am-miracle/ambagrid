@@ -62,6 +62,13 @@ export interface Site {
 	status: string;
 	asset_count: number;
 	last_seen_at: string | null;
+	health_status: "live" | "delayed" | "offline";
+	last_contact_at: string | null;
+	last_event_timestamp: string | null;
+	queue_depth: number;
+	oldest_pending_at: string | null;
+	oldest_pending_record_age_seconds: number | null;
+	queue_growing: boolean;
 	open_alerts: AlertCounts;
 }
 

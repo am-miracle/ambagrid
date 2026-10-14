@@ -18,6 +18,8 @@ type API struct {
 	RequestTimeout time.Duration
 	AllowedOrigins []string
 	DevMode        bool
+	Fallback       FallbackService
+	SMSWebhook     SMSWebhookProvider
 }
 
 type WebhookRoute struct {
@@ -50,6 +52,9 @@ func (a API) Handler() http.Handler {
 	for _, wh := range a.Webhooks {
 		provider := wh.Provider
 		a.handleRoute(mux, http.MethodPost, wh.Pattern, a.handleWebhookPayment(provider))
+	}
+	if a.Fallback != nil && a.SMSWebhook != nil {
+		a.handleRoute(mux, http.MethodPost, "/v1/sms/inbound", a.handleSMSFallback)
 	}
 
 	// Keep unmatched responses in the API's JSON envelope.

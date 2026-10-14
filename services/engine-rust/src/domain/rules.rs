@@ -4,6 +4,50 @@ use crate::domain::{
 };
 
 pub const INTERNAL_TEMPERATURE_ALERT_KIND: &str = "internal_temperature";
+pub const BATTERY_OVERHEAT_ALERT_KIND: &str = "battery_overheat";
+
+pub fn critical_fallback_decision(reading: &Reading, code: &str) -> Option<AlertDecision> {
+    let (asset_id, kind, reason) = match code {
+        "BATTERY_OVERHEAT" => (
+            if reading.asset_type() == AssetType::BatteryBms {
+                reading.asset.asset_id.clone()
+            } else {
+                return None;
+            },
+            BATTERY_OVERHEAT_ALERT_KIND,
+            format!(
+                "battery_overheat:{:.1}C",
+                reading.asset.internal_temperature?
+            ),
+        ),
+        "INVERTER_FAILURE" => {
+            if reading.asset_type() != AssetType::SolarInverter {
+                return None;
+            }
+            (
+                reading.asset.asset_id.clone(),
+                "inverter_failure",
+                "inverter_failure".to_string(),
+            )
+        }
+        "TAMPER_DETECTED" => (
+            reading.asset.asset_id.clone(),
+            "tamper_detected",
+            "tamper_detected".to_string(),
+        ),
+        "SITE_OUTAGE" => ("site".to_string(), "site_outage", "site_outage".to_string()),
+        _ => return None,
+    };
+    Some(AlertDecision {
+        asset_id,
+        site_id: reading.asset.site_id.clone(),
+        kind: AlertKind::from(kind),
+        severity: Severity::Critical,
+        reason,
+        opened_at: reading.observed_at,
+        source_event_id: reading.source_event_id.clone(),
+    })
+}
 
 // Per-asset-type critical ceilings. These are rough values pulled from public
 // standards/datasheets, not AmbaGrid's actual deployed hardware specs — swap
@@ -35,6 +79,13 @@ impl Default for ThresholdPolicy {
 }
 
 impl ThresholdPolicy {
+    pub fn alert_kind(&self, asset_type: AssetType) -> AlertKind {
+        match asset_type {
+            AssetType::BatteryBms => AlertKind::from(BATTERY_OVERHEAT_ALERT_KIND),
+            _ => AlertKind::from(INTERNAL_TEMPERATURE_ALERT_KIND),
+        }
+    }
+
     fn critical_for(&self, asset_type: AssetType) -> f32 {
         match asset_type {
             AssetType::SmartMeter => self.smart_meter_critical_c,
@@ -53,7 +104,7 @@ impl ThresholdPolicy {
         Some(AlertDecision {
             asset_id: reading.asset.asset_id.clone(),
             site_id: reading.asset.site_id.clone(),
-            kind: AlertKind::from(INTERNAL_TEMPERATURE_ALERT_KIND),
+            kind: self.alert_kind(reading.asset_type()),
             severity: Severity::Critical,
             reason: format!(
                 "internal_temperature_high:{temperature:.1}C>=threshold:{threshold:.1}C"
@@ -166,7 +217,26 @@ mod tests {
 
         // 60C wouldn't trip the smart meter threshold, but it's above the
         // battery pack's lower ceiling.
-        assert!(ThresholdPolicy::default().evaluate(&reading).is_some());
+        let decision = ThresholdPolicy::default().evaluate(&reading).unwrap();
+        assert_eq!(decision.kind.as_str(), BATTERY_OVERHEAT_ALERT_KIND);
+    }
+
+    #[test]
+    fn rejects_asset_specific_fallback_code_for_wrong_asset_type() {
+        let reading = Reading {
+            asset: Asset {
+                asset_id: "met-0101".to_string(),
+                site_id: "ng-kaji-01".to_string(),
+                internal_temperature: Some(68.2),
+                last_seen_at: Utc::now(),
+            },
+            observed_at: Utc::now(),
+            source_event_id: Some("edge:ng-kaji-01:42".to_string()),
+            state: AssetState::SmartMeter(SmartMeterState::default()),
+        };
+
+        assert!(critical_fallback_decision(&reading, "BATTERY_OVERHEAT").is_none());
+        assert!(critical_fallback_decision(&reading, "INVERTER_FAILURE").is_none());
     }
 
     #[test]

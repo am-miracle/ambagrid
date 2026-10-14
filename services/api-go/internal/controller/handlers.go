@@ -217,6 +217,38 @@ type applyDevPaymentBody struct {
 
 const maxWebhookBodySize = 64 * 1024
 
+func (a API) handleSMSFallback(w http.ResponseWriter, r *http.Request) {
+	signature := r.Header.Get(a.SMSWebhook.SignatureHeader())
+	if signature == "" {
+		writeErrorBody(w, a.logger(), http.StatusUnauthorized, codeUnauthenticated, "missing webhook signature", RequestIDFrom(r.Context()))
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookBodySize))
+	if err != nil {
+		writeError(w, r, a.logger(), errInvalidParameter)
+		return
+	}
+	if err := a.SMSWebhook.VerifySignature(body, signature); err != nil {
+		writeErrorBody(w, a.logger(), http.StatusUnauthorized, codeUnauthenticated, "invalid webhook signature", RequestIDFrom(r.Context()))
+		return
+	}
+	event, receipt, err := a.SMSWebhook.Parse(body)
+	if err != nil {
+		writeErrorBody(w, a.logger(), http.StatusBadRequest, codeInvalidArgument, err.Error(), RequestIDFrom(r.Context()))
+		return
+	}
+	created, err := a.Fallback.ReceiveSMS(r.Context(), event, receipt)
+	if err != nil {
+		writeError(w, r, a.logger(), err)
+		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, a.logger(), status, map[string]any{"event_key": event.EventKey(), "created": created, "request_id": RequestIDFrom(r.Context())})
+}
+
 func (a API) handleWebhookPayment(provider WebhookProvider) http.HandlerFunc {
 	signatureHeader := provider.SignatureHeader()
 

@@ -9,6 +9,7 @@ import { gsap } from "#/lib/motion";
 import { AlertDetail } from "./components/alert-detail";
 import { AlertInbox } from "./components/alert-inbox";
 import { FilterRail } from "./components/filter-rail";
+import { FleetTable } from "./components/fleet-table";
 import { PaymentPanel } from "./components/payment-panel";
 import { RevenuePanel } from "./components/revenue-panel";
 import { SiteCard } from "./components/site-card";
@@ -81,7 +82,9 @@ export function CommandSurface() {
 	const [inboxOpen, setInboxOpen] = useState(false);
 	const [paymentOpen, setPaymentOpen] = useState(false);
 	const [scenario, setScenario] = useState(false);
-	const [inboxTab, setInboxTab] = useState<"alerts" | "revenue">("alerts");
+	const [inboxTab, setInboxTab] = useState<"alerts" | "revenue" | "fleet">(
+		"alerts",
+	);
 
 	const camRef = useRef<CameraApi | null>(null);
 	const timersRef = useRef<number[]>([]);
@@ -551,9 +554,18 @@ export function CommandSurface() {
 				) : (
 					<Tabs value={inboxTab} onValueChange={setInboxTab} className="flex-1">
 						<TabsList className="px-4 pt-2.5">
+							<TabsTrigger value="fleet">Fleet</TabsTrigger>
 							<TabsTrigger value="alerts">Alerts</TabsTrigger>
 							<TabsTrigger value="revenue">Revenue</TabsTrigger>
 						</TabsList>
+						<TabsContent value="fleet">
+							<FleetTable
+								sites={fleet.sites}
+								statuses={statuses}
+								now={now}
+								onSelectSite={selectSite}
+							/>
+						</TabsContent>
 						<TabsContent value="alerts">
 							<AlertInbox
 								alerts={openAlerts}
