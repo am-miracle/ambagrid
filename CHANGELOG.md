@@ -45,6 +45,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **outbox:** Publish alert events durably (#12)
 - **engine:** Make outbox dependencies explicit (#14)
 - **ingestion:** Make dedup and Kafka publish atomic, drop Postgres dependency
+- **edge:** Harden fallback and replay idempotency
 
 ### Maintenance
 
