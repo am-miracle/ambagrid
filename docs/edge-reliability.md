@@ -145,3 +145,34 @@ upload queue. Upload remains the next step; it should mark a record `uploaded`
 after publishing and `acknowledged` only after the upstream broker confirms
 delivery. The database is bound to one site identity, making `(site_id,
 sequence)` the stable idempotency key for this deployment model.
+
+### Replay Kafka record
+
+An HTTP replay is published to `telemetry.ingested` with the device ID as its
+key. The value is a binary `MetricPayload`; decoded, it looks like:
+
+```json
+{
+  "deviceId": "batt-01",
+  "deviceType": "DEVICE_TYPE_BATTERY_BMS",
+  "timestampUtc": "1730000000",
+  "siteId": "ng-kaji-01",
+  "internalTemperature": 68.2,
+  "batterySocPct": 42
+}
+```
+
+The replay metadata stays in Kafka headers:
+
+```text
+site_id=ng-kaji-01
+gateway_id=gateway-01
+device_id=batt-01
+sequence=18422
+source_event_id=edge:ng-kaji-01:18422
+event_timestamp=2024-10-27T03:33:20Z
+edge_received_at=2024-10-27T03:33:21Z
+uploaded_at=2024-10-27T03:35:30Z
+replay=true
+source=http
+```

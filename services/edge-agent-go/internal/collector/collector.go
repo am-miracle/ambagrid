@@ -116,6 +116,7 @@ func (c *Collector) persist(ctx context.Context, event domain.Event, critical *f
 		return fmt.Errorf("persist device %q: %w", event.DeviceID, err)
 	}
 	if critical != nil && c.fallback != nil {
+		// Persist assigns the sequence used by the fallback incident.
 		critical.Sequence = sequence
 		if err := c.fallback.OpenFallbackIncident(ctx, *critical, now); err != nil {
 			return fmt.Errorf("open critical incident for %q: %w", event.DeviceID, err)

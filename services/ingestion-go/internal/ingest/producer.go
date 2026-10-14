@@ -7,10 +7,8 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
 
-	telemetrypb "ingestion-go/proto/ambagrid/telemetry"
+	"ingestion-go/internal/telemetry"
 )
 
 type KafkaProducer struct {
@@ -27,7 +25,7 @@ func NewKafkaProducer(client *kgo.Client, topic string, timeout time.Duration) *
 // bridge emits, so downstream consumers see a uniform wire format regardless
 // of whether the record arrived via MQTT or HTTP.
 func (p *KafkaProducer) Produce(ctx context.Context, siteID string, rec IngestRecord) error {
-	value, err := transcodePayload(rec.Payload)
+	value, err := telemetry.JSONToMetricPayload(rec.Payload)
 	if err != nil {
 		return fmt.Errorf("transcode payload: %w", err)
 	}
@@ -69,17 +67,6 @@ func headersFor(siteID string, rec IngestRecord) []kgo.RecordHeader {
 		headers = append(headers, kgo.RecordHeader{Key: "critical_value", Value: []byte(strconv.FormatFloat(*rec.CriticalValue, 'f', -1, 64))})
 	}
 	return headers
-}
-
-func transcodePayload(payload []byte) ([]byte, error) {
-	msg := &telemetrypb.MetricPayload{}
-	if err := protojson.Unmarshal(payload, msg); err != nil {
-		return nil, err
-	}
-	if msg.TimestampUtc == nil || msg.GetTimestampUtc() == 0 {
-		return nil, fmt.Errorf("timestamp_utc must be set in payload")
-	}
-	return proto.Marshal(msg)
 }
 
 func regionFromTopic(mqttTopic string) []byte {

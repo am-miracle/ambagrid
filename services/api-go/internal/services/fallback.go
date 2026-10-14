@@ -105,7 +105,7 @@ func (s *FallbackService) checkReceiptConflict(ctx context.Context, tx FallbackT
 	}
 	storedKey, err := tx.FindReceiptEventKey(ctx, receipt.ProviderMessageID)
 	if err != nil {
-		return nil
+		return fmt.Errorf("check fallback receipt conflict: %w", err)
 	}
 	if storedKey != eventKey {
 		return domain.ErrConflict

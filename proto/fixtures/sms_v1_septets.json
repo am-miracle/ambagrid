@@ -1,0 +1,32 @@
+[
+  {
+    "name": "plain ASCII",
+    "value": "AMBAGRID",
+    "repeat": 1,
+    "septets": 8
+  },
+  {
+    "name": "GSM-7 extension table",
+    "value": "^{}\\[~]|€",
+    "repeat": 1,
+    "septets": 18
+  },
+  {
+    "name": "mixed basic and extended characters",
+    "value": "A^€",
+    "repeat": 1,
+    "septets": 5
+  },
+  {
+    "name": "single-segment boundary",
+    "value": "a",
+    "repeat": 160,
+    "septets": 160
+  },
+  {
+    "name": "multipart boundary",
+    "value": "a",
+    "repeat": 161,
+    "septets": 161
+  }
+]

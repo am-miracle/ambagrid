@@ -129,12 +129,8 @@ func ParseTopic(topic string, constraints TopicConstraints) (Topic, error) {
 	}, nil
 }
 
-// jsonToMetricPayload parses the hardware's JSON telemetry payload and
-// re-encodes it as the binary MetricPayload protobuf defined in
-// proto/telemetry.proto. protojson accepts both the proto's original
-// snake_case field names and enum name strings, which is what the simulated
-// and real edge hardware send.
-func jsonToMetricPayload(payload []byte) ([]byte, error) {
+// JSONToMetricPayload converts AmbaGrid JSON into a binary MetricPayload.
+func JSONToMetricPayload(payload []byte) ([]byte, error) {
 	msg := &telemetrypb.MetricPayload{}
 	if err := protojson.Unmarshal(payload, msg); err != nil {
 		return nil, err
@@ -191,7 +187,7 @@ func BuildRecord(kafkaTopic, mqttTopic string, payload []byte, metadata MessageM
 		return nil, err
 	}
 
-	value, err := jsonToMetricPayload(payload)
+	value, err := JSONToMetricPayload(payload)
 	if err != nil {
 		return nil, fmt.Errorf("decode telemetry payload: %w", err)
 	}

@@ -1,10 +1,5 @@
 package postgres
 
-import "testing"
+import "api-go/internal/services"
 
-func TestFallbackTxImplementsInterface(t *testing.T) {
-	// Compile-time check that fallbackTx satisfies the interface the
-	// service layer depends on. The services package is imported by
-	// fallback.go already so this just locks the contract.
-	_ = FallbackStore{}
-}
+var _ services.FallbackTx = fallbackTx{}

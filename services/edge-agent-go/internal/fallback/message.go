@@ -40,6 +40,12 @@ func (e Event) EventKey() string {
 	return fmt.Sprintf("edge:%s:%d", e.SiteID, e.Sequence)
 }
 
+// Validate checks that event fits the SMS wire contract.
+func Validate(event Event) error {
+	_, err := Format(event)
+	return err
+}
+
 func Format(event Event) (string, error) {
 	if !event.Code.Valid() {
 		return "", fmt.Errorf("unknown critical fallback code %q", event.Code)
@@ -91,6 +97,7 @@ func invalidToken(value string) bool {
 	return false
 }
 
+// GSM-7 extension characters occupy two septets; shared cases live in proto/fixtures.
 func gsmSeptets(value string) int {
 	count := 0
 	for _, r := range value {

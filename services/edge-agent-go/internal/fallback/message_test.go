@@ -40,6 +40,9 @@ func TestFormatRejectsNonFiniteTemperatureAndMultipartGSM7(t *testing.T) {
 	if _, err := fallback.Format(base); err == nil {
 		t.Fatal("Format() accepted a multipart GSM-7 message")
 	}
+	if err := fallback.Validate(base); err == nil {
+		t.Fatal("Validate() accepted a multipart GSM-7 message")
+	}
 }
 
 func TestMessageRejectsUnknownCodesAndSeparators(t *testing.T) {

@@ -44,12 +44,10 @@ func (s *Store) recoverFallbackIncidents(ctx context.Context) error {
 }
 
 func (s *Store) OpenFallbackIncident(ctx context.Context, event fallback.Event, openedAt time.Time) error {
-	message, err := fallback.Format(event)
-	if err != nil {
+	if err := fallback.Validate(event); err != nil {
 		return err
 	}
-	_ = message
-	_, err = s.db.ExecContext(ctx, `
+	_, err := s.db.ExecContext(ctx, `
 		INSERT OR IGNORE INTO fallback_incidents(
 			event_key, sequence, site_id, asset_id, code, temperature_c, event_at_ms, opened_at_ms
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,

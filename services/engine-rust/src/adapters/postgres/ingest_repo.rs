@@ -50,6 +50,14 @@ impl IngestRepository for PostgresIngestRepository {
     ) -> Result<IngestWrite, PortError> {
         let mut tx = self.pool.begin().await.map_err(PortError::storage)?;
 
+        // Claim the stable identity before applying an at-least-once delivery.
+        if let Some(event_id) = &reading.source_event_id
+            && !claim_dedup(&mut tx, event_id).await?
+        {
+            tx.commit().await.map_err(PortError::storage)?;
+            return Ok(IngestWrite::default());
+        }
+
         upsert_asset(&mut tx, reading).await?;
         write_asset_state_and_reading(&mut tx, reading).await?;
 
@@ -168,6 +176,20 @@ fn parse_edge_event_key(event_key: &str) -> Result<(String, i64), PortError> {
         ));
     }
     Ok((site_id.to_owned(), sequence))
+}
+
+// The ingest transaction rolls back this claim if a later write fails.
+async fn claim_dedup(
+    tx: &mut Transaction<'_, Postgres>,
+    event_id: &str,
+) -> Result<bool, PortError> {
+    let result =
+        query("INSERT INTO dedup_log (source_event_id) VALUES ($1) ON CONFLICT DO NOTHING")
+            .bind(event_id)
+            .execute(&mut **tx)
+            .await
+            .map_err(PortError::storage)?;
+    Ok(result.rows_affected() == 1)
 }
 
 async fn lock_event(tx: &mut Transaction<'_, Postgres>, event_key: &str) -> Result<(), PortError> {
