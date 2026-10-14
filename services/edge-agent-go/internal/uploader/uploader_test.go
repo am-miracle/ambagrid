@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,11 +15,13 @@ import (
 )
 
 type fakeQueue struct {
-	records    []domain.Record
-	uploaded   map[uint64]time.Time
-	acked      map[uint64]bool
-	failed     map[uint64]string
-	readyCalls atomic.Int64
+	mu            sync.RWMutex
+	records       []domain.Record
+	uploaded      map[uint64]time.Time
+	acked         map[uint64]bool
+	failed        map[uint64]string
+	readyCalls    atomic.Int64
+	uploadedCalls atomic.Int64
 }
 
 func newFakeQueue(records []domain.Record) *fakeQueue {
@@ -50,21 +53,30 @@ func (q *fakeQueue) Ready(_ context.Context, limit int, _ int64) ([]domain.Recor
 }
 
 func (q *fakeQueue) MarkUploaded(_ context.Context, sequence uint64, uploadedAt time.Time) error {
+	q.uploadedCalls.Add(1)
+	q.mu.Lock()
+	defer q.mu.Unlock()
 	q.uploaded[sequence] = uploadedAt
 	return nil
 }
 
 func (q *fakeQueue) Ack(_ context.Context, sequence uint64) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
 	q.acked[sequence] = true
 	return nil
 }
 
 func (q *fakeQueue) MarkFailed(_ context.Context, sequence uint64, _ time.Time, cause string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
 	q.failed[sequence] = cause
 	return nil
 }
 
 func (q *fakeQueue) Stats(_ context.Context) (domain.QueueStats, error) {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
 	var lastEvent *time.Time
 	for _, record := range q.records {
 		if q.acked[record.Sequence] {
@@ -76,6 +88,24 @@ func (q *fakeQueue) Stats(_ context.Context) (domain.QueueStats, error) {
 		}
 	}
 	return domain.QueueStats{Depth: int64(len(q.records) - len(q.acked)), LastEventTimestamp: lastEvent}, nil
+}
+
+func (q *fakeQueue) snapshots() (map[uint64]time.Time, map[uint64]bool, map[uint64]string) {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+	uploaded := make(map[uint64]time.Time, len(q.uploaded))
+	acked := make(map[uint64]bool, len(q.acked))
+	failed := make(map[uint64]string, len(q.failed))
+	for sequence, at := range q.uploaded {
+		uploaded[sequence] = at
+	}
+	for sequence, value := range q.acked {
+		acked[sequence] = value
+	}
+	for sequence, cause := range q.failed {
+		failed[sequence] = cause
+	}
+	return uploaded, acked, failed
 }
 
 func testRecord(seq uint64) domain.Record {
@@ -125,16 +155,17 @@ func TestUploader_SuccessfulBatch(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	cancel()
 
-	if len(queue.uploaded) != 2 {
-		t.Fatalf("expected 2 uploaded marks, got %d", len(queue.uploaded))
+	uploaded, acked, _ := queue.snapshots()
+	if len(uploaded) != 2 {
+		t.Fatalf("expected 2 uploaded marks, got %d", len(uploaded))
 	}
-	for seq, ts := range queue.uploaded {
+	for seq, ts := range uploaded {
 		if ts.IsZero() {
 			t.Fatalf("sequence %d has zero uploaded_at", seq)
 		}
 	}
-	if !queue.acked[1] || !queue.acked[2] {
-		t.Fatalf("expected sequences 1 and 2 acked, got %v", queue.acked)
+	if !acked[1] || !acked[2] {
+		t.Fatalf("expected sequences 1 and 2 acked, got %v", acked)
 	}
 }
 
@@ -163,11 +194,42 @@ func TestUploader_ServerError_RetriesWithBackoff(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	cancel()
 
-	if len(queue.failed) == 0 {
+	_, _, failed := queue.snapshots()
+	if len(failed) == 0 {
 		t.Fatal("expected failed records after server error")
 	}
-	if _, ok := queue.failed[1]; !ok {
+	if _, ok := failed[1]; !ok {
 		t.Fatal("sequence 1 should be marked failed")
+	}
+}
+
+func TestUploader_DoesNotMarkUploadedBeforePublishConfirmed(t *testing.T) {
+	requestArrived := make(chan struct{})
+	releaseResponse := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(requestArrived)
+		<-releaseResponse
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(uploader.BatchResponse{Accepted: []uint64{1}})
+	}))
+	defer server.Close()
+
+	queue := newFakeQueue([]domain.Record{testRecord(1)})
+	client := uploader.NewIngestClient(server.URL+"/v1/ingest", "test-key", 5*time.Second)
+	ul := uploader.New(uploader.Config{PollInterval: time.Hour}, queue, client)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go ul.Run(ctx)
+
+	select {
+	case <-requestArrived:
+	case <-time.After(time.Second):
+		t.Fatal("upload request did not arrive")
+	}
+	got := queue.uploadedCalls.Load()
+	close(releaseResponse)
+	if got != 0 {
+		t.Fatalf("MarkUploaded called %d times before the server confirmed publication", got)
 	}
 }
 
@@ -200,10 +262,11 @@ func TestUploader_PartialRejection(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	cancel()
 
-	if !queue.acked[1] {
+	_, acked, failed := queue.snapshots()
+	if !acked[1] {
 		t.Fatal("sequence 1 should be acked")
 	}
-	if _, ok := queue.failed[2]; !ok {
+	if _, ok := failed[2]; !ok {
 		t.Fatal("sequence 2 should be marked failed")
 	}
 }
@@ -322,7 +385,8 @@ func TestUploader_EmptyQueue(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	cancel()
 
-	if len(queue.acked) != 0 {
+	_, acked, _ := queue.snapshots()
+	if len(acked) != 0 {
 		t.Fatal("should not ack anything from empty queue")
 	}
 }

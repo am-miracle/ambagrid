@@ -14,8 +14,18 @@ func TestCriticalCodeMatchesAssetScope(t *testing.T) {
 		{"TAMPER_DETECTED", "smart_meter", true},
 	}
 	for _, test := range tests {
-		if got := CriticalCodeMatchesAsset(test.code, test.assetType); got != test.want {
-			t.Fatalf("CriticalCodeMatchesAsset(%q, %q) = %v", test.code, test.assetType, got)
+		code, err := ParseCriticalCode(test.code)
+		if err != nil {
+			t.Fatal(err)
 		}
+		if got := code.MatchesAsset(test.assetType); got != test.want {
+			t.Fatalf("CriticalCode(%q).MatchesAsset(%q) = %v", test.code, test.assetType, got)
+		}
+	}
+}
+
+func TestParseCriticalCodeRejectsUnknownCode(t *testing.T) {
+	if _, err := ParseCriticalCode("LOW_BATTERY"); err == nil {
+		t.Fatal("ParseCriticalCode accepted a code outside the policy allowlist")
 	}
 }

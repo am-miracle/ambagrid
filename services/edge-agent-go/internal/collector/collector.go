@@ -18,19 +18,31 @@ type Config struct {
 	Region           string
 	Interval         time.Duration
 	BatteryOverheatC float64
+	FallbackDebounce time.Duration
 }
 
 type FallbackStore interface {
-	OpenFallbackIncident(context.Context, fallback.Event, time.Time) error
+	OpenFallbackIncident(context.Context, fallback.Event, time.Time) (bool, error)
 	ResolveFallbackIncident(context.Context, string, fallback.Code, time.Time) error
 }
 
+type conditionKey struct {
+	assetID string
+	code    fallback.Code
+}
+
+type conditionState struct {
+	activeSince time.Time
+	opened      bool
+}
+
 type Collector struct {
-	cfg      Config
-	queue    domain.Queue
-	sources  []Source
-	now      func() time.Time
-	fallback FallbackStore
+	cfg        Config
+	queue      domain.Queue
+	sources    []Source
+	now        func() time.Time
+	fallback   FallbackStore
+	conditions map[conditionKey]conditionState
 }
 
 func New(cfg Config, queue domain.Queue, sources ...Source) (*Collector, error) {
@@ -49,11 +61,19 @@ func New(cfg Config, queue domain.Queue, sources ...Source) (*Collector, error) 
 	if cfg.BatteryOverheatC <= 0 {
 		cfg.BatteryOverheatC = 55
 	}
-	c := &Collector{cfg: cfg, queue: queue, sources: sources, now: time.Now}
+	if cfg.FallbackDebounce <= 0 {
+		cfg.FallbackDebounce = 30 * time.Second
+	}
+	c := &Collector{cfg: cfg, queue: queue, sources: sources, now: time.Now, conditions: make(map[conditionKey]conditionState)}
 	if store, ok := queue.(FallbackStore); ok {
 		c.fallback = store
 	}
 	return c, nil
+}
+
+// SetClock makes condition debounce deterministic for tests and simulations.
+func (c *Collector) SetClock(now func() time.Time) {
+	c.now = now
 }
 
 func (c *Collector) Run(ctx context.Context) {
@@ -91,7 +111,7 @@ func (c *Collector) CollectOnce(ctx context.Context) error {
 				collectionErr = errors.Join(collectionErr, fmt.Errorf("normalize device %q: %w", reading.DeviceID, err))
 				continue
 			}
-			criticalEvents := c.criticalEvents(reading)
+			criticalEvents := c.criticalEvents(reading, now)
 			if len(criticalEvents) == 0 {
 				collectionErr = errors.Join(collectionErr, c.persist(ctx, event, nil, now))
 			} else {
@@ -118,8 +138,12 @@ func (c *Collector) persist(ctx context.Context, event domain.Event, critical *f
 	if critical != nil && c.fallback != nil {
 		// Persist assigns the sequence used by the fallback incident.
 		critical.Sequence = sequence
-		if err := c.fallback.OpenFallbackIncident(ctx, *critical, now); err != nil {
+		opened, err := c.fallback.OpenFallbackIncident(ctx, *critical, now)
+		if err != nil {
 			return fmt.Errorf("open critical incident for %q: %w", event.DeviceID, err)
+		}
+		if !opened {
+			slog.Debug("reuse active critical incident", "device_id", event.DeviceID, "code", critical.Code)
 		}
 	}
 	if err := c.queue.MarkPendingUpload(ctx, sequence); err != nil {
@@ -128,7 +152,7 @@ func (c *Collector) persist(ctx context.Context, event domain.Event, critical *f
 	return nil
 }
 
-func (c *Collector) criticalEvents(reading domain.Reading) []fallback.Event {
+func (c *Collector) criticalEvents(reading domain.Reading, now time.Time) []fallback.Event {
 	base := fallback.Event{SiteID: c.cfg.SiteID, AssetID: reading.DeviceID, OccurredAt: reading.TakenAt.UTC()}
 	var events []fallback.Event
 	if reading.AssetType == domain.AssetBatteryBMS && reading.InternalTemperature >= c.cfg.BatteryOverheatC {
@@ -136,43 +160,63 @@ func (c *Collector) criticalEvents(reading domain.Reading) []fallback.Event {
 		event.Code = fallback.BatteryOverheat
 		temperature := reading.InternalTemperature
 		event.TemperatureC = &temperature
-		events = append(events, event)
+		events = c.openOnce(events, event, now, 0)
 	}
 	if reading.AssetType == domain.AssetSolarInverter && reading.InverterFailed {
 		event := base
 		event.Code = fallback.InverterFailure
-		events = append(events, event)
+		events = c.openOnce(events, event, now, c.cfg.FallbackDebounce)
 	}
 	if reading.TamperDetected {
 		event := base
 		event.Code = fallback.TamperDetected
-		events = append(events, event)
+		events = c.openOnce(events, event, now, c.cfg.FallbackDebounce)
 	}
 	if reading.SiteOutage != nil && *reading.SiteOutage {
 		event := base
 		event.AssetID = "site"
 		event.Code = fallback.SiteOutage
-		events = append(events, event)
+		events = c.openOnce(events, event, now, c.cfg.FallbackDebounce)
 	}
 	return events
 }
 
+func (c *Collector) openOnce(events []fallback.Event, event fallback.Event, now time.Time, debounce time.Duration) []fallback.Event {
+	key := conditionKey{assetID: event.AssetID, code: event.Code}
+	state, exists := c.conditions[key]
+	if !exists {
+		state = conditionState{activeSince: now}
+	}
+	if state.opened || now.Sub(state.activeSince) < debounce {
+		c.conditions[key] = state
+		return events
+	}
+	state.opened = true
+	c.conditions[key] = state
+	return append(events, event)
+}
+
 func (c *Collector) resolveRecovered(ctx context.Context, reading domain.Reading, now time.Time) error {
+	var result error
+	if reading.AssetType == domain.AssetBatteryBMS && reading.InternalTemperature < c.cfg.BatteryOverheatC {
+		result = errors.Join(result, c.resolve(ctx, reading.DeviceID, fallback.BatteryOverheat, now))
+	}
+	if reading.AssetType == domain.AssetSolarInverter && !reading.InverterFailed {
+		result = errors.Join(result, c.resolve(ctx, reading.DeviceID, fallback.InverterFailure, now))
+	}
+	if !reading.TamperDetected {
+		result = errors.Join(result, c.resolve(ctx, reading.DeviceID, fallback.TamperDetected, now))
+	}
+	if reading.SiteOutage != nil && !*reading.SiteOutage {
+		result = errors.Join(result, c.resolve(ctx, "site", fallback.SiteOutage, now))
+	}
+	return result
+}
+
+func (c *Collector) resolve(ctx context.Context, assetID string, code fallback.Code, now time.Time) error {
+	delete(c.conditions, conditionKey{assetID: assetID, code: code})
 	if c.fallback == nil {
 		return nil
 	}
-	var result error
-	if reading.AssetType == domain.AssetBatteryBMS && reading.InternalTemperature < c.cfg.BatteryOverheatC {
-		result = errors.Join(result, c.fallback.ResolveFallbackIncident(ctx, reading.DeviceID, fallback.BatteryOverheat, now))
-	}
-	if reading.AssetType == domain.AssetSolarInverter && !reading.InverterFailed {
-		result = errors.Join(result, c.fallback.ResolveFallbackIncident(ctx, reading.DeviceID, fallback.InverterFailure, now))
-	}
-	if !reading.TamperDetected {
-		result = errors.Join(result, c.fallback.ResolveFallbackIncident(ctx, reading.DeviceID, fallback.TamperDetected, now))
-	}
-	if reading.SiteOutage != nil && !*reading.SiteOutage {
-		result = errors.Join(result, c.fallback.ResolveFallbackIncident(ctx, "site", fallback.SiteOutage, now))
-	}
-	return result
+	return c.fallback.ResolveFallbackIncident(ctx, assetID, code, now)
 }

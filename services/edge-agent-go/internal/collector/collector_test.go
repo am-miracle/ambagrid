@@ -113,6 +113,67 @@ func TestBatteryOverheatIsQueuedAsCriticalFallback(t *testing.T) {
 	}
 }
 
+func TestInverterFailureRequiresLocalDebounce(t *testing.T) {
+	ctx := context.Background()
+	store, err := queuesqlite.Open(ctx, queuesqlite.Config{
+		Path: filepath.Join(t.TempDir(), "queue.db"), SiteID: "site-01", GatewayID: "gateway-01",
+		MaxStorageBytes: 8 << 20, WarningPercent: 70, CriticalReservePercent: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Unix(1730000000, 0).UTC()
+	source := fixedSource{readings: []domain.Reading{{
+		DeviceID: "inv-01", AssetType: domain.AssetSolarInverter, TakenAt: now, InverterFailed: true,
+	}}}
+	c, err := collector.New(collector.Config{SiteID: "site-01", Region: "africa-west", Interval: time.Second}, store, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := now
+	c.SetClock(func() time.Time { return clock })
+	if err := c.CollectOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	records, err := store.Ready(ctx, 1, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Priority != domain.PriorityNormal || records[0].CriticalCode != "" {
+		t.Fatalf("first active sample = %+v, want ordinary telemetry until debounce completes", records)
+	}
+	candidates, err := store.FallbackCandidates(ctx, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("first active sample opened fallback candidates: %+v", candidates)
+	}
+	clock = clock.Add(30 * time.Second)
+	if err := c.CollectOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err = store.FallbackCandidates(ctx, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 || candidates[0].Code != fallback.InverterFailure {
+		t.Fatalf("sustained failure candidates = %+v, want one inverter incident", candidates)
+	}
+	clock = clock.Add(30 * time.Second)
+	if err := c.CollectOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err = store.FallbackCandidates(ctx, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("continuous failure candidates = %+v, want original incident reused", candidates)
+	}
+}
+
 func TestIndependentCriticalConditionsGetIndependentSequences(t *testing.T) {
 	ctx := context.Background()
 	store, err := queuesqlite.Open(ctx, queuesqlite.Config{Path: filepath.Join(t.TempDir(), "queue.db"), SiteID: "site-01", GatewayID: "gateway-01", MaxStorageBytes: 8 << 20, WarningPercent: 70, CriticalReservePercent: 10})
@@ -126,15 +187,14 @@ func TestIndependentCriticalConditionsGetIndependentSequences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	clock := now
+	c.SetClock(func() time.Time { return clock })
 	if err := c.CollectOnce(ctx); err != nil {
 		t.Fatal(err)
 	}
-	records, err := store.Ready(ctx, 10, 1<<20)
-	if err != nil {
+	clock = clock.Add(30 * time.Second)
+	if err := c.CollectOnce(ctx); err != nil {
 		t.Fatal(err)
-	}
-	if len(records) != 1 || records[0].CriticalCode != string(fallback.InverterFailure) {
-		t.Fatalf("ready records = %+v, first device sequence should preserve ordering", records)
 	}
 	candidates, err := store.FallbackCandidates(ctx, now)
 	if err != nil {
@@ -171,9 +231,9 @@ func (q *orderedQueue) Persist(context.Context, domain.Event) (uint64, error) {
 	q.steps = append(q.steps, "persist")
 	return 1, nil
 }
-func (q *orderedQueue) OpenFallbackIncident(context.Context, fallback.Event, time.Time) error {
+func (q *orderedQueue) OpenFallbackIncident(context.Context, fallback.Event, time.Time) (bool, error) {
 	q.steps = append(q.steps, "incident")
-	return nil
+	return true, nil
 }
 func (q *orderedQueue) MarkPendingUpload(context.Context, uint64) error {
 	q.steps = append(q.steps, "pending")

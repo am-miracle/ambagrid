@@ -42,7 +42,7 @@ func TestHealthAndMetricsExposeDurableQueueState(t *testing.T) {
 		t.Fatalf("enqueue event: %v", err)
 	}
 
-	handler := health.NewHandler(q)
+	handler := health.NewHandler(q, domain.FallbackRateLimitPolicy{MaxAttempts: 3, HourlyLimit: 6, DailyLimit: 20})
 	health := httptest.NewRecorder()
 	handler.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/health", nil))
 	if health.Code != http.StatusOK {
@@ -68,6 +68,9 @@ func TestHealthAndMetricsExposeDurableQueueState(t *testing.T) {
 		"ambagrid_edge_queue_depth 1",
 		"ambagrid_edge_queue_payload_bytes 17",
 		`ambagrid_edge_storage_state{state="healthy"} 1`,
+		`ambagrid_edge_fallback_rate_limited_incidents{reason="incident_attempt_limit"} 0`,
+		`ambagrid_edge_fallback_rate_limited_incidents{reason="site_hourly_limit"} 0`,
+		`ambagrid_edge_fallback_rate_limited_incidents{reason="site_daily_limit"} 0`,
 	} {
 		if !strings.Contains(metrics.Body.String(), want) {
 			t.Errorf("metrics body does not contain %q\n%s", want, metrics.Body.String())

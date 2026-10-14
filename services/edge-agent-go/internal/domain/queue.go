@@ -29,6 +29,18 @@ type QueueStats struct {
 	State                QueueState
 }
 
+type FallbackRateLimitPolicy struct {
+	MaxAttempts int
+	HourlyLimit int
+	DailyLimit  int
+}
+
+type FallbackRateLimitStats struct {
+	IncidentAttemptLimit int64
+	SiteHourlyLimit      int64
+	SiteDailyLimit       int64
+}
+
 // Queue is the durable store-and-forward lifecycle shared by the collector
 // (write side) and the uploader (read side). Both depend on this interface
 // rather than defining their own, so the SQLite store satisfies one contract.

@@ -2,36 +2,55 @@ package health
 
 import (
 	"context"
+	"time"
+
+	"edge-agent-go/internal/domain"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 type collector struct {
-	source         StatsSource
-	depth          *prometheus.Desc
-	payloadBytes   *prometheus.Desc
-	capacityBytes  *prometheus.Desc
-	diskBytes      *prometheus.Desc
-	filesystemFree *prometheus.Desc
-	oldestSeconds  *prometheus.Desc
-	state          *prometheus.Desc
-	statsAvailable *prometheus.Desc
+	source                 StatsSource
+	fallbackSource         FallbackStatsSource
+	fallbackPolicy         domain.FallbackRateLimitPolicy
+	depth                  *prometheus.Desc
+	payloadBytes           *prometheus.Desc
+	capacityBytes          *prometheus.Desc
+	diskBytes              *prometheus.Desc
+	filesystemFree         *prometheus.Desc
+	oldestSeconds          *prometheus.Desc
+	state                  *prometheus.Desc
+	statsAvailable         *prometheus.Desc
+	fallbackRateLimited    *prometheus.Desc
+	fallbackStatsAvailable *prometheus.Desc
 }
 
-func newCollector(source StatsSource) *collector {
-	return &collector{
-		source:         source,
-		depth:          prometheus.NewDesc("ambagrid_edge_queue_depth", "Number of events waiting for upload.", nil, nil),
-		payloadBytes:   prometheus.NewDesc("ambagrid_edge_queue_payload_bytes", "Payload bytes currently held in the durable queue.", nil, nil),
-		capacityBytes:  prometheus.NewDesc("ambagrid_edge_queue_capacity_bytes", "Payload capacity available within the configured storage budget.", nil, nil),
-		diskBytes:      prometheus.NewDesc("ambagrid_edge_queue_disk_bytes", "Bytes occupied by the SQLite database, WAL, and shared-memory files.", nil, nil),
-		filesystemFree: prometheus.NewDesc("ambagrid_edge_filesystem_free_bytes", "Bytes available on the filesystem containing the queue.", nil, nil),
-		oldestSeconds:  prometheus.NewDesc("ambagrid_edge_queue_oldest_seconds", "Age in seconds of the oldest pending event.", nil, nil),
-		state:          prometheus.NewDesc("ambagrid_edge_storage_state", "Current queue admission and storage state.", []string{"state"}, nil),
-		statsAvailable: prometheus.NewDesc("ambagrid_edge_queue_stats_available", "Whether queue statistics could be read for this scrape.", nil, nil),
+// newCollector builds one Prometheus collector for queue health and, when the
+// source supports it, durable SMS fallback rate-limit state.
+func newCollector(source StatsSource, fallbackPolicy domain.FallbackRateLimitPolicy) *collector {
+	c := &collector{
+		source:                 source,
+		fallbackPolicy:         fallbackPolicy,
+		depth:                  prometheus.NewDesc("ambagrid_edge_queue_depth", "Number of events waiting for upload.", nil, nil),
+		payloadBytes:           prometheus.NewDesc("ambagrid_edge_queue_payload_bytes", "Payload bytes currently held in the durable queue.", nil, nil),
+		capacityBytes:          prometheus.NewDesc("ambagrid_edge_queue_capacity_bytes", "Payload capacity available within the configured storage budget.", nil, nil),
+		diskBytes:              prometheus.NewDesc("ambagrid_edge_queue_disk_bytes", "Bytes occupied by the SQLite database, WAL, and shared-memory files.", nil, nil),
+		filesystemFree:         prometheus.NewDesc("ambagrid_edge_filesystem_free_bytes", "Bytes available on the filesystem containing the queue.", nil, nil),
+		oldestSeconds:          prometheus.NewDesc("ambagrid_edge_queue_oldest_seconds", "Age in seconds of the oldest pending event.", nil, nil),
+		state:                  prometheus.NewDesc("ambagrid_edge_storage_state", "Current queue admission and storage state.", []string{"state"}, nil),
+		statsAvailable:         prometheus.NewDesc("ambagrid_edge_queue_stats_available", "Whether queue statistics could be read for this scrape.", nil, nil),
+		fallbackRateLimited:    prometheus.NewDesc("ambagrid_edge_fallback_rate_limited_incidents", "Active fallback incidents currently blocked by an SMS attempt limit.", []string{"reason"}, nil),
+		fallbackStatsAvailable: prometheus.NewDesc("ambagrid_edge_fallback_stats_available", "Whether fallback rate-limit statistics could be read for this scrape.", nil, nil),
 	}
+	// Queue implementations that do not persist fallback state still expose
+	// queue metrics; fallback_stats_available reports that reduced capability.
+	if fallbackSource, ok := source.(FallbackStatsSource); ok {
+		c.fallbackSource = fallbackSource
+	}
+	return c
 }
 
+// Describe publishes every descriptor this collector may emit.
 func (c *collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.depth
 	ch <- c.payloadBytes
@@ -41,8 +60,12 @@ func (c *collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.oldestSeconds
 	ch <- c.state
 	ch <- c.statsAvailable
+	ch <- c.fallbackRateLimited
+	ch <- c.fallbackStatsAvailable
 }
 
+// Collect reads one bounded snapshot so a stalled local store cannot block a
+// Prometheus scrape indefinitely.
 func (c *collector) Collect(ch chan<- prometheus.Metric) {
 	ctx, cancel := context.WithTimeout(context.Background(), statsTimeout)
 	defer cancel()
@@ -60,4 +83,22 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(c.filesystemFree, prometheus.GaugeValue, float64(stats.FilesystemFreeBytes))
 	ch <- prometheus.MustNewConstMetric(c.oldestSeconds, prometheus.GaugeValue, stats.OldestAge.Seconds())
 	ch <- prometheus.MustNewConstMetric(c.state, prometheus.GaugeValue, 1, string(stats.State))
+
+	// Fallback collection is independent of queue collection. Its availability
+	// metric distinguishes a healthy zero from an unavailable data source.
+	if c.fallbackSource == nil {
+		ch <- prometheus.MustNewConstMetric(c.fallbackStatsAvailable, prometheus.GaugeValue, 0)
+		return
+	}
+	fallbackStats, err := c.fallbackSource.FallbackRateLimitStats(ctx, time.Now().UTC(), c.fallbackPolicy)
+	if err != nil {
+		ch <- prometheus.MustNewConstMetric(c.fallbackStatsAvailable, prometheus.GaugeValue, 0)
+		return
+	}
+	ch <- prometheus.MustNewConstMetric(c.fallbackStatsAvailable, prometheus.GaugeValue, 1)
+	// A single labeled gauge keeps the three policy limits easy to aggregate
+	// while preserving the reason each active incident is currently blocked.
+	ch <- prometheus.MustNewConstMetric(c.fallbackRateLimited, prometheus.GaugeValue, float64(fallbackStats.IncidentAttemptLimit), "incident_attempt_limit")
+	ch <- prometheus.MustNewConstMetric(c.fallbackRateLimited, prometheus.GaugeValue, float64(fallbackStats.SiteHourlyLimit), "site_hourly_limit")
+	ch <- prometheus.MustNewConstMetric(c.fallbackRateLimited, prometheus.GaugeValue, float64(fallbackStats.SiteDailyLimit), "site_daily_limit")
 }

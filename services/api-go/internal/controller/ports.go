@@ -43,15 +43,18 @@ type FallbackService interface {
 	ReceiveSMS(context.Context, domain.CriticalFallbackEvent, domain.SMSReceipt) (bool, error)
 }
 
-type SMSWebhookProvider interface {
+type SignedWebhookProvider interface {
 	SignatureHeader() string
 	VerifySignature(body []byte, signature string) error
+}
+
+type SMSWebhookProvider interface {
+	SignedWebhookProvider
 	Parse(body []byte) (domain.CriticalFallbackEvent, domain.SMSReceipt, error)
 }
 
 type WebhookProvider interface {
+	SignedWebhookProvider
 	Name() string
-	SignatureHeader() string
-	VerifySignature(body []byte, signature string) error
 	ParsePayment(body []byte) (domain.ApplyPaymentCommand, error)
 }

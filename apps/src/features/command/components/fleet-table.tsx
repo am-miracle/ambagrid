@@ -1,3 +1,4 @@
+import type { Site } from "#/api/types";
 import { formatAge } from "#/lib/grid-tick";
 import type { FleetSite, Status } from "../model";
 import { STATUS_COLOR } from "../model";
@@ -10,7 +11,7 @@ interface FleetTableProps {
 	onSelectSite: (id: string) => void;
 }
 
-const HEALTH_TONE: Record<string, Status> = {
+const HEALTH_TONE: Record<Site["health_status"], Status> = {
 	live: "healthy",
 	delayed: "warning",
 	offline: "offline",
@@ -56,7 +57,7 @@ export function FleetTable({
 					<span>Oldest</span>
 				</div>
 				{sorted.map((s) => {
-					const tone = HEALTH_TONE[s.healthStatus] ?? "offline";
+					const tone = HEALTH_TONE[s.healthStatus];
 					return (
 						<button
 							type="button"

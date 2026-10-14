@@ -1,16 +1,58 @@
 package domain
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
 )
 
+type CriticalCode string
+
+const (
+	BatteryOverheatCode CriticalCode = "BATTERY_OVERHEAT"
+	InverterFailureCode CriticalCode = "INVERTER_FAILURE"
+	TamperDetectedCode  CriticalCode = "TAMPER_DETECTED"
+	SiteOutageCode      CriticalCode = "SITE_OUTAGE"
+)
+
+func ParseCriticalCode(value string) (CriticalCode, error) {
+	code := CriticalCode(value)
+	if !code.Valid() {
+		return "", fmt.Errorf("unknown critical fallback code %q", value)
+	}
+	return code, nil
+}
+
+func (c CriticalCode) Valid() bool {
+	switch c {
+	case BatteryOverheatCode, InverterFailureCode, TamperDetectedCode, SiteOutageCode:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c CriticalCode) MatchesAsset(assetType string) bool {
+	switch c {
+	case BatteryOverheatCode:
+		return assetType == "battery_bms"
+	case InverterFailureCode:
+		return assetType == "solar_inverter"
+	case TamperDetectedCode:
+		return assetType != ""
+	case SiteOutageCode:
+		return false
+	default:
+		return false
+	}
+}
+
 type CriticalFallbackEvent struct {
 	SiteID       string
 	AssetID      string
 	Sequence     uint64
-	Code         string
+	Code         CriticalCode
 	TemperatureC *float64
 	OccurredAt   time.Time
 }
@@ -19,27 +61,21 @@ func (e CriticalFallbackEvent) EventKey() string {
 	return "edge:" + e.SiteID + ":" + strconv.FormatUint(e.Sequence, 10)
 }
 
-func CriticalCodeMatchesAsset(code, assetType string) bool {
-	switch code {
-	case "BATTERY_OVERHEAT":
-		return assetType == "battery_bms"
-	case "INVERTER_FAILURE":
-		return assetType == "solar_inverter"
+func (e CriticalFallbackEvent) AlertDetails() (kind string, reason string, err error) {
+	switch e.Code {
+	case BatteryOverheatCode:
+		if e.TemperatureC == nil {
+			return "", "", errors.New("battery overheat fallback requires temperature")
+		}
+		return "battery_overheat", fmt.Sprintf("Battery temperature %.1f C exceeded the critical limit", *e.TemperatureC), nil
+	case InverterFailureCode:
+		return "inverter_failure", "Inverter reported a critical failure", nil
+	case TamperDetectedCode:
+		return "tamper_detected", "Asset tamper alarm triggered", nil
+	case SiteOutageCode:
+		return "site_outage", "Full-site outage detected", nil
 	default:
-		return true
-	}
-}
-
-func FallbackAlertDetails(event CriticalFallbackEvent) (kind string, reason string) {
-	switch event.Code {
-	case "BATTERY_OVERHEAT":
-		return "battery_overheat", fmt.Sprintf("Battery temperature %.1f C exceeded the critical limit", *event.TemperatureC)
-	case "INVERTER_FAILURE":
-		return "inverter_failure", "Inverter reported a critical failure"
-	case "TAMPER_DETECTED":
-		return "tamper_detected", "Asset tamper alarm triggered"
-	default:
-		return "site_outage", "Full-site outage detected"
+		return "", "", fmt.Errorf("unknown critical fallback code %q", e.Code)
 	}
 }
 
@@ -47,7 +83,7 @@ type StoredFallbackEvent struct {
 	AlertID  string
 	SiteID   string
 	AssetID  string
-	Code     string
+	Code     CriticalCode
 	Sequence uint64
 }
 
@@ -65,7 +101,7 @@ type InsertFallbackEventCommand struct {
 	SiteID   string
 	Sequence uint64
 	AssetID  string
-	Code     string
+	Code     CriticalCode
 	EventAt  time.Time
 	AlertID  string
 }

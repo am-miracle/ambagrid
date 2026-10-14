@@ -108,12 +108,6 @@ func (u *Uploader) uploadBatch(ctx context.Context) (int, error) {
 	// agent sent the data, not when the server processed it.
 	uploadedAt := u.now().UTC()
 
-	for _, r := range records {
-		if err := u.queue.MarkUploaded(ctx, r.Sequence, uploadedAt); err != nil {
-			slog.Error("mark uploaded", "sequence", r.Sequence, "error", err)
-		}
-	}
-
 	// An empty batch is still sent as a gateway heartbeat.
 	result, err := u.client.Upload(ctx, records, uploadedAt, HealthReport{
 		GatewayID:          u.cfg.GatewayID,
@@ -152,6 +146,13 @@ func (u *Uploader) processResponse(ctx context.Context, records []domain.Record,
 
 	for _, r := range records {
 		if acceptedSet[r.Sequence] {
+			// The ingestion service only accepts a record after publishing it.
+			// Keep the local row pending until that confirmation arrives so a
+			// crash during the request cannot strand it in uploaded.
+			if err := u.queue.MarkUploaded(ctx, r.Sequence, uploadedAt); err != nil {
+				slog.Error("mark uploaded", "sequence", r.Sequence, "error", err)
+				continue
+			}
 			if u.tracker != nil {
 				if err := u.tracker.RecordFallbackUploadSuccess(ctx, r.Sequence, uploadedAt); err != nil {
 					slog.Error("record critical upload success", "sequence", r.Sequence, "error", err)
@@ -177,7 +178,17 @@ func (u *Uploader) processResponse(ctx context.Context, records []domain.Record,
 				"message", rej.Message,
 				"retry_at", retryAt,
 			)
+			continue
 		}
+
+		// A successful batch response must account for every record. Treat an
+		// omitted sequence as retryable instead of spinning on it immediately.
+		retryAt := u.retryTime(r.AttemptCount)
+		const cause = "invalid ingestion response: sequence was neither accepted nor rejected"
+		if err := u.queue.MarkFailed(ctx, r.Sequence, retryAt, cause); err != nil {
+			slog.Error("mark unaccounted record failed", "sequence", r.Sequence, "error", err)
+		}
+		u.recordFallbackFailure(ctx, r.Sequence)
 	}
 }
 

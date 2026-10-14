@@ -43,6 +43,7 @@ type SMSConfig struct {
 	DailyLimit       int
 	RetryInterval    time.Duration
 	BatteryOverheatC float64
+	Debounce         time.Duration
 }
 
 type CollectorConfig struct {
@@ -153,6 +154,10 @@ func FromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	smsDebounce, err := envDuration("EDGE_SMS_DEBOUNCE", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
 	smsFailureThreshold, err := envInt("EDGE_SMS_FAILURE_THRESHOLD", 3)
 	if err != nil {
 		return Config{}, err
@@ -215,7 +220,7 @@ func FromEnv() (Config, error) {
 			Enabled: smsEnabled, Destination: envString("EDGE_SMS_DESTINATION", ""), ModemID: envString("EDGE_SMS_MODEM_ID", "0"),
 			PollInterval: smsPollInterval, FailureThreshold: smsFailureThreshold, OfflineAfter: smsOfflineAfter,
 			MaxAttempts: smsMaxAttempts, HourlyLimit: smsHourlyLimit, DailyLimit: smsDailyLimit,
-			RetryInterval: smsRetryInterval, BatteryOverheatC: batteryOverheatC,
+			RetryInterval: smsRetryInterval, BatteryOverheatC: batteryOverheatC, Debounce: smsDebounce,
 		},
 		HealthAddr: envString("EDGE_HEALTH_ADDR", defaultHealthAddr),
 	}
@@ -231,7 +236,7 @@ func FromEnv() (Config, error) {
 	if cfg.SMS.Enabled && cfg.SMS.Destination == "" {
 		return Config{}, fmt.Errorf("EDGE_SMS_DESTINATION must be set when SMS fallback is enabled")
 	}
-	if cfg.SMS.FailureThreshold < 1 || cfg.SMS.MaxAttempts < 1 || cfg.SMS.HourlyLimit < 1 || cfg.SMS.DailyLimit < 1 || cfg.SMS.BatteryOverheatC <= 0 {
+	if cfg.SMS.FailureThreshold < 1 || cfg.SMS.MaxAttempts < 1 || cfg.SMS.HourlyLimit < 1 || cfg.SMS.DailyLimit < 1 || cfg.SMS.BatteryOverheatC <= 0 || cfg.SMS.Debounce <= 0 {
 		return Config{}, fmt.Errorf("SMS fallback thresholds and limits must be positive")
 	}
 

@@ -217,19 +217,32 @@ type applyDevPaymentBody struct {
 
 const maxWebhookBodySize = 64 * 1024
 
-func (a API) handleSMSFallback(w http.ResponseWriter, r *http.Request) {
-	signature := r.Header.Get(a.SMSWebhook.SignatureHeader())
+func (a API) readVerifiedWebhookBody(w http.ResponseWriter, r *http.Request, provider SignedWebhookProvider, providerName string) ([]byte, bool) {
+	signature := r.Header.Get(provider.SignatureHeader())
 	if signature == "" {
 		writeErrorBody(w, a.logger(), http.StatusUnauthorized, codeUnauthenticated, "missing webhook signature", RequestIDFrom(r.Context()))
-		return
+		return nil, false
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookBodySize))
 	if err != nil {
 		writeError(w, r, a.logger(), errInvalidParameter)
-		return
+		return nil, false
 	}
-	if err := a.SMSWebhook.VerifySignature(body, signature); err != nil {
+	if err := provider.VerifySignature(body, signature); err != nil {
+		a.logger().Warn("webhook signature verification failed",
+			"provider", providerName,
+			"error", err,
+			"request_id", RequestIDFrom(r.Context()),
+		)
 		writeErrorBody(w, a.logger(), http.StatusUnauthorized, codeUnauthenticated, "invalid webhook signature", RequestIDFrom(r.Context()))
+		return nil, false
+	}
+	return body, true
+}
+
+func (a API) handleSMSFallback(w http.ResponseWriter, r *http.Request) {
+	body, ok := a.readVerifiedWebhookBody(w, r, a.SMSWebhook, "sms")
+	if !ok {
 		return
 	}
 	event, receipt, err := a.SMSWebhook.Parse(body)
@@ -250,30 +263,11 @@ func (a API) handleSMSFallback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a API) handleWebhookPayment(provider WebhookProvider) http.HandlerFunc {
-	signatureHeader := provider.SignatureHeader()
-
 	return func(w http.ResponseWriter, r *http.Request) {
-		signature := r.Header.Get(signatureHeader)
-		if signature == "" {
-			writeErrorBody(w, a.logger(), http.StatusUnauthorized, codeUnauthenticated, "missing webhook signature", RequestIDFrom(r.Context()))
-			return
-		}
-
 		// Providers sign the exact request bytes, so verify the untouched body
 		// before parsing or normalizing any fields.
-		body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookBodySize))
-		if err != nil {
-			writeError(w, r, a.logger(), errInvalidParameter)
-			return
-		}
-
-		if err := provider.VerifySignature(body, signature); err != nil {
-			a.logger().Warn("webhook signature verification failed",
-				"provider", provider.Name(),
-				"error", err,
-				"request_id", RequestIDFrom(r.Context()),
-			)
-			writeErrorBody(w, a.logger(), http.StatusUnauthorized, codeUnauthenticated, "invalid webhook signature", RequestIDFrom(r.Context()))
+		body, ok := a.readVerifiedWebhookBody(w, r, provider, provider.Name())
+		if !ok {
 			return
 		}
 

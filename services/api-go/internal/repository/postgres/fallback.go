@@ -46,12 +46,17 @@ type fallbackTx struct {
 
 func (t fallbackTx) FindFallbackEvent(ctx context.Context, eventKey string) (*domain.StoredFallbackEvent, error) {
 	var e domain.StoredFallbackEvent
+	var rawCode string
 	err := t.tx.QueryRow(ctx,
 		`SELECT alert_id::text, site_id, asset_id, code, sequence FROM sms_fallback_events WHERE event_key = $1 FOR UPDATE`,
-		eventKey).Scan(&e.AlertID, &e.SiteID, &e.AssetID, &e.Code, &e.Sequence)
+		eventKey).Scan(&e.AlertID, &e.SiteID, &e.AssetID, &rawCode, &e.Sequence)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
+	if err != nil {
+		return nil, fmt.Errorf("find fallback event: %w", err)
+	}
+	e.Code, err = domain.ParseCriticalCode(rawCode)
 	if err != nil {
 		return nil, fmt.Errorf("find fallback event: %w", err)
 	}
@@ -126,7 +131,7 @@ func (t fallbackTx) PublishOutboxEvent(ctx context.Context, topic, eventType, ag
 func (t fallbackTx) InsertFallbackEvent(ctx context.Context, cmd domain.InsertFallbackEventCommand) error {
 	_, err := t.tx.Exec(ctx,
 		`INSERT INTO sms_fallback_events(event_key, site_id, sequence, asset_id, code, event_at, alert_id) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		cmd.EventKey, cmd.SiteID, cmd.Sequence, cmd.AssetID, cmd.Code, cmd.EventAt, cmd.AlertID)
+		cmd.EventKey, cmd.SiteID, cmd.Sequence, cmd.AssetID, string(cmd.Code), cmd.EventAt, cmd.AlertID)
 	if err != nil {
 		return fmt.Errorf("insert fallback event: %w", err)
 	}

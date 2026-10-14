@@ -21,6 +21,7 @@ import (
 	"edge-agent-go/internal/adapter/simulator"
 	"edge-agent-go/internal/collector"
 	"edge-agent-go/internal/config"
+	"edge-agent-go/internal/domain"
 	"edge-agent-go/internal/fallback"
 	"edge-agent-go/internal/health"
 	queuesqlite "edge-agent-go/internal/repository/sqlite"
@@ -74,6 +75,7 @@ func run() (runErr error) {
 			Region:           cfg.Collector.Region,
 			Interval:         cfg.Collector.Interval,
 			BatteryOverheatC: cfg.SMS.BatteryOverheatC,
+			FallbackDebounce: cfg.SMS.Debounce,
 		}, durableQueue, simulator.New())
 		if err != nil {
 			return fmt.Errorf("configure telemetry collector: %w", err)
@@ -124,8 +126,10 @@ func run() (runErr error) {
 	}
 
 	server := &http.Server{
-		Addr:              cfg.HealthAddr,
-		Handler:           health.NewHandler(durableQueue),
+		Addr: cfg.HealthAddr,
+		Handler: health.NewHandler(durableQueue, domain.FallbackRateLimitPolicy{
+			MaxAttempts: cfg.SMS.MaxAttempts, HourlyLimit: cfg.SMS.HourlyLimit, DailyLimit: cfg.SMS.DailyLimit,
+		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	serverErrors := make(chan error, 1)

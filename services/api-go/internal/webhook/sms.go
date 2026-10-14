@@ -113,8 +113,12 @@ func parseSMSMessage(message string) (domain.CriticalFallbackEvent, error) {
 	if err != nil || epoch <= 0 {
 		return domain.CriticalFallbackEvent{}, errors.New("invalid SMS timestamp")
 	}
-	event := domain.CriticalFallbackEvent{SiteID: values["site"], AssetID: values["asset"], Sequence: sequence, Code: values["code"], OccurredAt: time.Unix(epoch, 0).UTC()}
-	if !validSMSToken(event.SiteID) || !validSMSToken(event.AssetID) || !validCriticalCode(event.Code) {
+	code, err := domain.ParseCriticalCode(values["code"])
+	if err != nil {
+		return domain.CriticalFallbackEvent{}, errors.New("invalid SMS identity or code")
+	}
+	event := domain.CriticalFallbackEvent{SiteID: values["site"], AssetID: values["asset"], Sequence: sequence, Code: code, OccurredAt: time.Unix(epoch, 0).UTC()}
+	if !validSMSToken(event.SiteID) || !validSMSToken(event.AssetID) {
 		return domain.CriticalFallbackEvent{}, errors.New("invalid SMS identity or code")
 	}
 	if raw := values["temp"]; raw != "" {
@@ -125,7 +129,7 @@ func parseSMSMessage(message string) (domain.CriticalFallbackEvent, error) {
 		event.TemperatureC = &value
 	}
 	wantKeys := []string{"v", "site", "asset", "seq", "code", "ts"}
-	if event.Code == "BATTERY_OVERHEAT" {
+	if event.Code == domain.BatteryOverheatCode {
 		if event.TemperatureC == nil {
 			return domain.CriticalFallbackEvent{}, errors.New("battery overheat SMS requires temperature")
 		}
@@ -136,7 +140,7 @@ func parseSMSMessage(message string) (domain.CriticalFallbackEvent, error) {
 	if strings.Join(keys, ",") != strings.Join(wantKeys, ",") {
 		return domain.CriticalFallbackEvent{}, errors.New("SMS fields are missing or out of order")
 	}
-	if (event.Code == "SITE_OUTAGE") != (event.AssetID == "site") {
+	if (event.Code == domain.SiteOutageCode) != (event.AssetID == "site") {
 		return domain.CriticalFallbackEvent{}, errors.New("site outage must use the reserved site asset")
 	}
 	return event, nil
@@ -161,13 +165,4 @@ func gsmSeptets(value string) int {
 		}
 	}
 	return count
-}
-
-func validCriticalCode(code string) bool {
-	switch code {
-	case "BATTERY_OVERHEAT", "INVERTER_FAILURE", "TAMPER_DETECTED", "SITE_OUTAGE":
-		return true
-	default:
-		return false
-	}
 }

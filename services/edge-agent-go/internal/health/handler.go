@@ -16,9 +16,9 @@ import (
 
 const statsTimeout = 2 * time.Second
 
-func NewHandler(source StatsSource) http.Handler {
+func NewHandler(source StatsSource, fallbackPolicy domain.FallbackRateLimitPolicy) http.Handler {
 	registry := prometheus.NewRegistry()
-	registry.MustRegister(newCollector(source))
+	registry.MustRegister(newCollector(source, fallbackPolicy))
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))

@@ -3,9 +3,11 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
+	"edge-agent-go/internal/domain"
 	"edge-agent-go/internal/fallback"
 )
 
@@ -43,11 +45,11 @@ func (s *Store) recoverFallbackIncidents(ctx context.Context) error {
 	return nil
 }
 
-func (s *Store) OpenFallbackIncident(ctx context.Context, event fallback.Event, openedAt time.Time) error {
+func (s *Store) OpenFallbackIncident(ctx context.Context, event fallback.Event, openedAt time.Time) (bool, error) {
 	if err := fallback.Validate(event); err != nil {
-		return err
+		return false, err
 	}
-	_, err := s.db.ExecContext(ctx, `
+	result, err := s.db.ExecContext(ctx, `
 		INSERT OR IGNORE INTO fallback_incidents(
 			event_key, sequence, site_id, asset_id, code, temperature_c, event_at_ms, opened_at_ms
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -55,9 +57,13 @@ func (s *Store) OpenFallbackIncident(ctx context.Context, event fallback.Event, 
 		event.OccurredAt.UnixMilli(), openedAt.UnixMilli(),
 	)
 	if err != nil {
-		return fmt.Errorf("open fallback incident: %w", err)
+		return false, fmt.Errorf("open fallback incident: %w", err)
 	}
-	return nil
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("read fallback incident result: %w", err)
+	}
+	return inserted == 1, nil
 }
 
 func (s *Store) ResolveFallbackIncident(ctx context.Context, assetID string, code fallback.Code, resolvedAt time.Time) error {
@@ -158,6 +164,36 @@ func (s *Store) FallbackCandidates(ctx context.Context, now time.Time) ([]fallba
 		return nil, fmt.Errorf("read fallback candidates: %w", err)
 	}
 	return candidates, nil
+}
+
+func (s *Store) FallbackRateLimitStats(ctx context.Context, now time.Time, policy domain.FallbackRateLimitPolicy) (domain.FallbackRateLimitStats, error) {
+	if policy.MaxAttempts < 1 || policy.HourlyLimit < 1 || policy.DailyLimit < 1 {
+		return domain.FallbackRateLimitStats{}, errors.New("fallback rate-limit policy must be positive")
+	}
+	var active, incidentLimited int64
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*), COALESCE(SUM(CASE WHEN sms_attempt_count >= ? THEN 1 ELSE 0 END), 0)
+		FROM fallback_incidents
+		WHERE resolved_at_ms IS NULL AND normal_delivered_at_ms IS NULL AND sms_sent_at_ms IS NULL`,
+		policy.MaxAttempts).Scan(&active, &incidentLimited); err != nil {
+		return domain.FallbackRateLimitStats{}, fmt.Errorf("count rate-limited fallback incidents: %w", err)
+	}
+	var hourAttempts, dayAttempts int64
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT
+			COALESCE(SUM(CASE WHEN attempted_at_ms >= ? THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN attempted_at_ms >= ? THEN 1 ELSE 0 END), 0)
+		FROM fallback_attempts`, now.Add(-time.Hour).UnixMilli(), now.Add(-24*time.Hour).UnixMilli()).Scan(&hourAttempts, &dayAttempts); err != nil {
+		return domain.FallbackRateLimitStats{}, fmt.Errorf("count fallback attempts: %w", err)
+	}
+	stats := domain.FallbackRateLimitStats{IncidentAttemptLimit: incidentLimited}
+	if hourAttempts >= int64(policy.HourlyLimit) {
+		stats.SiteHourlyLimit = active
+	}
+	if dayAttempts >= int64(policy.DailyLimit) {
+		stats.SiteDailyLimit = active
+	}
+	return stats, nil
 }
 
 func (s *Store) RecordFallbackAttempt(ctx context.Context, result fallback.AttemptResult) error {

@@ -83,6 +83,7 @@ gateways default to a 256 MiB filesystem reserve.
 | `EDGE_SMS_DAILY_LIMIT` | `20` | Site-wide attempt limit over 24 hours. |
 | `EDGE_SMS_RETRY_INTERVAL` | `5m` | Delay after a failed modem send. |
 | `EDGE_SMS_BATTERY_OVERHEAT_C` | `55` | Battery temperature that opens a critical fallback incident. |
+| `EDGE_SMS_DEBOUNCE` | `30s` | Time inverter failure, tamper, and site-outage signals must remain active before opening an incident. |
 
 Each collection cycle writes one normalized record for a smart meter, battery
 BMS, and solar inverter. Records carry their site ID, site-local sequence,
@@ -98,7 +99,9 @@ persisted -> pending_upload -> uploaded -> acknowledged -> expired
 
 The collector first commits `persisted`, then promotes the record to
 `pending_upload`. Startup recovery promotes any `persisted` record left by a
-crash, preserving the reading without allowing it to become stranded.
+collector crash and returns any `uploaded` record interrupted before local
+acknowledgement to `pending_upload`; the stable event identity makes that retry
+idempotent upstream.
 
 The queue admits payloads up to 65% of the total storage budget. SQLite's main
 database is capped at 80% and its WAL is checkpointed around 5%. Before each

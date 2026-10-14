@@ -40,12 +40,15 @@ func (s *FallbackService) ReceiveSMS(ctx context.Context, event domain.CriticalF
 			if err != nil {
 				return false, fmt.Errorf("%w: fallback asset %q does not belong to site %q", domain.ErrInvalidID, event.AssetID, event.SiteID)
 			}
-			if !domain.CriticalCodeMatchesAsset(event.Code, assetType) {
+			if !event.Code.MatchesAsset(assetType) {
 				return false, fmt.Errorf("%w: fallback code %q does not apply to asset type %q", domain.ErrInvalidID, event.Code, assetType)
 			}
 		}
 
-		kind, reason := domain.FallbackAlertDetails(event)
+		kind, reason, err := event.AlertDetails()
+		if err != nil {
+			return false, fmt.Errorf("%w: %v", domain.ErrInvalidID, err)
+		}
 
 		alertID, err := tx.FindAlertBySourceEvent(ctx, event.EventKey())
 		if err != nil {

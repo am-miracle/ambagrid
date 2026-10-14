@@ -104,6 +104,34 @@ func TestOpenRecoversPersistedEventsForUpload(t *testing.T) {
 	assertRecordStatus(t, store, sequence, domain.StatusPendingUpload)
 }
 
+func TestOpenRecoversUploadedEventsForIdempotentRetry(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "queue.db")
+	store, err := queuesqlite.Open(ctx, testConfig(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sequence, err := store.Enqueue(ctx, testEvent([]byte("reading"), domain.PriorityNormal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkUploaded(ctx, sequence, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err = queuesqlite.Open(ctx, testConfig(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	assertRecordStatus(t, store, sequence, domain.StatusPendingUpload)
+}
+
 func assertRecordStatus(t *testing.T, store *queuesqlite.Store, sequence uint64, want domain.EventStatus) {
 	t.Helper()
 	record, err := store.Record(context.Background(), sequence)

@@ -21,6 +21,7 @@ func TestFromEnvBuildsEdgeQueueConfiguration(t *testing.T) {
 	t.Setenv("EDGE_SIMULATOR_ENABLED", "true")
 	t.Setenv("EDGE_COLLECTOR_INTERVAL", "2s")
 	t.Setenv("EDGE_REGION", "africa-east")
+	t.Setenv("EDGE_SMS_DEBOUNCE", "45s")
 	t.Setenv("EDGE_HEALTH_ADDR", "127.0.0.1:32112")
 
 	cfg, err := config.FromEnv()
@@ -38,6 +39,9 @@ func TestFromEnvBuildsEdgeQueueConfiguration(t *testing.T) {
 	}
 	if !cfg.Collector.Enabled || cfg.Collector.Interval != 2*time.Second || cfg.Collector.Region != "africa-east" {
 		t.Fatalf("collector config = %#v", cfg.Collector)
+	}
+	if cfg.SMS.Debounce != 45*time.Second {
+		t.Fatalf("SMS debounce = %v, want 45s", cfg.SMS.Debounce)
 	}
 }
 

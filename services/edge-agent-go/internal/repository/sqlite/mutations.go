@@ -171,9 +171,9 @@ WHERE sequence = ? AND status = ?`, to, sequence, from)
 	return fmt.Errorf("%w: sequence %d is %s, expected %s before %s", domain.ErrInvalidTransition, sequence, current, from, to)
 }
 
-func (s *Store) recoverPersisted(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, "UPDATE queue_events SET status = ? WHERE status = ?", domain.StatusPendingUpload, domain.StatusPersisted); err != nil {
-		return fmt.Errorf("recover persisted queue events: %w", err)
+func (s *Store) recoverInterrupted(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, "UPDATE queue_events SET status = ? WHERE status IN (?, ?)", domain.StatusPendingUpload, domain.StatusPersisted, domain.StatusUploaded); err != nil {
+		return fmt.Errorf("recover interrupted queue events: %w", err)
 	}
 	return nil
 }

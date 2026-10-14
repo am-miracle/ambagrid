@@ -24,12 +24,12 @@ func TestFallbackIncidentSurvivesRestartAndSuppressesDuplicates(t *testing.T) {
 		Code: fallback.BatteryOverheat, TemperatureC: ptrFloat(68.2),
 		OccurredAt: now.Add(-time.Minute),
 	}
-	if err := store.OpenFallbackIncident(ctx, event, now); err != nil {
+	if opened, err := store.OpenFallbackIncident(ctx, event, now); err != nil || !opened {
 		t.Fatalf("OpenFallbackIncident() error = %v", err)
 	}
 	duplicate := event
 	duplicate.Sequence = 11
-	if err := store.OpenFallbackIncident(ctx, duplicate, now); err != nil {
+	if opened, err := store.OpenFallbackIncident(ctx, duplicate, now); err != nil || opened {
 		t.Fatalf("duplicate OpenFallbackIncident() error = %v", err)
 	}
 	if err := store.RecordFallbackUploadFailure(ctx, event.Sequence); err != nil {
@@ -65,7 +65,7 @@ func TestSuccessfulNormalUploadRemovesFallbackCandidate(t *testing.T) {
 		SiteID: "site-01", AssetID: "inv-01", Sequence: 12,
 		Code: fallback.InverterFailure, OccurredAt: now.Add(-time.Minute),
 	}
-	if err := store.OpenFallbackIncident(ctx, event, now); err != nil {
+	if _, err := store.OpenFallbackIncident(ctx, event, now); err != nil {
 		t.Fatalf("OpenFallbackIncident() error = %v", err)
 	}
 	if err := store.RecordFallbackUploadSuccess(ctx, event.Sequence, now); err != nil {
@@ -77,6 +77,36 @@ func TestSuccessfulNormalUploadRemovesFallbackCandidate(t *testing.T) {
 	}
 	if len(candidates) != 0 {
 		t.Fatalf("candidates = %+v, want none after normal delivery", candidates)
+	}
+}
+
+func TestFallbackRateLimitStatsReportsBlockedIncident(t *testing.T) {
+	ctx := context.Background()
+	store, err := queuesqlite.Open(ctx, testConfig(filepath.Join(t.TempDir(), "queue.db")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Unix(1730000200, 0).UTC()
+	event := fallback.Event{SiteID: "site-01", AssetID: "inv-01", Sequence: 12, Code: fallback.InverterFailure, OccurredAt: now.Add(-time.Minute)}
+	if _, err := store.OpenFallbackIncident(ctx, event, now); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		attemptedAt := now.Add(time.Duration(i) * time.Second)
+		if err := store.ReserveFallbackAttempt(ctx, event.EventKey(), attemptedAt); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.RecordFallbackAttempt(ctx, fallback.AttemptResult{EventKey: event.EventKey(), AttemptedAt: attemptedAt, FailureReason: "modem unavailable"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stats, err := store.FallbackRateLimitStats(ctx, now.Add(3*time.Second), domain.FallbackRateLimitPolicy{MaxAttempts: 3, HourlyLimit: 3, DailyLimit: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.IncidentAttemptLimit != 1 || stats.SiteHourlyLimit != 1 || stats.SiteDailyLimit != 1 {
+		t.Fatalf("rate-limit stats = %+v, want incident reported for all exhausted limits", stats)
 	}
 }
 
@@ -99,7 +129,7 @@ func TestRestartDoesNotReopenSuppressedHistoricalIncident(t *testing.T) {
 			t.Fatal(err)
 		}
 		fallbackEvent := fallback.Event{SiteID: "site-01", AssetID: "batt-01", Sequence: sequence, Code: fallback.BatteryOverheat, TemperatureC: &temperature, OccurredAt: event.EventTimestamp}
-		if err := store.OpenFallbackIncident(ctx, fallbackEvent, now); err != nil {
+		if _, err := store.OpenFallbackIncident(ctx, fallbackEvent, now); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -141,7 +171,7 @@ func TestRestartPreservesOpeningMetadataAcrossRecurrences(t *testing.T) {
 		if err := store.MarkPendingUpload(ctx, sequence); err != nil {
 			t.Fatal(err)
 		}
-		if err := store.OpenFallbackIncident(ctx, fallback.Event{SiteID: "site-01", AssetID: "batt-01", Sequence: sequence, Code: fallback.BatteryOverheat, TemperatureC: &temperature, OccurredAt: at}, at); err != nil {
+		if _, err := store.OpenFallbackIncident(ctx, fallback.Event{SiteID: "site-01", AssetID: "batt-01", Sequence: sequence, Code: fallback.BatteryOverheat, TemperatureC: &temperature, OccurredAt: at}, at); err != nil {
 			t.Fatal(err)
 		}
 		return sequence

@@ -148,7 +148,7 @@ func (s *Store) initialize(ctx context.Context) error {
 	if err := s.ensureIdentity(ctx); err != nil {
 		return err
 	}
-	if err := s.recoverPersisted(ctx); err != nil {
+	if err := s.recoverInterrupted(ctx); err != nil {
 		return err
 	}
 	return s.recoverFallbackIncidents(ctx)
