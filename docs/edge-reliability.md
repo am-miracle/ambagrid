@@ -146,6 +146,12 @@ after publishing and `acknowledged` only after the upstream broker confirms
 delivery. The database is bound to one site identity, making `(site_id,
 sequence)` the stable idempotency key for this deployment model.
 
+Replay provenance is durable queue state rather than an age estimate. An upload
+failure marks the active backlog and enters replay mode, so newly collected
+records are marked too; restart recovery does the same for interrupted records.
+Successful upstream contact updates health immediately, while replay mode stays
+active until the marked backlog is delivered.
+
 ### Replay Kafka record
 
 An HTTP replay is published to `telemetry.ingested` with the device ID as its

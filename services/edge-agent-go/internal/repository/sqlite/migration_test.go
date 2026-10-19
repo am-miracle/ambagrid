@@ -60,4 +60,7 @@ PRAGMA user_version = 1;
 	if record.AssetType != domain.AssetSmartMeter || record.Status != domain.StatusPendingUpload {
 		t.Fatalf("migrated record = asset type %q status %q", record.AssetType, record.Status)
 	}
+	if !record.ReplayRequired {
+		t.Fatal("active migrated record did not require replay after recovery")
+	}
 }

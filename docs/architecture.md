@@ -79,6 +79,8 @@ AmbaGrid scales by keeping the ingestion layer stateless.
 
 If more meters come online, run more Go ingestion containers. These containers do not own durable state; they receive MQTT messages, add stream metadata, and publish Kafka records.
 
+Ingestion delivery is at least once. HTTP retries may publish the same edge event more than once, so ingestion attaches the stable `source_event_id` derived from `(site_id, sequence)` and durable consumers claim that identity transactionally before applying an event.
+
 Redpanda can split traffic across partitions. A practical partitioning key is region, site ID, or device ID, depending on the processing model:
 
 - region partitions help separate large geographic lanes

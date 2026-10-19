@@ -3,6 +3,7 @@ package collector_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -250,8 +251,188 @@ func TestCriticalIncidentIsDurableBeforeRecordBecomesUploadable(t *testing.T) {
 	if err := c.CollectOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := queue.steps; len(got) != 3 || got[0] != "persist" || got[1] != "incident" || got[2] != "pending" {
-		t.Fatalf("steps = %v, want persist, incident, pending", got)
+	if got := queue.steps; len(got) != 4 || got[0] != "debounce" || got[1] != "persist" || got[2] != "incident" || got[3] != "pending" {
+		t.Fatalf("steps = %v, want debounce, persist, incident, pending", got)
+	}
+}
+
+func TestDebounceStateSurvivesRestart(t *testing.T) {
+	ctx := context.Background()
+	store, err := queuesqlite.Open(ctx, queuesqlite.Config{
+		Path: filepath.Join(t.TempDir(), "queue.db"), SiteID: "site-01", GatewayID: "gateway-01",
+		MaxStorageBytes: 8 << 20, WarningPercent: 70, CriticalReservePercent: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	now := time.Unix(1730000000, 0).UTC()
+	source := fixedSource{readings: []domain.Reading{{
+		DeviceID: "inv-01", AssetType: domain.AssetSolarInverter, TakenAt: now, InverterFailed: true,
+	}}}
+
+	c1, err := collector.New(collector.Config{SiteID: "site-01", Region: "africa-west", Interval: time.Second}, store, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := now
+	c1.SetClock(func() time.Time { return clock })
+
+	if err := c1.CollectOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := store.FallbackCandidates(ctx, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 0 {
+		t.Fatal("incident should not open during debounce")
+	}
+
+	clock = clock.Add(20 * time.Second)
+
+	c2, err := collector.New(collector.Config{SiteID: "site-01", Region: "africa-west", Interval: time.Second}, store, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c2.SetClock(func() time.Time { return clock })
+	if err := c2.RestoreDebounceState(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	clock = clock.Add(10 * time.Second)
+	if err := c2.CollectOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	candidates, err = store.FallbackCandidates(ctx, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 || candidates[0].Code != fallback.InverterFailure {
+		t.Fatalf("debounce should have continued across restart; candidates = %+v", candidates)
+	}
+}
+
+func TestCollectionWaitsForDebounceRestore(t *testing.T) {
+	loadErr := errors.New("database unavailable")
+	queue := &debounceQueue{loadErr: loadErr}
+	now := time.Unix(1730000000, 0).UTC()
+	source := &mutableSource{readings: []domain.Reading{{
+		DeviceID: "inv-01", AssetType: domain.AssetSolarInverter, TakenAt: now, InverterFailed: true,
+	}}}
+	c, err := collector.New(collector.Config{
+		SiteID: "site-01", Region: "africa-west", Interval: time.Second,
+	}, queue, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.CollectOnce(context.Background()); !errors.Is(err, loadErr) {
+		t.Fatalf("CollectOnce error = %v, want restore error", err)
+	}
+	if source.reads != 0 {
+		t.Fatalf("source reads = %d, want none before debounce restore", source.reads)
+	}
+
+	queue.loadErr = nil
+	if err := c.CollectOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if source.reads != 1 {
+		t.Fatalf("source reads = %d, want one after debounce restore", source.reads)
+	}
+}
+
+func TestDebounceDoesNotAdvanceWhenPersistenceFails(t *testing.T) {
+	saveErr := errors.New("database full")
+	queue := &debounceQueue{saveErr: saveErr}
+	now := time.Unix(1730000000, 0).UTC()
+	source := &mutableSource{readings: []domain.Reading{{
+		DeviceID: "inv-01", AssetType: domain.AssetSolarInverter, TakenAt: now, InverterFailed: true,
+	}}}
+	c, err := collector.New(collector.Config{
+		SiteID: "site-01", Region: "africa-west", Interval: time.Second, FallbackDebounce: 30 * time.Second,
+	}, queue, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := now
+	c.SetClock(func() time.Time { return clock })
+
+	if err := c.CollectOnce(context.Background()); !errors.Is(err, saveErr) {
+		t.Fatalf("CollectOnce error = %v, want save error", err)
+	}
+	queue.saveErr = nil
+	clock = clock.Add(30 * time.Second)
+	if err := c.CollectOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if queue.opened != 0 {
+		t.Fatalf("opened incidents = %d, debounce advanced without durable state", queue.opened)
+	}
+
+	clock = clock.Add(30 * time.Second)
+	if err := c.CollectOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if queue.opened != 1 {
+		t.Fatalf("opened incidents = %d, want one after durable debounce", queue.opened)
+	}
+}
+
+func TestDeleteFailureKeepsDebounceStateUntilRecoveryPersists(t *testing.T) {
+	deleteErr := errors.New("database busy")
+	queue := &debounceQueue{deleteErr: deleteErr, deleteCode: fallback.InverterFailure}
+	now := time.Unix(1730000000, 0).UTC()
+	source := &mutableSource{readings: []domain.Reading{{
+		DeviceID: "inv-01", AssetType: domain.AssetSolarInverter, TakenAt: now, InverterFailed: true,
+	}}}
+	c, err := collector.New(collector.Config{
+		SiteID: "site-01", Region: "africa-west", Interval: time.Second, FallbackDebounce: 30 * time.Second,
+	}, queue, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := now
+	c.SetClock(func() time.Time { return clock })
+
+	if err := c.CollectOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(30 * time.Second)
+	if err := c.CollectOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if queue.opened != 1 {
+		t.Fatalf("opened incidents = %d, want one", queue.opened)
+	}
+
+	source.readings[0].InverterFailed = false
+	if err := c.CollectOnce(context.Background()); !errors.Is(err, deleteErr) {
+		t.Fatalf("CollectOnce error = %v, want delete error", err)
+	}
+	if queue.resolved != 0 {
+		t.Fatalf("resolved incidents = %d, want none before debounce deletion", queue.resolved)
+	}
+
+	queue.deleteErr = nil
+	source.readings[0].InverterFailed = true
+	clock = clock.Add(60 * time.Second)
+	if err := c.CollectOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if queue.opened != 1 {
+		t.Fatalf("opened incidents = %d, stale recovery cleared in-memory state", queue.opened)
+	}
+
+	source.readings[0].InverterFailed = false
+	if err := c.CollectOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if queue.resolved != 1 {
+		t.Fatalf("resolved incidents = %d, want one after durable deletion", queue.resolved)
 	}
 }
 
@@ -272,6 +453,16 @@ func (q *orderedQueue) MarkPendingUpload(context.Context, uint64) error {
 func (*orderedQueue) ResolveFallbackIncident(context.Context, string, fallback.Code, time.Time) error {
 	return nil
 }
+func (*orderedQueue) LoadDebounceConditions(context.Context) ([]fallback.DebounceCondition, error) {
+	return nil, nil
+}
+func (q *orderedQueue) SaveDebounceCondition(context.Context, string, fallback.Code, time.Time) error {
+	q.steps = append(q.steps, "debounce")
+	return nil
+}
+func (*orderedQueue) DeleteDebounceCondition(context.Context, string, fallback.Code) error {
+	return nil
+}
 func (*orderedQueue) Ready(context.Context, int, int64) ([]domain.Record, error)  { return nil, nil }
 func (*orderedQueue) MarkUploaded(context.Context, uint64, time.Time) error       { return nil }
 func (*orderedQueue) Ack(context.Context, uint64) error                           { return nil }
@@ -284,3 +475,50 @@ func (*orderedQueue) Stats(context.Context) (domain.QueueStats, error) {
 type fixedSource struct{ readings []domain.Reading }
 
 func (s fixedSource) Read(context.Context) ([]domain.Reading, error) { return s.readings, nil }
+
+type mutableSource struct {
+	readings []domain.Reading
+	reads    int
+}
+
+func (s *mutableSource) Read(context.Context) ([]domain.Reading, error) {
+	s.reads++
+	return s.readings, nil
+}
+
+type debounceQueue struct {
+	orderedQueue
+	loadErr    error
+	saveErr    error
+	deleteErr  error
+	deleteCode fallback.Code
+	opened     int
+	resolved   int
+}
+
+func (q *debounceQueue) LoadDebounceConditions(context.Context) ([]fallback.DebounceCondition, error) {
+	return nil, q.loadErr
+}
+
+func (q *debounceQueue) SaveDebounceCondition(context.Context, string, fallback.Code, time.Time) error {
+	return q.saveErr
+}
+
+func (q *debounceQueue) DeleteDebounceCondition(_ context.Context, _ string, code fallback.Code) error {
+	if code == q.deleteCode {
+		return q.deleteErr
+	}
+	return nil
+}
+
+func (q *debounceQueue) OpenFallbackIncident(context.Context, fallback.Event, time.Time) (bool, error) {
+	q.opened++
+	return true, nil
+}
+
+func (q *debounceQueue) ResolveFallbackIncident(_ context.Context, _ string, code fallback.Code, _ time.Time) error {
+	if code == fallback.InverterFailure {
+		q.resolved++
+	}
+	return nil
+}

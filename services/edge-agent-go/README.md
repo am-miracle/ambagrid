@@ -52,7 +52,7 @@ gateways default to a 256 MiB filesystem reserve.
 | Variable | Default | Meaning |
 | --- | ---: | --- |
 | `EDGE_SITE_ID` | required | Site written onto every queued event. |
-| `EDGE_GATEWAY_ID` | required | Stable gateway identity used with the sequence as the upstream idempotency key. |
+| `EDGE_GATEWAY_ID` | required | Stable gateway identity carried with the site-local event sequence. |
 | `EDGE_QUEUE_PATH` | `/var/lib/ambagrid-edge/queue.db` | Local SQLite database path. |
 | `EDGE_QUEUE_MAX_BYTES` | `536870912` | Total storage budget used to derive the database, WAL, and payload limits. |
 | `EDGE_QUEUE_MAX_EVENT_BYTES` | `1048576` | Largest individual event; must not exceed 5% of the total budget. |
@@ -121,8 +121,9 @@ The uploader:
 1. Reads `Ready` records in sequence order.
 2. Stamps `uploaded_at` before sending so the server can distinguish event time,
    edge receive time, and upload time.
-3. POSTs batches to the ingestion service using `(site_id, sequence)` as the
-   idempotency key — the server deduplicates on this pair.
+3. POSTs batches to the ingestion service with `(site_id, sequence)` as the
+   stable event identity. Ingestion publishes every accepted delivery with the
+   corresponding `source_event_id`; durable consumers deduplicate on that ID.
 4. Calls `Ack` for each sequence the server accepts, `MarkFailed` with
    exponential backoff for rejections or transport errors.
 
@@ -134,6 +135,7 @@ that has stopped contacting the platform.
 
 Delivery is intentionally at-least-once. A process crash after upstream
 delivery and before `Ack` causes a safe duplicate rather than data loss.
+Ingestion is stateless, so retries may create duplicate stream records.
 
 Critical battery overheat, inverter failure, tamper, and site outage events are
 stored as durable incidents. After three failed uploads or two minutes without

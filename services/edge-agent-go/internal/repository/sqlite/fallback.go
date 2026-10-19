@@ -97,7 +97,9 @@ func (s *Store) RecordFallbackUploadSuccess(ctx context.Context, sequence uint64
 		return fmt.Errorf("mark fallback normally delivered: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE edge_sync_state SET last_upload_success_at_ms = ? WHERE singleton = 1`, at.UnixMilli()); err != nil {
+		UPDATE edge_sync_state
+		SET last_upload_success_at_ms = ?
+		WHERE singleton = 1`, at.UnixMilli()); err != nil {
 		return fmt.Errorf("record upload success: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -106,9 +108,26 @@ func (s *Store) RecordFallbackUploadSuccess(ctx context.Context, sequence uint64
 	return nil
 }
 
+func (s *Store) RecordUploadContactFailure(ctx context.Context, cause string) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE edge_sync_state
+		SET last_upload_failure_reason = ?, replay_mode_active = 1
+		WHERE singleton = 1`, cause)
+	if err != nil {
+		return fmt.Errorf("record upload contact failure: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) RecordUploadContactSuccess(ctx context.Context, at time.Time) error {
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE edge_sync_state SET last_upload_success_at_ms = ? WHERE singleton = 1`, at.UnixMilli())
+		UPDATE edge_sync_state
+		SET last_upload_success_at_ms = ?,
+		    replay_mode_active = EXISTS(
+		        SELECT 1 FROM queue_events
+		        WHERE status IN ('persisted', 'pending_upload', 'uploaded') AND replay_required = 1
+		    )
+		WHERE singleton = 1`, at.UnixMilli())
 	if err != nil {
 		return fmt.Errorf("record upload contact success: %w", err)
 	}
@@ -239,6 +258,52 @@ func (s *Store) ReserveFallbackAttempt(ctx context.Context, eventKey fallback.Ev
 		INSERT INTO fallback_attempts(event_key, attempted_at_ms) VALUES (?, ?)`, eventKey, attemptedAt.UnixMilli())
 	if err != nil {
 		return fmt.Errorf("reserve fallback attempt: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) LoadDebounceConditions(ctx context.Context) ([]fallback.DebounceCondition, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT d.asset_id, d.code, d.active_since_ms,
+		       EXISTS(SELECT 1 FROM fallback_incidents i
+		              WHERE i.asset_id = d.asset_id AND i.code = d.code AND i.resolved_at_ms IS NULL)
+		FROM debounce_conditions d`)
+	if err != nil {
+		return nil, fmt.Errorf("load debounce conditions: %w", err)
+	}
+	defer rows.Close()
+	var conditions []fallback.DebounceCondition
+	for rows.Next() {
+		var c fallback.DebounceCondition
+		var code string
+		var activeMS int64
+		var opened bool
+		if err := rows.Scan(&c.AssetID, &code, &activeMS, &opened); err != nil {
+			return nil, fmt.Errorf("scan debounce condition: %w", err)
+		}
+		c.Code = fallback.Code(code)
+		c.ActiveSince = time.UnixMilli(activeMS).UTC()
+		c.Opened = opened
+		conditions = append(conditions, c)
+	}
+	return conditions, rows.Err()
+}
+
+func (s *Store) SaveDebounceCondition(ctx context.Context, assetID string, code fallback.Code, activeSince time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO debounce_conditions(asset_id, code, active_since_ms) VALUES (?, ?, ?)`,
+		assetID, string(code), activeSince.UnixMilli())
+	if err != nil {
+		return fmt.Errorf("save debounce condition: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) DeleteDebounceCondition(ctx context.Context, assetID string, code fallback.Code) error {
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM debounce_conditions WHERE asset_id = ? AND code = ?`, assetID, string(code))
+	if err != nil {
+		return fmt.Errorf("delete debounce condition: %w", err)
 	}
 	return nil
 }

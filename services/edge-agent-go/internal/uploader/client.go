@@ -15,11 +15,6 @@ import (
 	"edge-agent-go/internal/domain"
 )
 
-// A record that sat in the local queue longer than this before its first
-// upload attempt is tagged replay=true so downstream consumers know the
-// data arrived out of band.
-const replayAgeThreshold = 2 * time.Minute
-
 type IngestClient struct {
 	endpoint   string
 	apiKey     string
@@ -106,7 +101,7 @@ func (c *IngestClient) Upload(ctx context.Context, records []domain.Record, uplo
 			EventTimestamp: r.EventTimestamp,
 			EdgeReceivedAt: r.EdgeReceivedAt,
 			UploadedAt:     uploadedAt,
-			Replay:         r.AttemptCount > 0 || uploadedAt.Sub(r.EdgeReceivedAt) > replayAgeThreshold,
+			Replay:         r.ReplayRequired,
 			CriticalCode:   r.CriticalCode,
 			CriticalValue:  r.CriticalValue,
 		}

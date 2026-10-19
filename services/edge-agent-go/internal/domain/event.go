@@ -45,6 +45,7 @@ type Record struct {
 	PersistedAt    time.Time
 	UploadedAt     *time.Time
 	AttemptCount   int
+	ReplayRequired bool
 	NextAttemptAt  *time.Time
 	LastError      string
 	CriticalCode   string

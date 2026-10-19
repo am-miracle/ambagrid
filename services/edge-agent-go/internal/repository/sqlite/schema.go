@@ -7,7 +7,7 @@ import (
 	"edge-agent-go/internal/domain"
 )
 
-const schemaVersion = 5
+const schemaVersion = 7
 
 const schema = `
 CREATE TABLE IF NOT EXISTS edge_identity (
@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS queue_events (
     uploaded_at_ms      INTEGER,
     status              TEXT NOT NULL CHECK (status IN ('persisted', 'pending_upload', 'uploaded', 'acknowledged', 'expired')),
     attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+    replay_required     INTEGER NOT NULL DEFAULT 0 CHECK (replay_required IN (0, 1)),
     next_attempt_at_ms  INTEGER,
     last_error          TEXT,
     critical_code       TEXT,
@@ -74,10 +75,18 @@ CREATE TABLE IF NOT EXISTS fallback_attempts (
 CREATE TABLE IF NOT EXISTS edge_sync_state (
     singleton                  INTEGER PRIMARY KEY CHECK (singleton = 1),
     last_upload_success_at_ms  INTEGER,
-    last_upload_failure_reason TEXT
+    last_upload_failure_reason TEXT,
+    replay_mode_active         INTEGER NOT NULL DEFAULT 0 CHECK (replay_mode_active IN (0, 1))
 ) STRICT;
 
 INSERT OR IGNORE INTO edge_sync_state(singleton) VALUES (1);
+
+CREATE TABLE IF NOT EXISTS debounce_conditions (
+    asset_id        TEXT NOT NULL,
+    code            TEXT NOT NULL,
+    active_since_ms INTEGER NOT NULL,
+    PRIMARY KEY (asset_id, code)
+) STRICT;
 `
 
 const migrateV1ToV2 = `
@@ -134,6 +143,22 @@ const migrateV4ToV5 = `
 ALTER TABLE edge_sync_state ADD COLUMN last_upload_failure_reason TEXT;
 `
 
+const migrateV5ToV6 = `
+CREATE TABLE debounce_conditions (
+    asset_id        TEXT NOT NULL,
+    code            TEXT NOT NULL,
+    active_since_ms INTEGER NOT NULL,
+    PRIMARY KEY (asset_id, code)
+) STRICT;
+`
+
+const migrateV6ToV7 = `
+ALTER TABLE queue_events ADD COLUMN replay_required INTEGER NOT NULL DEFAULT 0
+    CHECK (replay_required IN (0, 1));
+ALTER TABLE edge_sync_state ADD COLUMN replay_mode_active INTEGER NOT NULL DEFAULT 0
+    CHECK (replay_mode_active IN (0, 1));
+`
+
 func (s *Store) initialize(ctx context.Context) error {
 	var version int
 	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
@@ -184,6 +209,8 @@ func (s *Store) migrateSchema(ctx context.Context, version int) error {
 			{2, migrateV2ToV3, "migrate queue schema from version 2 to 3"},
 			{3, migrateV3ToV4, "migrate queue schema from version 3 to 4"},
 			{4, migrateV4ToV5, "migrate queue schema from version 4 to 5"},
+			{5, migrateV5ToV6, "migrate queue schema from version 5 to 6"},
+			{6, migrateV6ToV7, "migrate queue schema from version 6 to 7"},
 		}
 		for _, m := range incremental {
 			if version > m.from {

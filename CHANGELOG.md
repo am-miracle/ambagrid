@@ -29,6 +29,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **site-health:** Track gateway dashboard states
 - **alerts:** Add critical SMS fallback
 - **edge:** Persist dedup state and surface fleet health
+- **edge:** Harden durable telemetry sync
 
 ### Changed
 
@@ -46,6 +47,8 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **engine:** Make outbox dependencies explicit (#14)
 - **ingestion:** Make dedup and Kafka publish atomic, drop Postgres dependency
 - **edge:** Harden fallback and replay idempotency
+- **edge:** Harden replay and fallback handling
+- **edge:** Complete replay and fallback hardening
 
 ### Maintenance
 

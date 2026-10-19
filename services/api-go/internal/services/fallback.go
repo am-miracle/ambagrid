@@ -31,16 +31,8 @@ func (s *FallbackService) ReceiveSMS(ctx context.Context, event domain.CriticalF
 			if !stored.Matches(event) {
 				return false, domain.ErrConflict
 			}
-			inserted, err := tx.InsertReceipt(ctx, event.EventKey(), receipt, s.pricing)
-			if err != nil {
+			if err := s.recordReceipt(ctx, tx, event.EventKey(), receipt); err != nil {
 				return false, err
-			}
-			if !inserted {
-				if err := s.checkReceiptConflict(ctx, tx, event.EventKey(), receipt); err != nil {
-					return false, err
-				}
-			} else {
-				s.checkBudgetThreshold(ctx, tx, receipt)
 			}
 			return false, nil
 		}
@@ -95,21 +87,24 @@ func (s *FallbackService) ReceiveSMS(ctx context.Context, event domain.CriticalF
 			return false, fmt.Errorf("insert fallback event: %w", err)
 		}
 
-		inserted, err := tx.InsertReceipt(ctx, event.EventKey(), receipt, s.pricing)
-		if err != nil {
+		if err := s.recordReceipt(ctx, tx, event.EventKey(), receipt); err != nil {
 			return false, err
-		}
-
-		if !inserted {
-			if err := s.checkReceiptConflict(ctx, tx, event.EventKey(), receipt); err != nil {
-				return false, err
-			}
-		} else {
-			s.checkBudgetThreshold(ctx, tx, receipt)
 		}
 
 		return created, nil
 	})
+}
+
+func (s *FallbackService) recordReceipt(ctx context.Context, tx FallbackTx, eventKey domain.EventKey, receipt domain.SMSReceipt) error {
+	inserted, err := tx.InsertReceipt(ctx, eventKey, receipt, s.pricing)
+	if err != nil {
+		return err
+	}
+	if !inserted {
+		return s.checkReceiptConflict(ctx, tx, eventKey, receipt)
+	}
+	s.checkBudgetThreshold(ctx, tx, receipt)
+	return nil
 }
 
 func (s *FallbackService) checkReceiptConflict(ctx context.Context, tx FallbackTx, eventKey domain.EventKey, receipt domain.SMSReceipt) error {

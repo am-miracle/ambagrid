@@ -26,6 +26,12 @@ type FallbackStore interface {
 	ResolveFallbackIncident(context.Context, string, fallback.Code, time.Time) error
 }
 
+type DebounceStore interface {
+	LoadDebounceConditions(context.Context) ([]fallback.DebounceCondition, error)
+	SaveDebounceCondition(ctx context.Context, assetID string, code fallback.Code, activeSince time.Time) error
+	DeleteDebounceCondition(ctx context.Context, assetID string, code fallback.Code) error
+}
+
 type conditionKey struct {
 	assetID string
 	code    fallback.Code
@@ -42,7 +48,9 @@ type Collector struct {
 	sources    []Source
 	now        func() time.Time
 	fallback   FallbackStore
+	debounce   DebounceStore
 	conditions map[conditionKey]conditionState
+	restored   bool
 }
 
 func New(cfg Config, queue domain.Queue, sources ...Source) (*Collector, error) {
@@ -68,12 +76,32 @@ func New(cfg Config, queue domain.Queue, sources ...Source) (*Collector, error) 
 	if store, ok := queue.(FallbackStore); ok {
 		c.fallback = store
 	}
+	store, ok := queue.(DebounceStore)
+	if !ok {
+		return nil, errors.New("collector queue must support durable debounce state")
+	}
+	c.debounce = store
 	return c, nil
 }
 
 // SetClock makes condition debounce deterministic for tests and simulations.
 func (c *Collector) SetClock(now func() time.Time) {
 	c.now = now
+}
+
+func (c *Collector) RestoreDebounceState(ctx context.Context) error {
+	conditions, err := c.debounce.LoadDebounceConditions(ctx)
+	if err != nil {
+		return fmt.Errorf("load debounce conditions: %w", err)
+	}
+	restored := make(map[conditionKey]conditionState, len(conditions))
+	for _, dc := range conditions {
+		key := conditionKey{assetID: dc.AssetID, code: dc.Code}
+		restored[key] = conditionState{activeSince: dc.ActiveSince, opened: dc.Opened}
+	}
+	c.conditions = restored
+	c.restored = true
+	return nil
 }
 
 func (c *Collector) Run(ctx context.Context) {
@@ -97,6 +125,11 @@ func (c *Collector) collectAndReport(ctx context.Context) {
 }
 
 func (c *Collector) CollectOnce(ctx context.Context) error {
+	if !c.restored {
+		if err := c.RestoreDebounceState(ctx); err != nil {
+			return fmt.Errorf("restore debounce state: %w", err)
+		}
+	}
 	var collectionErr error
 	for _, source := range c.sources {
 		readings, err := source.Read(ctx)
@@ -111,7 +144,8 @@ func (c *Collector) CollectOnce(ctx context.Context) error {
 				collectionErr = errors.Join(collectionErr, fmt.Errorf("normalize device %q: %w", reading.DeviceID, err))
 				continue
 			}
-			criticalEvents := c.criticalEvents(reading, now)
+			criticalEvents, err := c.criticalEvents(ctx, reading, now)
+			collectionErr = errors.Join(collectionErr, err)
 			if len(criticalEvents) == 0 {
 				collectionErr = errors.Join(collectionErr, c.persist(ctx, event, nil, now))
 			} else {
@@ -155,15 +189,21 @@ func (c *Collector) persist(ctx context.Context, event domain.Event, critical *f
 	return nil
 }
 
-func (c *Collector) criticalEvents(reading domain.Reading, now time.Time) []fallback.Event {
+func (c *Collector) criticalEvents(ctx context.Context, reading domain.Reading, now time.Time) ([]fallback.Event, error) {
 	base := fallback.Event{SiteID: c.cfg.SiteID, AssetID: reading.DeviceID, OccurredAt: reading.TakenAt.UTC()}
 	var events []fallback.Event
+	var result error
+	add := func(event fallback.Event, debounce time.Duration) {
+		var err error
+		events, err = c.openOnce(ctx, events, event, now, debounce)
+		result = errors.Join(result, err)
+	}
 	if reading.AssetType == domain.AssetBatteryBMS && reading.InternalTemperature >= c.cfg.BatteryOverheatC {
 		event := base
 		event.Code = fallback.BatteryOverheat
 		temperature := reading.InternalTemperature
 		event.TemperatureC = &temperature
-		events = c.openOnce(events, event, now, 0)
+		add(event, 0)
 	}
 	if reading.AssetType == domain.AssetSolarInverter && (reading.InverterFailed || reading.InverterHardFault) {
 		event := base
@@ -172,34 +212,37 @@ func (c *Collector) criticalEvents(reading domain.Reading, now time.Time) []fall
 		if reading.InverterHardFault {
 			debounce = 0
 		}
-		events = c.openOnce(events, event, now, debounce)
+		add(event, debounce)
 	}
 	if reading.TamperDetected {
 		event := base
 		event.Code = fallback.TamperDetected
-		events = c.openOnce(events, event, now, c.cfg.FallbackDebounce)
+		add(event, c.cfg.FallbackDebounce)
 	}
 	if reading.SiteOutage != nil && *reading.SiteOutage {
 		event := base
 		event.AssetID = "site"
 		event.Code = fallback.SiteOutage
-		events = c.openOnce(events, event, now, c.cfg.FallbackDebounce)
+		add(event, c.cfg.FallbackDebounce)
 	}
-	return events
+	return events, result
 }
 
-func (c *Collector) openOnce(events []fallback.Event, event fallback.Event, now time.Time, debounce time.Duration) []fallback.Event {
+func (c *Collector) openOnce(ctx context.Context, events []fallback.Event, event fallback.Event, now time.Time, debounce time.Duration) ([]fallback.Event, error) {
 	key := conditionKey{assetID: event.AssetID, code: event.Code}
 	state, exists := c.conditions[key]
 	if !exists {
 		state = conditionState{activeSince: now}
+		if err := c.debounce.SaveDebounceCondition(ctx, event.AssetID, event.Code, now); err != nil {
+			return events, fmt.Errorf("persist debounce condition for asset %q code %q: %w", event.AssetID, event.Code, err)
+		}
 	}
 	if state.opened || now.Sub(state.activeSince) < debounce {
 		c.conditions[key] = state
-		return events
+		return events, nil
 	}
 	c.conditions[key] = state
-	return append(events, event)
+	return append(events, event), nil
 }
 
 func (c *Collector) markOpened(event fallback.Event) {
@@ -228,7 +271,13 @@ func (c *Collector) resolveRecovered(ctx context.Context, reading domain.Reading
 }
 
 func (c *Collector) resolve(ctx context.Context, assetID string, code fallback.Code, now time.Time) error {
-	delete(c.conditions, conditionKey{assetID: assetID, code: code})
+	key := conditionKey{assetID: assetID, code: code}
+	if _, tracked := c.conditions[key]; tracked {
+		if err := c.debounce.DeleteDebounceCondition(ctx, assetID, code); err != nil {
+			return fmt.Errorf("delete debounce condition for asset %q code %q: %w", assetID, code, err)
+		}
+	}
+	delete(c.conditions, key)
 	if c.fallback == nil {
 		return nil
 	}

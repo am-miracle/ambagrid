@@ -70,8 +70,10 @@ func (s *Store) insert(ctx context.Context, event domain.Event, status domain.Ev
 	result, err := tx.ExecContext(ctx, `
 INSERT INTO queue_events(
 	    site_id, gateway_id, device_id, asset_type, mqtt_topic, payload, payload_bytes,
-	    priority, event_at_ms, received_at_ms, persisted_at_ms, status, critical_code, critical_value
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	    priority, event_at_ms, received_at_ms, persisted_at_ms, status, critical_code, critical_value,
+	    replay_required
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+	          COALESCE((SELECT replay_mode_active FROM edge_sync_state WHERE singleton = 1), 0))`,
 		s.cfg.SiteID, s.cfg.GatewayID, event.DeviceID, event.AssetType, event.MQTTTopic,
 		event.Payload, len(event.Payload), event.Priority,
 		event.EventTimestamp.UnixMilli(), event.EdgeReceivedAt.UnixMilli(), time.Now().UTC().UnixMilli(), status,
@@ -172,8 +174,25 @@ WHERE sequence = ? AND status = ?`, to, sequence, from)
 }
 
 func (s *Store) recoverInterrupted(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, "UPDATE queue_events SET status = ? WHERE status IN (?, ?)", domain.StatusPendingUpload, domain.StatusPersisted, domain.StatusUploaded); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin interrupted queue recovery: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "UPDATE queue_events SET status = ?, replay_required = 1 WHERE status IN (?, ?, ?)", domain.StatusPendingUpload, domain.StatusPersisted, domain.StatusPendingUpload, domain.StatusUploaded); err != nil {
 		return fmt.Errorf("recover interrupted queue events: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE edge_sync_state
+SET replay_mode_active = EXISTS(
+    SELECT 1 FROM queue_events
+    WHERE status IN ('persisted', 'pending_upload', 'uploaded') AND replay_required = 1
+)
+WHERE singleton = 1`); err != nil {
+		return fmt.Errorf("recover queue replay mode: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit interrupted queue recovery: %w", err)
 	}
 	return nil
 }
@@ -237,6 +256,7 @@ func (s *Store) MarkFailed(ctx context.Context, sequence uint64, retryAt time.Ti
 UPDATE queue_events
 SET status = ?,
     attempt_count = attempt_count + 1,
+    replay_required = 1,
     next_attempt_at_ms = ?,
     last_error = ?
 WHERE sequence = ? AND status IN (?, ?)`, domain.StatusPendingUpload, retryAt.UTC().UnixMilli(), cause, sequence, domain.StatusPendingUpload, domain.StatusUploaded)
@@ -251,7 +271,14 @@ WHERE sequence = ? AND status IN (?, ?)`, domain.StatusPendingUpload, retryAt.UT
 		return fmt.Errorf("%w: sequence %d is not pending or uploaded", domain.ErrInvalidTransition, sequence)
 	}
 	if _, err := tx.ExecContext(ctx, `
-UPDATE edge_sync_state SET last_upload_failure_reason = ? WHERE singleton = 1`, cause); err != nil {
+UPDATE queue_events SET replay_required = 1
+WHERE status IN ('persisted', 'pending_upload', 'uploaded')`); err != nil {
+		return fmt.Errorf("mark buffered queue events for replay: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE edge_sync_state
+SET last_upload_failure_reason = ?, replay_mode_active = 1
+WHERE singleton = 1`, cause); err != nil {
 		return fmt.Errorf("record upload failure: %w", err)
 	}
 	if err := tx.Commit(); err != nil {

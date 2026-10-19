@@ -2,7 +2,7 @@ package ingest
 
 import "testing"
 
-func TestCriticalReplayHeadersUseCanonicalEdgeIdentity(t *testing.T) {
+func TestHeadersUseCanonicalEdgeIdentity(t *testing.T) {
 	temperature := 68.2
 	headers := headersFor("ng-kaji-01", IngestRecord{Sequence: 42, CriticalCode: "BATTERY_OVERHEAT", CriticalValue: &temperature})
 	values := make(map[string]string, len(headers))

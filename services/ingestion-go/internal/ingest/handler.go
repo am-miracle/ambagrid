@@ -1,6 +1,7 @@
-// ingest receives telemetry batches from edge agents over HTTP, deduplicates
-// on (site_id, sequence), validates each record, and forwards accepted records
-// to Kafka as protobuf — the same wire format the MQTT bridge produces.
+// ingest receives telemetry batches from edge agents over HTTP, validates each
+// record, and forwards accepted records to Kafka as protobuf — the same wire
+// format the MQTT bridge produces. Delivery is at least once; durable consumers
+// deduplicate records by source_event_id.
 package ingest
 
 import (
@@ -19,20 +20,20 @@ import (
 )
 
 type Handler struct {
-	mux       *http.ServeMux
-	auth      Authenticator
-	publisher Publisher
-	health    SiteHealthStore
-	logger    *slog.Logger
-	maxBody   int64
+	mux      *http.ServeMux
+	auth     Authenticator
+	producer Producer
+	health   SiteHealthStore
+	logger   *slog.Logger
+	maxBody  int64
 }
 
 type HandlerConfig struct {
-	Auth      Authenticator
-	Publisher Publisher
-	Health    SiteHealthStore
-	Logger    *slog.Logger
-	MaxBody   int64
+	Auth     Authenticator
+	Producer Producer
+	Health   SiteHealthStore
+	Logger   *slog.Logger
+	MaxBody  int64
 }
 
 func NewHandler(cfg HandlerConfig) *Handler {
@@ -45,11 +46,11 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		logger = slog.Default()
 	}
 	h := &Handler{
-		auth:      cfg.Auth,
-		publisher: cfg.Publisher,
-		health:    cfg.Health,
-		logger:    logger,
-		maxBody:   maxBody,
+		auth:     cfg.Auth,
+		producer: cfg.Producer,
+		health:   cfg.Health,
+		logger:   logger,
+		maxBody:  maxBody,
 	}
 
 	mux := http.NewServeMux()
@@ -148,8 +149,7 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		dup, err := h.publisher.PublishOnce(ctx, siteID, rec)
-		if err != nil {
+		if err := h.producer.Produce(ctx, siteID, rec); err != nil {
 			h.logger.Error("publish failed", "error", err, "site_id", siteID, "sequence", rec.Sequence, "request_id", reqID)
 			rejected = append(rejected, RecordError{
 				Index:    i,
@@ -158,9 +158,6 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 				Message:  "failed to enqueue record",
 			})
 			continue
-		}
-		if dup {
-			h.logger.Debug("duplicate skipped", "site_id", siteID, "sequence", rec.Sequence, "request_id", reqID)
 		}
 		accepted = append(accepted, rec.Sequence)
 	}

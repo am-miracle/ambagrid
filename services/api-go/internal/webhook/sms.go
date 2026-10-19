@@ -57,7 +57,7 @@ type smsEnvelope struct {
 
 func (s *SMS) Parse(body []byte) (domain.CriticalFallbackEvent, domain.SMSReceipt, error) {
 	var envelope smsEnvelope
-	if err := json.Unmarshal(body, &envelope); err != nil || envelope.MessageID == "" || envelope.From == "" || envelope.ReceivedAt.IsZero() {
+	if err := json.Unmarshal(body, &envelope); err != nil || envelope.MessageID == "" || envelope.From == "" || envelope.To == "" || envelope.ReceivedAt.IsZero() {
 		return domain.CriticalFallbackEvent{}, domain.SMSReceipt{}, errors.New("invalid SMS webhook payload")
 	}
 	event, err := parseSMSMessage(envelope.Body)

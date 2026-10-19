@@ -70,15 +70,13 @@ func runHTTPIngest(ctx context.Context, cfg config.Config) error {
 	}
 
 	producer := ingest.NewKafkaProducer(kafkaClient, cfg.KafkaTopic, cfg.ProduceTimeout)
-	publisher := ingest.NewOncePublisher(producer)
-	go publisher.RunEviction(ctx)
 
 	handler := ingest.NewHandler(ingest.HandlerConfig{
-		Auth:      ingest.NewAPIKeyAuth(authEntries),
-		Publisher: publisher,
-		Health:    ingest.NewKafkaSiteHealthStore(kafkaClient, cfg.HTTP.HealthTopic, cfg.ProduceTimeout),
-		Logger:    logger,
-		MaxBody:   cfg.HTTP.MaxBodyBytes,
+		Auth:     ingest.NewAPIKeyAuth(authEntries),
+		Producer: producer,
+		Health:   ingest.NewKafkaSiteHealthStore(kafkaClient, cfg.HTTP.HealthTopic, cfg.ProduceTimeout),
+		Logger:   logger,
+		MaxBody:  cfg.HTTP.MaxBodyBytes,
 	})
 
 	return ingest.Serve(ctx, ingest.ServerConfig{

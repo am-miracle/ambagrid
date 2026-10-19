@@ -112,6 +112,28 @@ func (q *fakeQueue) snapshots() (map[uint64]time.Time, map[uint64]bool, map[uint
 	return uploaded, acked, failed
 }
 
+type fakeTracker struct {
+	mu             sync.Mutex
+	contactFailure string
+}
+
+func (t *fakeTracker) RecordFallbackUploadFailure(context.Context, uint64) error { return nil }
+func (t *fakeTracker) RecordFallbackUploadSuccess(context.Context, uint64, time.Time) error {
+	return nil
+}
+func (t *fakeTracker) RecordUploadContactSuccess(context.Context, time.Time) error { return nil }
+func (t *fakeTracker) RecordUploadContactFailure(_ context.Context, cause string) error {
+	t.mu.Lock()
+	t.contactFailure = cause
+	t.mu.Unlock()
+	return nil
+}
+func (t *fakeTracker) getContactFailure() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.contactFailure
+}
+
 func testRecord(seq uint64) domain.Record {
 	return domain.Record{
 		Sequence:       seq,
@@ -346,16 +368,16 @@ func TestUploader_ReplayFlag(t *testing.T) {
 	oldButPrompt.EventTimestamp = time.Now().UTC().Add(-3 * time.Hour)
 	oldButPrompt.EdgeReceivedAt = time.Now().UTC()
 
-	// A retry after a short outage is a replay even when it is less than two minutes old.
+	// A retry carries the durable replay decision made by the queue lifecycle.
 	retriedButFresh := testRecord(2)
 	retriedButFresh.EventTimestamp = time.Now().UTC().Add(-30 * time.Second)
 	retriedButFresh.EdgeReceivedAt = time.Now().UTC()
 	retriedButFresh.AttemptCount = 1
+	retriedButFresh.ReplayRequired = true
 
-	// Buffered during an outage (no prior attempt, but sat in the queue for 10 minutes).
+	// First-attempt records buffered behind an outage also carry that decision.
 	bufferedDuringOutage := testRecord(3)
-	bufferedDuringOutage.EventTimestamp = time.Now().UTC().Add(-10 * time.Minute)
-	bufferedDuringOutage.EdgeReceivedAt = time.Now().UTC().Add(-10 * time.Minute)
+	bufferedDuringOutage.ReplayRequired = true
 
 	queue := newFakeQueue([]domain.Record{oldButPrompt, retriedButFresh, bufferedDuringOutage})
 	client := uploader.NewIngestClient(server.URL+"/v1/ingest", "test-key", 5*time.Second)
@@ -382,7 +404,7 @@ func TestUploader_ReplayFlag(t *testing.T) {
 		t.Error("record uploaded after a failed attempt should have replay=true despite a short delay")
 	}
 	if !received.Records[2].Replay {
-		t.Error("record buffered for >2m during outage should have replay=true even with AttemptCount=0")
+		t.Error("first-attempt record buffered during outage should have replay=true")
 	}
 }
 
@@ -439,5 +461,25 @@ func TestUploader_EmptyQueue(t *testing.T) {
 	_, acked, _ := queue.snapshots()
 	if len(acked) != 0 {
 		t.Fatal("should not ack anything from empty queue")
+	}
+}
+
+func TestUploader_EmptyHeartbeatFailure_RecordsContactFailure(t *testing.T) {
+	queue := newFakeQueue(nil)
+	client := uploader.NewIngestClient("http://localhost:0/v1/ingest", "test-key", 5*time.Second)
+	tracker := &fakeTracker{}
+	ul := uploader.New(uploader.Config{
+		PollInterval: time.Hour,
+	}, queue, client, tracker)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	go ul.Run(ctx)
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+
+	if tracker.getContactFailure() == "" {
+		t.Fatal("empty-batch heartbeat failure should record contact failure on the tracker")
 	}
 }

@@ -14,10 +14,6 @@ type Producer interface {
 	Produce(ctx context.Context, siteID string, rec IngestRecord) error
 }
 
-type Publisher interface {
-	PublishOnce(ctx context.Context, siteID string, rec IngestRecord) (duplicate bool, err error)
-}
-
 type SiteHealthReport struct {
 	SiteID               string
 	GatewayID            string

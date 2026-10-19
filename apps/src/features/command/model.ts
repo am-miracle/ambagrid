@@ -156,10 +156,10 @@ export function siteStatusAt(
 	alerts: Alert[],
 	t: number,
 ): Status {
-	if (site.healthStatus === "offline") {
-		return "offline";
+	let status = healthStatusTone(site.healthStatus);
+	if (status === "offline") {
+		return status;
 	}
-	let status: Status = site.healthStatus === "delayed" ? "warning" : "healthy";
 	for (const alert of alerts) {
 		if (alert.site_id !== site.id || !isOpenAt(alert, t)) continue;
 		if (alert.severity === "critical") return "critical";

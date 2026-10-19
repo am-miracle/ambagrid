@@ -20,6 +20,13 @@ const (
 	SiteOutage      Code = "SITE_OUTAGE"
 )
 
+type DebounceCondition struct {
+	AssetID     string
+	Code        Code
+	ActiveSince time.Time
+	Opened      bool
+}
+
 func (c Code) Valid() bool {
 	switch c {
 	case BatteryOverheat, InverterFailure, TamperDetected, SiteOutage:

@@ -35,6 +35,7 @@ type UploadTracker interface {
 	RecordFallbackUploadFailure(context.Context, uint64) error
 	RecordFallbackUploadSuccess(context.Context, uint64, time.Time) error
 	RecordUploadContactSuccess(context.Context, time.Time) error
+	RecordUploadContactFailure(context.Context, string) error
 }
 
 func New(cfg Config, queue domain.Queue, client *IngestClient, tracker UploadTracker) *Uploader {
@@ -120,13 +121,12 @@ func (u *Uploader) uploadBatch(ctx context.Context) (int, error) {
 		u.handleFailure(ctx, records, result, err)
 		return 0, err
 	}
-	if u.tracker != nil && len(records) > 0 {
+	u.processResponse(ctx, records, result, uploadedAt)
+	if u.tracker != nil {
 		if err := u.tracker.RecordUploadContactSuccess(ctx, uploadedAt); err != nil {
 			slog.Error("record upload contact", "error", err)
 		}
 	}
-
-	u.processResponse(ctx, records, result, uploadedAt)
 	return len(records), nil
 }
 
@@ -186,6 +186,11 @@ func (u *Uploader) handleFailure(ctx context.Context, records []domain.Record, r
 	cause := uploadErr.Error()
 	if len(cause) > 2048 {
 		cause = cause[:2048]
+	}
+	if u.tracker != nil {
+		if err := u.tracker.RecordUploadContactFailure(ctx, cause); err != nil {
+			slog.Error("record upload contact failure", "error", err)
+		}
 	}
 	for _, r := range records {
 		u.failRecord(ctx, r, cause)

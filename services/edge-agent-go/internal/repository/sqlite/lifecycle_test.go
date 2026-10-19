@@ -77,6 +77,77 @@ func TestUploadFailureReturnsUploadedEventToPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertRecordStatus(t, store, sequence, domain.StatusPendingUpload)
+	record, err := store.Record(ctx, sequence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !record.ReplayRequired {
+		t.Fatal("failed upload did not persist replay_required")
+	}
+}
+
+func TestEventsCollectedDuringOutageRequireReplayUntilContactRecovers(t *testing.T) {
+	ctx := context.Background()
+	store := openTestQueue(t)
+	defer store.Close()
+
+	first, err := store.Enqueue(ctx, testEvent([]byte("first"), domain.PriorityNormal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkFailed(ctx, first, time.Now().Add(time.Minute), "network unavailable"); err != nil {
+		t.Fatal(err)
+	}
+
+	buffered, err := store.Enqueue(ctx, testEvent([]byte("buffered"), domain.PriorityNormal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bufferedRecord, err := store.Record(ctx, buffered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bufferedRecord.ReplayRequired {
+		t.Fatal("record collected during outage did not require replay")
+	}
+
+	if err := store.RecordUploadContactSuccess(ctx, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	catchingUp, err := store.Enqueue(ctx, testEvent([]byte("catching-up"), domain.PriorityNormal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	catchingUpRecord, err := store.Record(ctx, catchingUp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !catchingUpRecord.ReplayRequired {
+		t.Fatal("record collected while replay backlog remained did not require replay")
+	}
+
+	for _, sequence := range []uint64{first, buffered, catchingUp} {
+		if err := store.MarkUploaded(ctx, sequence, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Ack(ctx, sequence); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.RecordUploadContactSuccess(ctx, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := store.Enqueue(ctx, testEvent([]byte("prompt"), domain.PriorityNormal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	promptRecord, err := store.Record(ctx, prompt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if promptRecord.ReplayRequired {
+		t.Fatal("record collected after contact recovered still required replay")
+	}
 }
 
 func TestOpenRecoversPersistedEventsForUpload(t *testing.T) {
@@ -102,6 +173,24 @@ func TestOpenRecoversPersistedEventsForUpload(t *testing.T) {
 	}
 	defer store.Close()
 	assertRecordStatus(t, store, sequence, domain.StatusPendingUpload)
+	record, err := store.Record(ctx, sequence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !record.ReplayRequired {
+		t.Fatal("restart-recovered persisted event did not require replay")
+	}
+	buffered, err := store.Enqueue(ctx, testEvent([]byte("collected-during-recovery"), domain.PriorityNormal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bufferedRecord, err := store.Record(ctx, buffered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bufferedRecord.ReplayRequired {
+		t.Fatal("record collected while restart backlog remained did not require replay")
+	}
 }
 
 func TestOpenRecoversUploadedEventsForIdempotentRetry(t *testing.T) {
@@ -130,6 +219,35 @@ func TestOpenRecoversUploadedEventsForIdempotentRetry(t *testing.T) {
 	}
 	defer store.Close()
 	assertRecordStatus(t, store, sequence, domain.StatusPendingUpload)
+	record, err := store.Record(ctx, sequence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !record.ReplayRequired {
+		t.Fatal("restart-recovered uploaded event did not require replay")
+	}
+}
+
+func TestHeartbeatFailureActivatesReplayMode(t *testing.T) {
+	ctx := context.Background()
+	store := openTestQueue(t)
+	defer store.Close()
+
+	if err := store.RecordUploadContactFailure(ctx, "connection refused"); err != nil {
+		t.Fatal(err)
+	}
+
+	seq, err := store.Enqueue(ctx, testEvent([]byte("during-outage"), domain.PriorityNormal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Record(ctx, seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !record.ReplayRequired {
+		t.Fatal("record collected after heartbeat failure should require replay")
+	}
 }
 
 func TestPurgeDeletesAcknowledgedRecords(t *testing.T) {
