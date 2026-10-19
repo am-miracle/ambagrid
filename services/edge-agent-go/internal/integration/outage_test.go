@@ -167,7 +167,7 @@ func TestOutageRecovery_OrderedLosslessDedup(t *testing.T) {
 	persistEvents(1, 10, now)
 
 	uploaderCtx, cancelUploader := context.WithCancel(ctx)
-	u := uploader.New(cfg, store, client)
+	u := uploader.New(cfg, store, client, store)
 	go u.Run(uploaderCtx)
 
 	waitForCount(10, 5*time.Second)
@@ -194,7 +194,7 @@ func TestOutageRecovery_OrderedLosslessDedup(t *testing.T) {
 	persistEvents(11, 20, outageEventTime)
 
 	uploaderCtx2, cancelUploader2 := context.WithCancel(ctx)
-	u2 := uploader.New(cfg, store, client)
+	u2 := uploader.New(cfg, store, client, store)
 	go u2.Run(uploaderCtx2)
 
 	time.Sleep(300 * time.Millisecond)
@@ -213,7 +213,7 @@ func TestOutageRecovery_OrderedLosslessDedup(t *testing.T) {
 	offline.Store(false)
 
 	uploaderCtx3, cancelUploader3 := context.WithCancel(ctx)
-	u3 := uploader.New(cfg, store, client)
+	u3 := uploader.New(cfg, store, client, store)
 	go u3.Run(uploaderCtx3)
 
 	waitForCount(20, 10*time.Second)
@@ -259,7 +259,7 @@ func TestOutageRecovery_OrderedLosslessDedup(t *testing.T) {
 
 	// Phase 5: Dedup — running the uploader on a drained queue produces no new records.
 	uploaderCtx4, cancelUploader4 := context.WithCancel(ctx)
-	u4 := uploader.New(cfg, store, client)
+	u4 := uploader.New(cfg, store, client, store)
 	go u4.Run(uploaderCtx4)
 
 	time.Sleep(300 * time.Millisecond)

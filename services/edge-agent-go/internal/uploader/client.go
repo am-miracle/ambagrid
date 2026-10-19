@@ -15,6 +15,11 @@ import (
 	"edge-agent-go/internal/domain"
 )
 
+// A record that sat in the local queue longer than this before its first
+// upload attempt is tagged replay=true so downstream consumers know the
+// data arrived out of band.
+const replayAgeThreshold = 2 * time.Minute
+
 type IngestClient struct {
 	endpoint   string
 	apiKey     string
@@ -32,18 +37,22 @@ func NewIngestClient(endpoint, apiKey string, timeout time.Duration) *IngestClie
 }
 
 type batchRequest struct {
-	GatewayID          string       `json:"gateway_id"`
-	QueueDepth         int64        `json:"queue_depth"`
-	OldestPendingAt    *time.Time   `json:"oldest_pending_at"`
-	LastEventTimestamp *time.Time   `json:"last_event_timestamp"`
-	Records            []wireRecord `json:"records"`
+	GatewayID            string       `json:"gateway_id"`
+	QueueDepth           int64        `json:"queue_depth"`
+	OldestPendingAt      *time.Time   `json:"oldest_pending_at"`
+	LastEventTimestamp   *time.Time   `json:"last_event_timestamp"`
+	LastSuccessfulSyncAt *time.Time   `json:"last_successful_sync_at"`
+	LastFailedSyncReason string       `json:"last_failed_sync_reason,omitempty"`
+	Records              []wireRecord `json:"records"`
 }
 
 type HealthReport struct {
-	GatewayID          string
-	QueueDepth         int64
-	OldestPendingAt    *time.Time
-	LastEventTimestamp *time.Time
+	GatewayID            string
+	QueueDepth           int64
+	OldestPendingAt      *time.Time
+	LastEventTimestamp   *time.Time
+	LastSuccessfulSyncAt *time.Time
+	LastFailedSyncReason string
 }
 
 type wireRecord struct {
@@ -62,12 +71,6 @@ type wireRecord struct {
 	CriticalCode   string    `json:"critical_code,omitempty"`
 	CriticalValue  *float64  `json:"critical_value,omitempty"`
 }
-
-// replayThreshold is the minimum gap between event_timestamp and uploaded_at
-// that marks a record as replayed rather than real-time. Chosen to be well
-// above normal collection-to-upload latency but short enough to catch any
-// meaningful buffering.
-const replayThreshold = 2 * time.Minute
 
 type BatchResponse struct {
 	Accepted  []uint64      `json:"accepted"`
@@ -103,18 +106,20 @@ func (c *IngestClient) Upload(ctx context.Context, records []domain.Record, uplo
 			EventTimestamp: r.EventTimestamp,
 			EdgeReceivedAt: r.EdgeReceivedAt,
 			UploadedAt:     uploadedAt,
-			Replay:         uploadedAt.Sub(r.EventTimestamp) >= replayThreshold,
+			Replay:         r.AttemptCount > 0 || uploadedAt.Sub(r.EdgeReceivedAt) > replayAgeThreshold,
 			CriticalCode:   r.CriticalCode,
 			CriticalValue:  r.CriticalValue,
 		}
 	}
 
 	body, err := json.Marshal(batchRequest{
-		GatewayID:          health.GatewayID,
-		QueueDepth:         health.QueueDepth,
-		OldestPendingAt:    health.OldestPendingAt,
-		LastEventTimestamp: health.LastEventTimestamp,
-		Records:            wire,
+		GatewayID:            health.GatewayID,
+		QueueDepth:           health.QueueDepth,
+		OldestPendingAt:      health.OldestPendingAt,
+		LastEventTimestamp:   health.LastEventTimestamp,
+		LastSuccessfulSyncAt: health.LastSuccessfulSyncAt,
+		LastFailedSyncReason: health.LastFailedSyncReason,
+		Records:              wire,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal upload batch: %w", err)

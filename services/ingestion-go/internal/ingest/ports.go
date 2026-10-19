@@ -19,12 +19,14 @@ type Publisher interface {
 }
 
 type SiteHealthReport struct {
-	SiteID             string
-	GatewayID          string
-	ContactAt          time.Time
-	LastEventTimestamp *time.Time
-	QueueDepth         int64
-	OldestPendingAt    *time.Time
+	SiteID               string
+	GatewayID            string
+	ContactAt            time.Time
+	LastEventTimestamp   *time.Time
+	QueueDepth           int64
+	OldestPendingAt      *time.Time
+	LastSuccessfulSyncAt *time.Time
+	LastFailedSyncReason string
 }
 
 type SiteHealthStore interface {

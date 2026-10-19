@@ -132,6 +132,93 @@ func TestOpenRecoversUploadedEventsForIdempotentRetry(t *testing.T) {
 	assertRecordStatus(t, store, sequence, domain.StatusPendingUpload)
 }
 
+func TestPurgeDeletesAcknowledgedRecords(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestQueue(t)
+	defer store.Close()
+
+	seq, err := store.Enqueue(ctx, testEvent([]byte("old-reading"), domain.PriorityNormal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkUploaded(ctx, seq, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Ack(ctx, seq); err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, err := store.Purge(ctx, 0)
+	if err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("purge deleted %d, want 1", deleted)
+	}
+
+	_, err = store.Record(ctx, seq)
+	if !errors.Is(err, domain.ErrEventNotFound) {
+		t.Fatalf("expected ErrEventNotFound after purge, got %v", err)
+	}
+}
+
+func TestPurgeRespectsRetentionAge(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestQueue(t)
+	defer store.Close()
+
+	seq, err := store.Enqueue(ctx, testEvent([]byte("recent"), domain.PriorityNormal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkUploaded(ctx, seq, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Ack(ctx, seq); err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, err := store.Purge(ctx, 1*time.Hour)
+	if err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("purge should not delete recent records, deleted %d", deleted)
+	}
+
+	_, err = store.Record(ctx, seq)
+	if err != nil {
+		t.Fatalf("record should still exist: %v", err)
+	}
+}
+
+func TestPurgeDoesNotDeleteActiveRecords(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestQueue(t)
+	defer store.Close()
+
+	seq, err := store.Enqueue(ctx, testEvent([]byte("active"), domain.PriorityNormal))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, err := store.Purge(ctx, 0)
+	if err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("purge should not delete active records, deleted %d", deleted)
+	}
+
+	assertRecordStatus(t, store, seq, domain.StatusPendingUpload)
+}
+
 func assertRecordStatus(t *testing.T, store *queuesqlite.Store, sequence uint64, want domain.EventStatus) {
 	t.Helper()
 	record, err := store.Record(context.Background(), sequence)

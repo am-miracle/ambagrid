@@ -13,6 +13,7 @@ type Reading struct {
 	BatterySOCPct       float64
 	SolarIrradiance     float64
 	InverterFailed      bool
+	InverterHardFault   bool
 	TamperDetected      bool
 	SiteOutage          *bool
 }

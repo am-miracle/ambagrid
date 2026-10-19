@@ -92,6 +92,41 @@ mod tests {
         alerts: Mutex<Vec<Alert>>,
     }
 
+    fn try_open_alert(alerts: &mut Vec<Alert>, decision: AlertDecision) -> IngestWrite {
+        let already_open = alerts.iter().any(|alert| {
+            alert.site_id == decision.site_id
+                && alert.asset_id == decision.asset_id
+                && alert.kind == decision.kind
+                && alert.status == AlertStatus::Open
+        });
+
+        let alert_opened = if already_open {
+            None
+        } else {
+            let alert = Alert {
+                alert_id: Uuid::new_v4(),
+                asset_id: decision.asset_id.clone(),
+                site_id: decision.site_id.clone(),
+                kind: decision.kind.clone(),
+                severity: decision.severity,
+                status: AlertStatus::Open,
+                reason: decision.reason.clone(),
+                opened_at: decision.opened_at,
+                source_event_id: decision.source_event_id.clone(),
+                resolved_at: None,
+                resolution_note: None,
+                resolved_by: None,
+            };
+            alerts.push(alert.clone());
+            Some(alert)
+        };
+
+        IngestWrite {
+            alert_opened,
+            alert_resolved: None,
+        }
+    }
+
     impl IngestRepository for FakeIngestRepository {
         async fn ingest(
             &self,
@@ -108,75 +143,9 @@ mod tests {
                 .push(reading.asset.asset_id.clone());
 
             let write = match outcome {
-                PolicyOutcome::Open(decision) => {
+                PolicyOutcome::Open(decision) | PolicyOutcome::OpenCritical { decision, .. } => {
                     let mut alerts = self.alerts.lock().unwrap();
-                    let already_open = alerts.iter().any(|alert| {
-                        alert.site_id == decision.site_id
-                            && alert.asset_id == decision.asset_id
-                            && alert.kind == decision.kind
-                            && alert.status == AlertStatus::Open
-                    });
-
-                    let alert_opened = if already_open {
-                        None
-                    } else {
-                        let alert = Alert {
-                            alert_id: Uuid::new_v4(),
-                            asset_id: decision.asset_id.clone(),
-                            site_id: decision.site_id.clone(),
-                            kind: decision.kind.clone(),
-                            severity: decision.severity,
-                            status: AlertStatus::Open,
-                            reason: decision.reason.clone(),
-                            opened_at: decision.opened_at,
-                            source_event_id: decision.source_event_id.clone(),
-                            resolved_at: None,
-                            resolution_note: None,
-                            resolved_by: None,
-                        };
-                        alerts.push(alert.clone());
-                        Some(alert)
-                    };
-
-                    IngestWrite {
-                        alert_opened,
-                        alert_resolved: None,
-                    }
-                }
-                PolicyOutcome::OpenCritical { decision, .. } => {
-                    let mut alerts = self.alerts.lock().unwrap();
-                    let already_open = alerts.iter().any(|alert| {
-                        alert.site_id == decision.site_id
-                            && alert.asset_id == decision.asset_id
-                            && alert.kind == decision.kind
-                            && alert.status == AlertStatus::Open
-                    });
-
-                    let alert_opened = if already_open {
-                        None
-                    } else {
-                        let alert = Alert {
-                            alert_id: Uuid::new_v4(),
-                            asset_id: decision.asset_id.clone(),
-                            site_id: decision.site_id.clone(),
-                            kind: decision.kind.clone(),
-                            severity: decision.severity,
-                            status: AlertStatus::Open,
-                            reason: decision.reason.clone(),
-                            opened_at: decision.opened_at,
-                            source_event_id: decision.source_event_id.clone(),
-                            resolved_at: None,
-                            resolution_note: None,
-                            resolved_by: None,
-                        };
-                        alerts.push(alert.clone());
-                        Some(alert)
-                    };
-
-                    IngestWrite {
-                        alert_opened,
-                        alert_resolved: None,
-                    }
+                    try_open_alert(&mut alerts, decision)
                 }
                 PolicyOutcome::Resolve {
                     kind,
@@ -228,6 +197,7 @@ mod tests {
                     observed_at,
                     source_event_id: Some("telemetry.ingested:0:42".to_string()),
                     state: AssetState::SmartMeter(SmartMeterState::default()),
+                    edge: None,
                 },
                 None,
             )
@@ -265,6 +235,7 @@ mod tests {
                     observed_at: Utc::now(),
                     source_event_id: None,
                     state: AssetState::SmartMeter(SmartMeterState::default()),
+                    edge: None,
                 },
                 None,
             )
@@ -278,6 +249,7 @@ mod tests {
                     observed_at: Utc::now(),
                     source_event_id: None,
                     state: AssetState::SmartMeter(SmartMeterState::default()),
+                    edge: None,
                 },
                 None,
             )
@@ -315,6 +287,7 @@ mod tests {
             observed_at: Utc::now(),
             source_event_id: None,
             state: AssetState::SmartMeter(SmartMeterState::default()),
+            edge: None,
         }
     }
 
@@ -422,6 +395,7 @@ mod tests {
                     observed_at: Utc::now(),
                     source_event_id: None,
                     state: AssetState::SmartMeter(SmartMeterState::default()),
+                    edge: None,
                 },
                 None,
             )
@@ -439,6 +413,7 @@ mod tests {
                     observed_at: Utc::now(),
                     source_event_id: None,
                     state: AssetState::SmartMeter(SmartMeterState::default()),
+                    edge: None,
                 },
                 None,
             )

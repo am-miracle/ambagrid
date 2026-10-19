@@ -5,14 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 
 	"api-go/internal/domain"
 )
 
 type FallbackService struct {
-	repository FallbackRepository
-	topic      string
-	pricing    domain.SMSPricing
+	repository        FallbackRepository
+	topic             string
+	pricing           domain.SMSPricing
+	budgetWarnedMonth atomic.Int64
 }
 
 func NewFallbackService(repository FallbackRepository, topic string, pricing domain.SMSPricing) *FallbackService {
@@ -26,11 +28,19 @@ func (s *FallbackService) ReceiveSMS(ctx context.Context, event domain.CriticalF
 			return false, err
 		}
 		if stored != nil {
-			if stored.SiteID != event.SiteID || stored.AssetID != event.AssetID || stored.Code != event.Code || stored.Sequence != event.Sequence {
+			if !stored.Matches(event) {
 				return false, domain.ErrConflict
 			}
-			if _, err := tx.InsertReceipt(ctx, event.EventKey(), receipt, s.pricing); err != nil {
+			inserted, err := tx.InsertReceipt(ctx, event.EventKey(), receipt, s.pricing)
+			if err != nil {
 				return false, err
+			}
+			if !inserted {
+				if err := s.checkReceiptConflict(ctx, tx, event.EventKey(), receipt); err != nil {
+					return false, err
+				}
+			} else {
+				s.checkBudgetThreshold(ctx, tx, receipt)
 			}
 			return false, nil
 		}
@@ -102,7 +112,7 @@ func (s *FallbackService) ReceiveSMS(ctx context.Context, event domain.CriticalF
 	})
 }
 
-func (s *FallbackService) checkReceiptConflict(ctx context.Context, tx FallbackTx, eventKey string, receipt domain.SMSReceipt) error {
+func (s *FallbackService) checkReceiptConflict(ctx context.Context, tx FallbackTx, eventKey domain.EventKey, receipt domain.SMSReceipt) error {
 	if receipt.ProviderMessageID == "" {
 		return nil
 	}
@@ -124,7 +134,8 @@ func (s *FallbackService) checkBudgetThreshold(ctx context.Context, tx FallbackT
 	if err != nil {
 		return
 	}
-	if usage*100 >= s.pricing.MonthlyBudgetMinor*80 {
+	month := int64(receipt.ReceivedAt.Year())*100 + int64(receipt.ReceivedAt.Month())
+	if usage*100 >= s.pricing.MonthlyBudgetMinor*80 && s.budgetWarnedMonth.Swap(month) != month {
 		slog.Warn("SMS fallback monthly budget threshold reached",
 			"usage_minor", usage, "budget_minor", s.pricing.MonthlyBudgetMinor, "currency", s.pricing.Currency)
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 )
 
@@ -40,17 +41,34 @@ func (s *ModemManagerSender) Send(ctx context.Context, destination, message stri
 	output, err := s.runner.Run(ctx, "mmcli", "-m", s.modem,
 		"--messaging-create-sms=text="+message+",number="+destination)
 	if err != nil {
-		return fmt.Errorf("create modem SMS: %w: %s", err, strings.TrimSpace(string(output)))
+		return fmt.Errorf("create modem SMS: %w: %s", err, redactOutput(strings.TrimSpace(string(output))))
 	}
 	path := smsPath(string(output))
 	if path == "" {
-		return fmt.Errorf("create modem SMS returned no SMS path: %s", strings.TrimSpace(string(output)))
+		return fmt.Errorf("create modem SMS returned no SMS path: %s", redactOutput(strings.TrimSpace(string(output))))
 	}
 	output, err = s.runner.Run(ctx, "mmcli", "-s", path, "--send")
 	if err != nil {
-		return fmt.Errorf("send modem SMS: %w: %s", err, strings.TrimSpace(string(output)))
+		return fmt.Errorf("send modem SMS: %w: %s", err, redactOutput(strings.TrimSpace(string(output))))
 	}
 	return nil
+}
+
+var phonePattern = regexp.MustCompile(`\+?\d[\d\s\-]{6,}\d`)
+
+func redactOutput(output string) string {
+	return phonePattern.ReplaceAllStringFunc(output, func(match string) string {
+		digits := strings.Map(func(r rune) rune {
+			if r >= '0' && r <= '9' {
+				return r
+			}
+			return -1
+		}, match)
+		if len(digits) < 7 {
+			return match
+		}
+		return digits[:3] + "***" + digits[len(digits)-2:]
+	})
 }
 
 func smsPath(output string) string {

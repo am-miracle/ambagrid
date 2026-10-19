@@ -9,6 +9,8 @@ import (
 
 type CriticalCode string
 
+type EventKey string
+
 const (
 	BatteryOverheatCode CriticalCode = "BATTERY_OVERHEAT"
 	InverterFailureCode CriticalCode = "INVERTER_FAILURE"
@@ -57,8 +59,12 @@ type CriticalFallbackEvent struct {
 	OccurredAt   time.Time
 }
 
-func (e CriticalFallbackEvent) EventKey() string {
-	return "edge:" + e.SiteID + ":" + strconv.FormatUint(e.Sequence, 10)
+func NewEventKey(siteID string, sequence uint64) EventKey {
+	return EventKey("edge:" + siteID + ":" + strconv.FormatUint(sequence, 10))
+}
+
+func (e CriticalFallbackEvent) EventKey() EventKey {
+	return NewEventKey(e.SiteID, e.Sequence)
 }
 
 func (e CriticalFallbackEvent) AlertDetails() (kind string, reason string, err error) {
@@ -87,17 +93,21 @@ type StoredFallbackEvent struct {
 	Sequence uint64
 }
 
+func (s *StoredFallbackEvent) Matches(e CriticalFallbackEvent) bool {
+	return s.SiteID == e.SiteID && s.AssetID == e.AssetID && s.Code == e.Code && s.Sequence == e.Sequence
+}
+
 type CreateAlertCommand struct {
 	AssetID       string
 	SiteID        string
 	Kind          string
 	Reason        string
 	OccurredAt    time.Time
-	SourceEventID string
+	SourceEventID EventKey
 }
 
 type InsertFallbackEventCommand struct {
-	EventKey string
+	EventKey EventKey
 	SiteID   string
 	Sequence uint64
 	AssetID  string

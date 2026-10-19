@@ -155,12 +155,13 @@ func validSMSToken(value string) bool {
 	return value != ""
 }
 
-// GSM-7 extension characters occupy two septets; shared cases live in proto/fixtures.
+const gsm7ExtensionChars = "^{}\\[~]|€"
+
 func gsmSeptets(value string) int {
 	count := 0
 	for _, r := range value {
 		count++
-		if strings.ContainsRune("^{}\\[~]|€", r) {
+		if strings.ContainsRune(gsm7ExtensionChars, r) {
 			count++
 		}
 	}

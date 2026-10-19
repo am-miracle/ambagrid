@@ -7,7 +7,7 @@ import (
 	"edge-agent-go/internal/domain"
 )
 
-const schemaVersion = 4
+const schemaVersion = 5
 
 const schema = `
 CREATE TABLE IF NOT EXISTS edge_identity (
@@ -72,8 +72,9 @@ CREATE TABLE IF NOT EXISTS fallback_attempts (
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS edge_sync_state (
-    singleton                 INTEGER PRIMARY KEY CHECK (singleton = 1),
-    last_upload_success_at_ms INTEGER
+    singleton                  INTEGER PRIMARY KEY CHECK (singleton = 1),
+    last_upload_success_at_ms  INTEGER,
+    last_upload_failure_reason TEXT
 ) STRICT;
 
 INSERT OR IGNORE INTO edge_sync_state(singleton) VALUES (1);
@@ -129,6 +130,10 @@ CREATE TABLE edge_sync_state (
 INSERT INTO edge_sync_state(singleton) VALUES (1);
 `
 
+const migrateV4ToV5 = `
+ALTER TABLE edge_sync_state ADD COLUMN last_upload_failure_reason TEXT;
+`
+
 func (s *Store) initialize(ctx context.Context) error {
 	var version int
 	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
@@ -178,6 +183,7 @@ func (s *Store) migrateSchema(ctx context.Context, version int) error {
 			{1, migrateV1ToV2, "migrate queue schema from version 1 to 2"},
 			{2, migrateV2ToV3, "migrate queue schema from version 2 to 3"},
 			{3, migrateV3ToV4, "migrate queue schema from version 3 to 4"},
+			{4, migrateV4ToV5, "migrate queue schema from version 4 to 5"},
 		}
 		for _, m := range incremental {
 			if version > m.from {

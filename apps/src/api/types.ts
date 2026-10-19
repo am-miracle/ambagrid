@@ -68,6 +68,8 @@ export interface Site {
 	queue_depth: number;
 	oldest_pending_at: string | null;
 	oldest_pending_record_age_seconds: number | null;
+	last_successful_sync_at: string | null;
+	last_failed_sync_reason: string | null;
 	queue_growing: boolean;
 	open_alerts: AlertCounts;
 }

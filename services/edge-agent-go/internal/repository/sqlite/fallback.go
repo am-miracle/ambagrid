@@ -234,7 +234,7 @@ func (s *Store) RecordFallbackAttempt(ctx context.Context, result fallback.Attem
 	return nil
 }
 
-func (s *Store) ReserveFallbackAttempt(ctx context.Context, eventKey string, attemptedAt time.Time) error {
+func (s *Store) ReserveFallbackAttempt(ctx context.Context, eventKey fallback.EventKey, attemptedAt time.Time) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO fallback_attempts(event_key, attempted_at_ms) VALUES (?, ?)`, eventKey, attemptedAt.UnixMilli())
 	if err != nil {

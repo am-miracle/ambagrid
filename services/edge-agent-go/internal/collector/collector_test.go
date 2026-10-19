@@ -174,6 +174,36 @@ func TestInverterFailureRequiresLocalDebounce(t *testing.T) {
 	}
 }
 
+func TestInverterHardFaultBypassesDebounce(t *testing.T) {
+	ctx := context.Background()
+	store, err := queuesqlite.Open(ctx, queuesqlite.Config{
+		Path: filepath.Join(t.TempDir(), "queue.db"), SiteID: "site-01", GatewayID: "gateway-01",
+		MaxStorageBytes: 8 << 20, WarningPercent: 70, CriticalReservePercent: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Unix(1730000000, 0).UTC()
+	source := fixedSource{readings: []domain.Reading{{
+		DeviceID: "inv-01", AssetType: domain.AssetSolarInverter, TakenAt: now, InverterHardFault: true,
+	}}}
+	c, err := collector.New(collector.Config{SiteID: "site-01", Region: "africa-west", Interval: time.Second}, store, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.CollectOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := store.FallbackCandidates(ctx, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 || candidates[0].Code != fallback.InverterFailure {
+		t.Fatalf("hard fault candidates = %+v, want immediate inverter incident without debounce", candidates)
+	}
+}
+
 func TestIndependentCriticalConditionsGetIndependentSequences(t *testing.T) {
 	ctx := context.Background()
 	store, err := queuesqlite.Open(ctx, queuesqlite.Config{Path: filepath.Join(t.TempDir(), "queue.db"), SiteID: "site-01", GatewayID: "gateway-01", MaxStorageBytes: 8 << 20, WarningPercent: 70, CriticalReservePercent: 10})
@@ -246,6 +276,7 @@ func (*orderedQueue) Ready(context.Context, int, int64) ([]domain.Record, error)
 func (*orderedQueue) MarkUploaded(context.Context, uint64, time.Time) error       { return nil }
 func (*orderedQueue) Ack(context.Context, uint64) error                           { return nil }
 func (*orderedQueue) MarkFailed(context.Context, uint64, time.Time, string) error { return nil }
+func (*orderedQueue) Purge(context.Context, time.Duration) (int64, error)         { return 0, nil }
 func (*orderedQueue) Stats(context.Context) (domain.QueueStats, error) {
 	return domain.QueueStats{}, nil
 }

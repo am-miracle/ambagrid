@@ -11,6 +11,8 @@ import (
 
 type Code string
 
+type EventKey string
+
 const (
 	BatteryOverheat Code = "BATTERY_OVERHEAT"
 	InverterFailure Code = "INVERTER_FAILURE"
@@ -36,8 +38,12 @@ type Event struct {
 	OccurredAt   time.Time
 }
 
-func (e Event) EventKey() string {
-	return fmt.Sprintf("edge:%s:%d", e.SiteID, e.Sequence)
+func NewEventKey(siteID string, sequence uint64) EventKey {
+	return EventKey(fmt.Sprintf("edge:%s:%d", siteID, sequence))
+}
+
+func (e Event) EventKey() EventKey {
+	return NewEventKey(e.SiteID, e.Sequence)
 }
 
 // Validate checks that event fits the SMS wire contract.

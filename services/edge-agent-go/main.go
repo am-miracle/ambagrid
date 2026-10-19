@@ -102,6 +102,12 @@ func run() (runErr error) {
 		}()
 	}
 
+	workerWG.Add(1)
+	go func() {
+		defer workerWG.Done()
+		runPurge(workerCtx, durableQueue, cfg.Queue.PurgeRetention, cfg.Queue.PurgeInterval)
+	}()
+
 	if cfg.Uploader.Enabled {
 		client := uploader.NewIngestClient(
 			cfg.Uploader.Endpoint,
@@ -116,7 +122,7 @@ func run() (runErr error) {
 			BaseDelay:     cfg.Uploader.BaseDelay,
 			MaxDelay:      cfg.Uploader.MaxDelay,
 			MaxRetries:    cfg.Uploader.MaxRetries,
-		}, durableQueue, client)
+		}, durableQueue, client, durableQueue)
 		workerWG.Add(1)
 		go func() {
 			defer workerWG.Done()
@@ -151,5 +157,23 @@ func run() (runErr error) {
 			return nil
 		}
 		return fmt.Errorf("serve edge queue health: %w", err)
+	}
+}
+
+func runPurge(ctx context.Context, queue domain.Queue, retention, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			deleted, err := queue.Purge(ctx, retention)
+			if err != nil {
+				slog.Error("purge acknowledged records", "error", err)
+			} else if deleted > 0 {
+				slog.Info("purged acknowledged records", "deleted", deleted)
+			}
+		}
 	}
 }

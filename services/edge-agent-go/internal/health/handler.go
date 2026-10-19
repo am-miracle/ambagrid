@@ -34,6 +34,8 @@ type healthResponse struct {
 	QueueDiskBytes       int64             `json:"queue_disk_bytes"`
 	FilesystemFreeBytes  int64             `json:"filesystem_free_bytes"`
 	OldestPendingSeconds float64           `json:"oldest_pending_seconds"`
+	LastSuccessfulSyncAt *time.Time        `json:"last_successful_sync_at,omitempty"`
+	LastFailedSyncReason string            `json:"last_failed_sync_reason,omitempty"`
 }
 
 func healthHandler(source StatsSource) http.HandlerFunc {
@@ -57,6 +59,8 @@ func healthHandler(source StatsSource) http.HandlerFunc {
 			QueueDiskBytes:       stats.DiskBytes,
 			FilesystemFreeBytes:  stats.FilesystemFreeBytes,
 			OldestPendingSeconds: stats.OldestAge.Seconds(),
+			LastSuccessfulSyncAt: stats.LastSuccessfulSyncAt,
+			LastFailedSyncReason: stats.LastFailedSyncReason,
 		})
 		if err != nil {
 			http.Error(w, `{"state":"unavailable"}`, http.StatusInternalServerError)

@@ -141,6 +141,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn critical_codes_match_shared_contract() {
+        let contract: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../proto/fixtures/critical_fallback_v1.json"
+        )))
+        .unwrap();
+        let codes: Vec<&str> = contract["codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|code| code.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            codes,
+            [
+                "BATTERY_OVERHEAT",
+                "INVERTER_FAILURE",
+                "TAMPER_DETECTED",
+                "SITE_OUTAGE"
+            ]
+        );
+        assert_eq!(contract["event_key_prefix"], "edge:");
+    }
+
+    #[test]
     fn opens_critical_alert_when_internal_temperature_crosses_threshold() {
         let reading = Reading {
             asset: Asset {
@@ -152,6 +177,7 @@ mod tests {
             observed_at: Utc::now(),
             source_event_id: None,
             state: AssetState::SmartMeter(SmartMeterState::default()),
+            edge: None,
         };
 
         let decision = ThresholdPolicy::default().evaluate(&reading).unwrap();
@@ -174,6 +200,7 @@ mod tests {
             observed_at: Utc::now(),
             source_event_id: Some("telemetry.ingested:0:42".to_string()),
             state: AssetState::SmartMeter(SmartMeterState::default()),
+            edge: None,
         };
 
         let decision = ThresholdPolicy::default().evaluate(&reading).unwrap();
@@ -196,6 +223,7 @@ mod tests {
             observed_at: Utc::now(),
             source_event_id: None,
             state: AssetState::SmartMeter(SmartMeterState::default()),
+            edge: None,
         };
 
         assert!(ThresholdPolicy::default().evaluate(&reading).is_none());
@@ -213,6 +241,7 @@ mod tests {
             observed_at: Utc::now(),
             source_event_id: None,
             state: AssetState::BatteryBms(BatteryBmsState::default()),
+            edge: None,
         };
 
         // 60C wouldn't trip the smart meter threshold, but it's above the
@@ -233,6 +262,7 @@ mod tests {
             observed_at: Utc::now(),
             source_event_id: Some("edge:ng-kaji-01:42".to_string()),
             state: AssetState::SmartMeter(SmartMeterState::default()),
+            edge: None,
         };
 
         assert!(critical_fallback_decision(&reading, "BATTERY_OVERHEAT").is_none());
@@ -251,6 +281,7 @@ mod tests {
             observed_at: Utc::now(),
             source_event_id: None,
             state: AssetState::SmartMeter(SmartMeterState::default()),
+            edge: None,
         };
 
         let note = ThresholdPolicy::default().recovered(&reading).unwrap();
@@ -272,6 +303,7 @@ mod tests {
             observed_at: Utc::now(),
             source_event_id: None,
             state: AssetState::SmartMeter(SmartMeterState::default()),
+            edge: None,
         };
 
         assert!(ThresholdPolicy::default().evaluate(&reading).is_none());
@@ -290,6 +322,7 @@ mod tests {
             observed_at: Utc::now(),
             source_event_id: None,
             state: AssetState::SmartMeter(SmartMeterState::default()),
+            edge: None,
         };
 
         assert!(ThresholdPolicy::default().recovered(&reading).is_none());

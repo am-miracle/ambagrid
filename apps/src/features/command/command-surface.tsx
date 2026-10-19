@@ -436,7 +436,7 @@ export function CommandSurface() {
 				onReplay={runScenario}
 			/>
 
-			<main className="cmd-stage col-start-2 row-start-2 relative overflow-hidden">
+			<main className="cmd-stage col-start-2 row-start-2 relative overflow-hidden z-35">
 				<CommandScene
 					sites={sceneSites}
 					links={links}

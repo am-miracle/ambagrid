@@ -121,7 +121,11 @@ func (c *Collector) CollectOnce(ctx context.Context) error {
 					criticalRecord.Priority = domain.PriorityCritical
 					criticalRecord.CriticalCode = string(criticalEvent.Code)
 					criticalRecord.CriticalValue = criticalEvent.TemperatureC
-					collectionErr = errors.Join(collectionErr, c.persist(ctx, criticalRecord, &criticalEvent, now))
+					if err := c.persist(ctx, criticalRecord, &criticalEvent, now); err != nil {
+						collectionErr = errors.Join(collectionErr, err)
+					} else {
+						c.markOpened(criticalEvent)
+					}
 				}
 			}
 			collectionErr = errors.Join(collectionErr, c.resolveRecovered(ctx, reading, now))
@@ -136,7 +140,6 @@ func (c *Collector) persist(ctx context.Context, event domain.Event, critical *f
 		return fmt.Errorf("persist device %q: %w", event.DeviceID, err)
 	}
 	if critical != nil && c.fallback != nil {
-		// Persist assigns the sequence used by the fallback incident.
 		critical.Sequence = sequence
 		opened, err := c.fallback.OpenFallbackIncident(ctx, *critical, now)
 		if err != nil {
@@ -162,10 +165,14 @@ func (c *Collector) criticalEvents(reading domain.Reading, now time.Time) []fall
 		event.TemperatureC = &temperature
 		events = c.openOnce(events, event, now, 0)
 	}
-	if reading.AssetType == domain.AssetSolarInverter && reading.InverterFailed {
+	if reading.AssetType == domain.AssetSolarInverter && (reading.InverterFailed || reading.InverterHardFault) {
 		event := base
 		event.Code = fallback.InverterFailure
-		events = c.openOnce(events, event, now, c.cfg.FallbackDebounce)
+		debounce := c.cfg.FallbackDebounce
+		if reading.InverterHardFault {
+			debounce = 0
+		}
+		events = c.openOnce(events, event, now, debounce)
 	}
 	if reading.TamperDetected {
 		event := base
@@ -191,9 +198,16 @@ func (c *Collector) openOnce(events []fallback.Event, event fallback.Event, now 
 		c.conditions[key] = state
 		return events
 	}
-	state.opened = true
 	c.conditions[key] = state
 	return append(events, event)
+}
+
+func (c *Collector) markOpened(event fallback.Event) {
+	key := conditionKey{assetID: event.AssetID, code: event.Code}
+	if state, ok := c.conditions[key]; ok {
+		state.opened = true
+		c.conditions[key] = state
+	}
 }
 
 func (c *Collector) resolveRecovered(ctx context.Context, reading domain.Reading, now time.Time) error {
@@ -201,7 +215,7 @@ func (c *Collector) resolveRecovered(ctx context.Context, reading domain.Reading
 	if reading.AssetType == domain.AssetBatteryBMS && reading.InternalTemperature < c.cfg.BatteryOverheatC {
 		result = errors.Join(result, c.resolve(ctx, reading.DeviceID, fallback.BatteryOverheat, now))
 	}
-	if reading.AssetType == domain.AssetSolarInverter && !reading.InverterFailed {
+	if reading.AssetType == domain.AssetSolarInverter && !reading.InverterFailed && !reading.InverterHardFault {
 		result = errors.Join(result, c.resolve(ctx, reading.DeviceID, fallback.InverterFailure, now))
 	}
 	if !reading.TamperDetected {

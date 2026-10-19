@@ -19,6 +19,7 @@ import (
 )
 
 type Handler struct {
+	mux       *http.ServeMux
 	auth      Authenticator
 	publisher Publisher
 	health    SiteHealthStore
@@ -43,21 +44,25 @@ func NewHandler(cfg HandlerConfig) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{
+	h := &Handler{
 		auth:      cfg.Auth,
 		publisher: cfg.Publisher,
 		health:    cfg.Health,
 		logger:    logger,
 		maxBody:   maxBody,
 	}
-}
 
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/ingest", h.handleIngest)
 	mux.HandleFunc("GET /healthz", h.handleHealth)
 	mux.HandleFunc("/", h.handleNotFound)
-	mux.ServeHTTP(w, r)
+	h.mux = mux
+
+	return h
+}
+
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.mux.ServeHTTP(w, r)
 }
 
 func (h *Handler) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -104,10 +109,15 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.health.RecordContact(r.Context(), SiteHealthReport{
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	if err := h.health.RecordContact(ctx, SiteHealthReport{
 		SiteID: siteID, GatewayID: batch.GatewayID, ContactAt: time.Now().UTC(),
 		LastEventTimestamp: batch.LastEventTimestamp, QueueDepth: batch.QueueDepth,
-		OldestPendingAt: batch.OldestPendingAt,
+		OldestPendingAt:      batch.OldestPendingAt,
+		LastSuccessfulSyncAt: batch.LastSuccessfulSyncAt,
+		LastFailedSyncReason: batch.LastFailedSyncReason,
 	}); err != nil {
 		h.logger.Error("record site health", "error", err, "site_id", siteID, "request_id", reqID)
 		writeErrorResponse(w, reqID, http.StatusInternalServerError, "internal", "failed to record site health")
@@ -138,7 +148,7 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		dup, err := h.publisher.PublishOnce(r.Context(), siteID, rec)
+		dup, err := h.publisher.PublishOnce(ctx, siteID, rec)
 		if err != nil {
 			h.logger.Error("publish failed", "error", err, "site_id", siteID, "sequence", rec.Sequence, "request_id", reqID)
 			rejected = append(rejected, RecordError{
@@ -220,21 +230,21 @@ func validateRecord(rec IngestRecord, expectedSiteID string) error {
 	}
 	if rec.CriticalCode != "" {
 		switch rec.CriticalCode {
-		case "BATTERY_OVERHEAT":
+		case criticalBatteryOverheat:
 			if rec.AssetType != "battery_bms" {
 				errs = append(errs, "battery overheat requires a battery asset")
 			}
 			if rec.CriticalValue == nil {
 				errs = append(errs, "critical_value is required for battery overheat")
 			}
-		case "INVERTER_FAILURE":
+		case criticalInverterFailure:
 			if rec.AssetType != "solar_inverter" {
 				errs = append(errs, "inverter failure requires an inverter asset")
 			}
 			if rec.CriticalValue != nil {
 				errs = append(errs, "critical_value is only valid for battery overheat")
 			}
-		case "TAMPER_DETECTED", "SITE_OUTAGE":
+		case criticalTamperDetected, criticalSiteOutage:
 			if rec.CriticalValue != nil {
 				errs = append(errs, "critical_value is only valid for battery overheat")
 			}

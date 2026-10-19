@@ -74,6 +74,8 @@ type QueueConfig struct {
 	WarningPercent         int
 	CriticalReservePercent int
 	MinFilesystemFreeBytes int64
+	PurgeRetention         time.Duration
+	PurgeInterval          time.Duration
 }
 
 func FromEnv() (Config, error) {
@@ -103,6 +105,14 @@ func FromEnv() (Config, error) {
 		return Config{}, err
 	}
 	minFreeBytes, err := envInt64("EDGE_MIN_FILESYSTEM_FREE_BYTES", defaultMinFilesystemFreeBytes)
+	if err != nil {
+		return Config{}, err
+	}
+	purgeRetention, err := envDuration("EDGE_QUEUE_PURGE_RETENTION", 1*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	purgeInterval, err := envDuration("EDGE_QUEUE_PURGE_INTERVAL", 5*time.Minute)
 	if err != nil {
 		return Config{}, err
 	}
@@ -150,7 +160,7 @@ func FromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	smsRetryInterval, err := envDuration("EDGE_SMS_RETRY_INTERVAL", 5*time.Minute)
+	smsRetryInterval, err := envDuration("EDGE_SMS_RETRY_INTERVAL", 7*time.Minute+30*time.Second)
 	if err != nil {
 		return Config{}, err
 	}
@@ -198,6 +208,8 @@ func FromEnv() (Config, error) {
 			WarningPercent:         warningPercent,
 			CriticalReservePercent: reservePercent,
 			MinFilesystemFreeBytes: minFreeBytes,
+			PurgeRetention:         purgeRetention,
+			PurgeInterval:          purgeInterval,
 		},
 		Collector: CollectorConfig{
 			Enabled:  collectorEnabled,

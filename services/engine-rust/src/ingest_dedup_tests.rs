@@ -68,6 +68,7 @@ fn reading(site_id: &str, asset_id: &str, event_id: &str) -> Reading {
             frequency: Some(50.0),
             total_kwh: Some(12.5),
         }),
+        edge: None,
     }
 }
 

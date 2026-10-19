@@ -37,7 +37,7 @@ type UploadTracker interface {
 	RecordUploadContactSuccess(context.Context, time.Time) error
 }
 
-func New(cfg Config, queue domain.Queue, client *IngestClient) *Uploader {
+func New(cfg Config, queue domain.Queue, client *IngestClient, tracker UploadTracker) *Uploader {
 	if cfg.BatchSize <= 0 {
 		cfg.BatchSize = 50
 	}
@@ -56,11 +56,7 @@ func New(cfg Config, queue domain.Queue, client *IngestClient) *Uploader {
 	if cfg.MaxRetries <= 0 {
 		cfg.MaxRetries = 20
 	}
-	u := &Uploader{cfg: cfg, queue: queue, client: client, now: time.Now}
-	if tracker, ok := queue.(UploadTracker); ok {
-		u.tracker = tracker
-	}
-	return u
+	return &Uploader{cfg: cfg, queue: queue, client: client, tracker: tracker, now: time.Now}
 }
 
 func (u *Uploader) Run(ctx context.Context) {
@@ -109,17 +105,22 @@ func (u *Uploader) uploadBatch(ctx context.Context) (int, error) {
 	uploadedAt := u.now().UTC()
 
 	// An empty batch is still sent as a gateway heartbeat.
-	result, err := u.client.Upload(ctx, records, uploadedAt, HealthReport{
-		GatewayID:          u.cfg.GatewayID,
-		QueueDepth:         stats.Depth,
-		OldestPendingAt:    stats.OldestPendingAt,
-		LastEventTimestamp: stats.LastEventTimestamp,
+	uploadCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	result, err := u.client.Upload(uploadCtx, records, uploadedAt, HealthReport{
+		GatewayID:            u.cfg.GatewayID,
+		QueueDepth:           stats.Depth,
+		OldestPendingAt:      stats.OldestPendingAt,
+		LastEventTimestamp:   stats.LastEventTimestamp,
+		LastSuccessfulSyncAt: stats.LastSuccessfulSyncAt,
+		LastFailedSyncReason: stats.LastFailedSyncReason,
 	})
 	if err != nil {
 		u.handleFailure(ctx, records, result, err)
 		return 0, err
 	}
-	if u.tracker != nil {
+	if u.tracker != nil && len(records) > 0 {
 		if err := u.tracker.RecordUploadContactSuccess(ctx, uploadedAt); err != nil {
 			slog.Error("record upload contact", "error", err)
 		}
@@ -166,44 +167,50 @@ func (u *Uploader) processResponse(ctx context.Context, records []domain.Record,
 		}
 
 		if rej, ok := rejectedSet[r.Sequence]; ok {
-			retryAt := u.retryTime(r.AttemptCount)
-			cause := rej.Code + ": " + rej.Message
-			if err := u.queue.MarkFailed(ctx, r.Sequence, retryAt, cause); err != nil {
-				slog.Error("mark failed", "sequence", r.Sequence, "error", err)
-			}
-			u.recordFallbackFailure(ctx, r.Sequence)
+			u.failRecord(ctx, r, rej.Code+": "+rej.Message)
 			slog.Warn("record rejected by server",
 				"sequence", r.Sequence,
 				"code", rej.Code,
 				"message", rej.Message,
-				"retry_at", retryAt,
 			)
 			continue
 		}
 
 		// A successful batch response must account for every record. Treat an
 		// omitted sequence as retryable instead of spinning on it immediately.
-		retryAt := u.retryTime(r.AttemptCount)
-		const cause = "invalid ingestion response: sequence was neither accepted nor rejected"
-		if err := u.queue.MarkFailed(ctx, r.Sequence, retryAt, cause); err != nil {
-			slog.Error("mark unaccounted record failed", "sequence", r.Sequence, "error", err)
-		}
-		u.recordFallbackFailure(ctx, r.Sequence)
+		u.failRecord(ctx, r, "invalid ingestion response: sequence was neither accepted nor rejected")
 	}
 }
 
 func (u *Uploader) handleFailure(ctx context.Context, records []domain.Record, result *UploadResult, uploadErr error) {
+	cause := uploadErr.Error()
+	if len(cause) > 2048 {
+		cause = cause[:2048]
+	}
 	for _, r := range records {
-		retryAt := u.retryTime(r.AttemptCount)
-		cause := uploadErr.Error()
-		if len(cause) > 2048 {
-			cause = cause[:2048]
-		}
-		if err := u.queue.MarkFailed(ctx, r.Sequence, retryAt, cause); err != nil {
-			slog.Error("mark failed after upload error", "sequence", r.Sequence, "error", err)
+		u.failRecord(ctx, r, cause)
+	}
+}
+
+func (u *Uploader) failRecord(ctx context.Context, r domain.Record, cause string) {
+	if r.AttemptCount+1 >= u.cfg.MaxRetries {
+		slog.Error("record exhausted retries, dropping",
+			"sequence", r.Sequence,
+			"attempts", r.AttemptCount+1,
+			"max_retries", u.cfg.MaxRetries,
+			"last_error", cause,
+		)
+		if err := u.queue.Ack(ctx, r.Sequence); err != nil {
+			slog.Error("ack exhausted record", "sequence", r.Sequence, "error", err)
 		}
 		u.recordFallbackFailure(ctx, r.Sequence)
+		return
 	}
+	retryAt := u.retryTime(r.AttemptCount)
+	if err := u.queue.MarkFailed(ctx, r.Sequence, retryAt, cause); err != nil {
+		slog.Error("mark failed", "sequence", r.Sequence, "error", err)
+	}
+	u.recordFallbackFailure(ctx, r.Sequence)
 }
 
 func (u *Uploader) recordFallbackFailure(ctx context.Context, sequence uint64) {

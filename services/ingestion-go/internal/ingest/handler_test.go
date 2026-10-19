@@ -397,6 +397,46 @@ func TestOncePublisher_ConcurrentSameSequence(t *testing.T) {
 	}
 }
 
+func TestOncePublisher_EvictsExpiredClaims(t *testing.T) {
+	producer := &stubProducer{}
+	pub := ingest.NewOncePublisher(producer,
+		ingest.WithClaimTTL(50*time.Millisecond),
+		ingest.WithSweepInterval(10*time.Millisecond),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go pub.RunEviction(ctx)
+
+	rec := validRecord(1, "site-01")
+
+	dup1, err := pub.PublishOnce(context.Background(), "site-01", rec)
+	if err != nil {
+		t.Fatalf("first publish: %v", err)
+	}
+	if dup1 {
+		t.Fatal("first publish should not be a duplicate")
+	}
+
+	dup2, err := pub.PublishOnce(context.Background(), "site-01", rec)
+	if err != nil {
+		t.Fatalf("immediate retry: %v", err)
+	}
+	if !dup2 {
+		t.Fatal("immediate retry should be a duplicate")
+	}
+
+	time.Sleep(150 * time.Millisecond)
+
+	dup3, err := pub.PublishOnce(context.Background(), "site-01", rec)
+	if err != nil {
+		t.Fatalf("post-eviction publish: %v", err)
+	}
+	if dup3 {
+		t.Fatal("post-eviction publish should not be a duplicate")
+	}
+}
+
 type publishResult struct {
 	dup bool
 	err error

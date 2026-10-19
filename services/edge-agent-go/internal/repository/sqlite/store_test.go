@@ -314,6 +314,24 @@ func TestFailedEventBlocksOnlyItsDeviceUntilRetry(t *testing.T) {
 	if err := q.MarkFailed(ctx, first, retryAt, "network unavailable"); err != nil {
 		t.Fatalf("mark event failed: %v", err)
 	}
+	stats, err := q.Stats(ctx)
+	if err != nil {
+		t.Fatalf("read sync failure stats: %v", err)
+	}
+	if stats.LastFailedSyncReason != "network unavailable" {
+		t.Fatalf("last failed sync reason = %q", stats.LastFailedSyncReason)
+	}
+	succeededAt := time.Now().UTC()
+	if err := q.RecordUploadContactSuccess(ctx, succeededAt); err != nil {
+		t.Fatalf("record upload success: %v", err)
+	}
+	stats, err = q.Stats(ctx)
+	if err != nil {
+		t.Fatalf("read sync success stats: %v", err)
+	}
+	if stats.LastSuccessfulSyncAt == nil || !stats.LastSuccessfulSyncAt.Equal(succeededAt.Truncate(time.Millisecond)) {
+		t.Fatalf("last successful sync = %v, want %v", stats.LastSuccessfulSyncAt, succeededAt)
+	}
 	records, err := q.Ready(ctx, 10, 1<<20)
 	if err != nil {
 		t.Fatalf("read ready events: %v", err)

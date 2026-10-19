@@ -402,6 +402,8 @@ export const siteRowsById = new Map(
 			| "queue_depth"
 			| "oldest_pending_at"
 			| "oldest_pending_record_age_seconds"
+			| "last_successful_sync_at"
+			| "last_failed_sync_reason"
 			| "queue_growing"
 			| "open_alerts"
 		>[]

@@ -20,6 +20,14 @@ export const STATUS_COLOR: Record<Status, string> = {
 	offline: "#5A6E82",
 };
 
+export function healthStatusTone(healthStatus: Site["health_status"]): Status {
+	return healthStatus === "live"
+		? "healthy"
+		: healthStatus === "delayed"
+			? "warning"
+			: "offline";
+}
+
 export const ASSET_TYPES: AssetType[] = [
 	"smart_meter",
 	"battery_bms",
@@ -45,6 +53,8 @@ export interface FleetSite {
 	lastContactAt: number | null;
 	queueDepth: number;
 	oldestPendingAt: number | null;
+	lastSuccessfulSyncAt: number | null;
+	lastFailedSyncReason: string | null;
 	queueGrowing: boolean;
 	assets: AssetTelemetry[];
 	meters: AssetTelemetry[];
@@ -121,6 +131,10 @@ export function buildSites(
 			oldestPendingAt: site.oldest_pending_at
 				? Date.parse(site.oldest_pending_at)
 				: null,
+			lastSuccessfulSyncAt: site.last_successful_sync_at
+				? Date.parse(site.last_successful_sync_at)
+				: null,
+			lastFailedSyncReason: site.last_failed_sync_reason,
 			queueGrowing: site.queue_growing,
 			assets,
 			meters,
@@ -255,6 +269,10 @@ const clock = new Intl.DateTimeFormat(undefined, {
 });
 
 export const formatClock = (ms: number) => clock.format(new Date(ms));
+
+export function toIso(ts: number | null): string | null {
+	return ts ? new Date(ts).toISOString() : null;
+}
 
 export const timeZoneLabel =
 	new Intl.DateTimeFormat(undefined, { timeZoneName: "short" })

@@ -17,6 +17,17 @@ use crate::{
     },
 };
 
+const ALERT_COLUMNS: &str = "a.alert_id, a.asset_id, a.site_id, a.kind, a.severity, \
+    a.status, a.reason, a.opened_at, a.source_event_id, a.resolved_at, \
+    a.resolution_note, a.resolved_by";
+
+type EdgeProvenanceBinds<'a> = (
+    Option<bool>,
+    Option<&'a str>,
+    Option<DateTime<Utc>>,
+    Option<DateTime<Utc>>,
+);
+
 #[derive(Debug, Clone)]
 pub struct PostgresIngestRepository {
     pool: PgPool,
@@ -72,7 +83,7 @@ impl IngestRepository for PostgresIngestRepository {
             }
             PolicyOutcome::OpenCritical { decision, code } => {
                 let event = critical_replay(reading, &decision, &code)?;
-                lock_event(&mut tx, &event.event_key).await?;
+                lock_event(&mut tx, event.event_key.as_str()).await?;
                 let (alert_opened, alert) =
                     match find_alert_by_fallback_event(&mut tx, &event).await? {
                         Some(alert) => (None, alert),
@@ -127,12 +138,46 @@ impl IngestRepository for PostgresIngestRepository {
 }
 
 struct CriticalReplay {
-    event_key: String,
-    site_id: String,
-    sequence: i64,
+    event_key: EdgeEventKey,
     asset_id: String,
     code: String,
     event_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EdgeEventKey {
+    raw: String,
+    site_id: String,
+    sequence: i64,
+}
+
+impl EdgeEventKey {
+    fn parse(raw: String) -> Result<Self, PortError> {
+        let value = raw
+            .strip_prefix("edge:")
+            .ok_or_else(|| PortError::message("critical replay has invalid source_event_id"))?;
+        let (site_id, sequence) = value
+            .rsplit_once(':')
+            .ok_or_else(|| PortError::message("critical replay has invalid source_event_id"))?;
+        let sequence = sequence
+            .parse::<i64>()
+            .map_err(|_| PortError::message("critical replay has invalid sequence"))?;
+        if site_id.is_empty() || sequence <= 0 {
+            return Err(PortError::message(
+                "critical replay has invalid source_event_id",
+            ));
+        }
+        let site_id = site_id.to_owned();
+        Ok(Self {
+            raw,
+            site_id,
+            sequence,
+        })
+    }
+
+    fn as_str(&self) -> &str {
+        &self.raw
+    }
 }
 
 fn critical_replay(
@@ -140,42 +185,23 @@ fn critical_replay(
     decision: &AlertDecision,
     code: &str,
 ) -> Result<CriticalReplay, PortError> {
-    let event_key = decision
-        .source_event_id
-        .clone()
-        .ok_or_else(|| PortError::message("critical replay is missing source_event_id"))?;
-    let (site_id, sequence) = parse_edge_event_key(&event_key)?;
-    if site_id != reading.asset.site_id {
+    let event_key = EdgeEventKey::parse(
+        decision
+            .source_event_id
+            .clone()
+            .ok_or_else(|| PortError::message("critical replay is missing source_event_id"))?,
+    )?;
+    if event_key.site_id != reading.asset.site_id {
         return Err(PortError::message(
             "critical replay source site does not match reading",
         ));
     }
     Ok(CriticalReplay {
         event_key,
-        site_id,
-        sequence,
         asset_id: decision.asset_id.clone(),
         code: code.to_owned(),
         event_at: reading.observed_at,
     })
-}
-
-fn parse_edge_event_key(event_key: &str) -> Result<(String, i64), PortError> {
-    let value = event_key
-        .strip_prefix("edge:")
-        .ok_or_else(|| PortError::message("critical replay has invalid source_event_id"))?;
-    let (site_id, sequence) = value
-        .rsplit_once(':')
-        .ok_or_else(|| PortError::message("critical replay has invalid source_event_id"))?;
-    let sequence = sequence
-        .parse::<i64>()
-        .map_err(|_| PortError::message("critical replay has invalid sequence"))?;
-    if site_id.is_empty() || sequence <= 0 {
-        return Err(PortError::message(
-            "critical replay has invalid source_event_id",
-        ));
-    }
-    Ok((site_id.to_owned(), sequence))
 }
 
 // The ingest transaction rolls back this claim if a later write fails.
@@ -221,9 +247,9 @@ async fn record_critical_replay(
           AND sms_fallback_events.alert_id = EXCLUDED.alert_id
         "#,
     )
-    .bind(&event.event_key)
-    .bind(&event.site_id)
-    .bind(event.sequence)
+    .bind(event.event_key.as_str())
+    .bind(&event.event_key.site_id)
+    .bind(event.event_key.sequence)
     .bind(&event.asset_id)
     .bind(&event.code)
     .bind(event.event_at)
@@ -234,7 +260,7 @@ async fn record_critical_replay(
     if result.rows_affected() != 1 {
         return Err(PortError::message(format!(
             "critical replay {} conflicts with the stored event",
-            event.event_key
+            event.event_key.as_str()
         )));
     }
     Ok(())
@@ -244,10 +270,8 @@ async fn find_alert_by_fallback_event(
     tx: &mut Transaction<'_, Postgres>,
     event: &CriticalReplay,
 ) -> Result<Option<Alert>, PortError> {
-    let row = query(
-        r#"
-        SELECT a.alert_id, a.asset_id, a.site_id, a.kind, a.severity, a.status, a.reason,
-            a.opened_at, a.source_event_id, a.resolved_at, a.resolution_note, a.resolved_by
+    let statement = format!(
+        r#"SELECT {ALERT_COLUMNS}
         FROM sms_fallback_events AS event
         JOIN alerts AS a ON a.alert_id = event.alert_id
         WHERE event.event_key = $1
@@ -255,16 +279,17 @@ async fn find_alert_by_fallback_event(
           AND event.sequence = $3
           AND event.asset_id = $4
           AND event.code = $5
-        "#,
-    )
-    .bind(&event.event_key)
-    .bind(&event.site_id)
-    .bind(event.sequence)
-    .bind(&event.asset_id)
-    .bind(&event.code)
-    .fetch_optional(&mut **tx)
-    .await
-    .map_err(PortError::storage)?;
+        "#
+    );
+    let row = query(sqlx::AssertSqlSafe(statement))
+        .bind(event.event_key.as_str())
+        .bind(&event.event_key.site_id)
+        .bind(event.event_key.sequence)
+        .bind(&event.asset_id)
+        .bind(&event.code)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(PortError::storage)?;
 
     row.map(row_to_alert).transpose()
 }
@@ -384,18 +409,32 @@ async fn upsert_smart_meter_state(
     Ok(())
 }
 
+fn edge_provenance_binds(reading: &Reading) -> EdgeProvenanceBinds<'_> {
+    match &reading.edge {
+        Some(ep) => (
+            Some(ep.replay),
+            Some(ep.gateway_id.as_str()),
+            Some(ep.edge_received_at),
+            Some(ep.uploaded_at),
+        ),
+        None => (None, None, None, None),
+    }
+}
+
 async fn append_smart_meter_reading(
     tx: &mut Transaction<'_, Postgres>,
     reading: &Reading,
     state: &SmartMeterState,
 ) -> Result<(), PortError> {
+    let (replay, gateway_id, edge_received_at, uploaded_at) = edge_provenance_binds(reading);
     query(
         r#"
         INSERT INTO smart_meter_readings (
             time, asset_id, internal_temperature, reported_household_id,
-            relay_closed, voltage, current, active_power, frequency, total_kwh
+            relay_closed, voltage, current, active_power, frequency, total_kwh,
+            replay, gateway_id, edge_received_at, uploaded_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         "#,
     )
     .bind(reading.observed_at)
@@ -408,6 +447,10 @@ async fn append_smart_meter_reading(
     .bind(state.active_power)
     .bind(state.frequency)
     .bind(state.total_kwh)
+    .bind(replay)
+    .bind(gateway_id)
+    .bind(edge_received_at)
+    .bind(uploaded_at)
     .execute(&mut **tx)
     .await
     .map_err(PortError::storage)?;
@@ -442,18 +485,24 @@ async fn append_battery_bms_reading(
     reading: &Reading,
     state: &BatteryBmsState,
 ) -> Result<(), PortError> {
+    let (replay, gateway_id, edge_received_at, uploaded_at) = edge_provenance_binds(reading);
     query(
         r#"
         INSERT INTO battery_bms_readings (
-            time, asset_id, internal_temperature, battery_soc_pct
+            time, asset_id, internal_temperature, battery_soc_pct,
+            replay, gateway_id, edge_received_at, uploaded_at
         )
-        VALUES ($1, $2, $3, $4)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         "#,
     )
     .bind(reading.observed_at)
     .bind(&reading.asset.asset_id)
     .bind(reading.asset.internal_temperature)
     .bind(state.battery_soc_pct)
+    .bind(replay)
+    .bind(gateway_id)
+    .bind(edge_received_at)
+    .bind(uploaded_at)
     .execute(&mut **tx)
     .await
     .map_err(PortError::storage)?;
@@ -488,18 +537,24 @@ async fn append_solar_inverter_reading(
     reading: &Reading,
     state: &SolarInverterState,
 ) -> Result<(), PortError> {
+    let (replay, gateway_id, edge_received_at, uploaded_at) = edge_provenance_binds(reading);
     query(
         r#"
         INSERT INTO solar_inverter_readings (
-            time, asset_id, internal_temperature, solar_irradiance
+            time, asset_id, internal_temperature, solar_irradiance,
+            replay, gateway_id, edge_received_at, uploaded_at
         )
-        VALUES ($1, $2, $3, $4)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         "#,
     )
     .bind(reading.observed_at)
     .bind(&reading.asset.asset_id)
     .bind(reading.asset.internal_temperature)
     .bind(state.solar_irradiance)
+    .bind(replay)
+    .bind(gateway_id)
+    .bind(edge_received_at)
+    .bind(uploaded_at)
     .execute(&mut **tx)
     .await
     .map_err(PortError::storage)?;
@@ -573,19 +628,18 @@ async fn find_alert_by_source_event_id(
     tx: &mut Transaction<'_, Postgres>,
     source_event_id: &str,
 ) -> Result<Option<Alert>, PortError> {
-    let row = query(
-        r#"
-        SELECT alert_id, asset_id, site_id, kind, severity, status, reason, opened_at, source_event_id,
-            resolved_at, resolution_note, resolved_by
-        FROM alerts
-        WHERE source_event_id = $1
+    let statement = format!(
+        r#"SELECT {ALERT_COLUMNS}
+        FROM alerts AS a
+        WHERE a.source_event_id = $1
         LIMIT 1
-        "#,
-    )
-    .bind(source_event_id)
-    .fetch_optional(&mut **tx)
-    .await
-    .map_err(PortError::storage)?;
+        "#
+    );
+    let row = query(sqlx::AssertSqlSafe(statement))
+        .bind(source_event_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(PortError::storage)?;
 
     row.map(row_to_alert).transpose()
 }
@@ -597,22 +651,21 @@ async fn find_open_alert(
     asset_id: &str,
     kind: &str,
 ) -> Result<Option<Alert>, PortError> {
-    let row = query(
-        r#"
-        SELECT alert_id, asset_id, site_id, kind, severity, status, reason, opened_at, source_event_id,
-            resolved_at, resolution_note, resolved_by
-        FROM alerts
-        WHERE site_id = $1 AND asset_id = $2 AND kind = $3 AND status = 'open'
-        ORDER BY opened_at DESC
+    let statement = format!(
+        r#"SELECT {ALERT_COLUMNS}
+        FROM alerts AS a
+        WHERE a.site_id = $1 AND a.asset_id = $2 AND a.kind = $3 AND a.status = 'open'
+        ORDER BY a.opened_at DESC
         LIMIT 1
-        "#,
-    )
-    .bind(site_id)
-    .bind(asset_id)
-    .bind(kind)
-    .fetch_optional(&mut **tx)
-    .await
-    .map_err(PortError::storage)?;
+        "#
+    );
+    let row = query(sqlx::AssertSqlSafe(statement))
+        .bind(site_id)
+        .bind(asset_id)
+        .bind(kind)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(PortError::storage)?;
 
     row.map(row_to_alert).transpose()
 }
@@ -915,10 +968,14 @@ mod tests {
     #[test]
     fn canonical_edge_event_key_preserves_site_and_sequence() {
         assert_eq!(
-            parse_edge_event_key("edge:ng-kaji-01:18422").unwrap(),
-            ("ng-kaji-01".to_string(), 18422)
+            EdgeEventKey::parse("edge:ng-kaji-01:18422".to_string()).unwrap(),
+            EdgeEventKey {
+                raw: "edge:ng-kaji-01:18422".to_string(),
+                site_id: "ng-kaji-01".to_string(),
+                sequence: 18422,
+            }
         );
-        assert!(parse_edge_event_key("telemetry.ingested:0:42").is_err());
-        assert!(parse_edge_event_key("edge:ng-kaji-01:0").is_err());
+        assert!(EdgeEventKey::parse("telemetry.ingested:0:42".to_string()).is_err());
+        assert!(EdgeEventKey::parse("edge:ng-kaji-01:0".to_string()).is_err());
     }
 }

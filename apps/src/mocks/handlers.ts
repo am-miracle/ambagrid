@@ -221,6 +221,11 @@ export const handlers = [
 						queue_depth: 0,
 						oldest_pending_at: null,
 						oldest_pending_record_age_seconds: null,
+						last_successful_sync_at:
+							healthStatus === "live"
+								? new Date(now - 5_000).toISOString()
+								: null,
+						last_failed_sync_reason: null,
 						queue_growing: false,
 						open_alerts: {
 							total: alerts.length,

@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "event_key_prefix": "edge:",
+  "codes": [
+    "BATTERY_OVERHEAT",
+    "INVERTER_FAILURE",
+    "TAMPER_DETECTED",
+    "SITE_OUTAGE"
+  ]
+}

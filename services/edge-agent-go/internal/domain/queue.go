@@ -26,6 +26,8 @@ type QueueStats struct {
 	OldestAge            time.Duration
 	OldestPendingAt      *time.Time
 	LastEventTimestamp   *time.Time
+	LastSuccessfulSyncAt *time.Time
+	LastFailedSyncReason string
 	State                QueueState
 }
 
@@ -51,5 +53,6 @@ type Queue interface {
 	MarkUploaded(ctx context.Context, sequence uint64, uploadedAt time.Time) error
 	Ack(ctx context.Context, sequence uint64) error
 	MarkFailed(ctx context.Context, sequence uint64, retryAt time.Time, cause string) error
+	Purge(ctx context.Context, retentionAge time.Duration) (int64, error)
 	Stats(ctx context.Context) (QueueStats, error)
 }

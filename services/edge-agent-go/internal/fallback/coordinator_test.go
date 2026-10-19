@@ -24,7 +24,7 @@ func (s *fakeStore) RecordFallbackAttempt(_ context.Context, result fallback.Att
 	return nil
 }
 
-func (s *fakeStore) ReserveFallbackAttempt(context.Context, string, time.Time) error {
+func (s *fakeStore) ReserveFallbackAttempt(context.Context, fallback.EventKey, time.Time) error {
 	return s.reserveErr
 }
 

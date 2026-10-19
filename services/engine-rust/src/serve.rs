@@ -8,6 +8,7 @@ use crate::{
         kafka::{
             consumer::{self, ConsumerConfig},
             producer::KafkaDeadLetterPublisher,
+            site_health::{self, SiteHealthConsumerConfig},
         },
         postgres::PostgresIngestRepository,
     },
@@ -37,17 +38,27 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut ingest = IngestReading::new(&store);
     ingest.policy = cfg.threshold_policy;
 
-    consumer::run(
+    let telemetry = consumer::run(
         ConsumerConfig {
-            brokers: cfg.kafka_brokers,
-            security: cfg.kafka_security,
+            brokers: cfg.kafka_brokers.clone(),
+            security: cfg.kafka_security.clone(),
             topic: cfg.telemetry_topic,
             group_id: cfg.telemetry_group_id,
         },
         &ingest,
         &dead_letters,
-    )
-    .await?;
-
-    Ok(())
+    );
+    let health = site_health::run(
+        SiteHealthConsumerConfig {
+            brokers: cfg.kafka_brokers,
+            security: cfg.kafka_security,
+            topic: cfg.site_health_topic,
+            group_id: cfg.site_health_group_id,
+        },
+        pool,
+    );
+    tokio::select! {
+        result = telemetry => result.map_err(Into::into),
+        result = health => result,
+    }
 }

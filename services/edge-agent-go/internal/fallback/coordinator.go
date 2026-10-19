@@ -20,7 +20,7 @@ type Candidate struct {
 }
 
 type AttemptResult struct {
-	EventKey      string
+	EventKey      EventKey
 	AttemptedAt   time.Time
 	Succeeded     bool
 	FailureReason string
@@ -29,7 +29,7 @@ type AttemptResult struct {
 
 type Store interface {
 	FallbackCandidates(ctx context.Context, now time.Time) ([]Candidate, error)
-	ReserveFallbackAttempt(ctx context.Context, eventKey string, attemptedAt time.Time) error
+	ReserveFallbackAttempt(ctx context.Context, eventKey EventKey, attemptedAt time.Time) error
 	RecordFallbackAttempt(ctx context.Context, result AttemptResult) error
 }
 

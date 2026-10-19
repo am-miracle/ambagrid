@@ -53,7 +53,7 @@ func headersFor(siteID string, rec IngestRecord) []kgo.RecordHeader {
 		{Key: "device_type", Value: []byte(rec.AssetType)},
 		{Key: "device_id", Value: []byte(rec.DeviceID)},
 		{Key: "sequence", Value: []byte(strconv.FormatUint(rec.Sequence, 10))},
-		{Key: "source_event_id", Value: []byte(fmt.Sprintf("edge:%s:%d", siteID, rec.Sequence))},
+		{Key: "source_event_id", Value: []byte(newEventKey(siteID, rec.Sequence))},
 		{Key: "event_timestamp", Value: []byte(rec.EventTimestamp.UTC().Format(time.RFC3339Nano))},
 		{Key: "edge_received_at", Value: []byte(rec.EdgeReceivedAt.UTC().Format(time.RFC3339Nano))},
 		{Key: "uploaded_at", Value: []byte(rec.UploadedAt.UTC().Format(time.RFC3339Nano))},

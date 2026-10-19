@@ -29,7 +29,7 @@ type fakeFallbackTx struct {
 	eventInsertCalls int
 }
 
-func (f *fakeFallbackTx) FindFallbackEvent(context.Context, string) (*domain.StoredFallbackEvent, error) {
+func (f *fakeFallbackTx) FindFallbackEvent(context.Context, domain.EventKey) (*domain.StoredFallbackEvent, error) {
 	return f.storedEvent, nil
 }
 
@@ -37,7 +37,7 @@ func (f *fakeFallbackTx) LookupAssetType(context.Context, string, string) (strin
 	return f.assetType, f.lookupAssetErr
 }
 
-func (f *fakeFallbackTx) FindAlertBySourceEvent(context.Context, string) (string, error) {
+func (f *fakeFallbackTx) FindAlertBySourceEvent(context.Context, domain.EventKey) (string, error) {
 	if f.sourceAlertID == "" {
 		return "", errors.New("not found")
 	}
@@ -68,12 +68,12 @@ func (f *fakeFallbackTx) InsertFallbackEvent(context.Context, domain.InsertFallb
 	return f.insertEventErr
 }
 
-func (f *fakeFallbackTx) InsertReceipt(context.Context, string, domain.SMSReceipt, domain.SMSPricing) (bool, error) {
+func (f *fakeFallbackTx) InsertReceipt(context.Context, domain.EventKey, domain.SMSReceipt, domain.SMSPricing) (bool, error) {
 	return f.insertedReturns, f.insertReceiptErr
 }
 
-func (f *fakeFallbackTx) FindReceiptEventKey(context.Context, string) (string, error) {
-	return f.receiptEventKey, f.findReceiptErr
+func (f *fakeFallbackTx) FindReceiptEventKey(context.Context, string) (domain.EventKey, error) {
+	return domain.EventKey(f.receiptEventKey), f.findReceiptErr
 }
 
 func (f *fakeFallbackTx) GetMonthlySMSUsage(context.Context, time.Time, int64) (int64, error) {
@@ -84,7 +84,7 @@ type fakeFallbackRepository struct {
 	tx *fakeFallbackTx
 }
 
-func (f *fakeFallbackRepository) RunFallbackTx(ctx context.Context, _ string, fn func(FallbackTx) (bool, error)) (bool, error) {
+func (f *fakeFallbackRepository) RunFallbackTx(ctx context.Context, _ domain.EventKey, fn func(FallbackTx) (bool, error)) (bool, error) {
 	return fn(f.tx)
 }
 
@@ -189,6 +189,26 @@ func TestFallbackServiceRejectsReceiptWhoseProviderIDBelongsToAnotherEvent(t *te
 
 	if !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("error = %v, want ErrConflict when the provider message ID belongs to a different event", err)
+	}
+}
+
+func TestFallbackServiceRejectsConflictingProviderIDForKnownEvent(t *testing.T) {
+	event := testEvent()
+	tx := &fakeFallbackTx{
+		storedEvent: &domain.StoredFallbackEvent{
+			AlertID: "alert-01", SiteID: event.SiteID, AssetID: event.AssetID,
+			Code: event.Code, Sequence: event.Sequence,
+		},
+		insertedReturns: false,
+		receiptEventKey: "edge:site-01:999",
+	}
+	repo := &fakeFallbackRepository{tx: tx}
+
+	_, err := NewFallbackService(repo, "alert.opened", domain.SMSPricing{}).
+		ReceiveSMS(context.Background(), event, domain.SMSReceipt{ProviderMessageID: "msg-01"})
+
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("error = %v, want ErrConflict when a known event reuses another event's provider ID", err)
 	}
 }
 

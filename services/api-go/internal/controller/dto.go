@@ -374,6 +374,8 @@ type siteDTO struct {
 	QueueDepth              int64                   `json:"queue_depth"`
 	OldestPendingAt         *time.Time              `json:"oldest_pending_at"`
 	OldestPendingAgeSeconds *int64                  `json:"oldest_pending_record_age_seconds"`
+	LastSuccessfulSyncAt    *time.Time              `json:"last_successful_sync_at"`
+	LastFailedSyncReason    *string                 `json:"last_failed_sync_reason"`
 	QueueGrowing            bool                    `json:"queue_growing"`
 	OpenAlerts              alertCountsDTO          `json:"open_alerts"`
 }
@@ -411,6 +413,8 @@ func toSiteDTO(site domain.Site) siteDTO {
 		QueueDepth:              site.QueueDepth,
 		OldestPendingAt:         site.OldestPendingAt,
 		OldestPendingAgeSeconds: oldestPendingAgeSeconds,
+		LastSuccessfulSyncAt:    site.LastSuccessfulSyncAt,
+		LastFailedSyncReason:    site.LastFailedSyncReason,
 		QueueGrowing:            site.QueueGrowing,
 		OpenAlerts: alertCountsDTO{
 			Total:    site.OpenAlerts.Total,

@@ -73,6 +73,7 @@ services:
         # Low volume by definition, and a single partition keeps alert events
         # globally ordered for anything reading them back.
         rpk topic create telemetry.ingested.dlq -p 1 --brokers redpanda:29092 || true
+        rpk topic create site.health -p 12 --brokers redpanda:29092 || true
         rpk topic create alert.opened -p 1 --brokers redpanda:29092 || true
         rpk topic create alert.resolved -p 1 --brokers redpanda:29092 || true
         rpk topic create payment.confirmed -p 1 --brokers redpanda:29092 || true
@@ -181,7 +182,28 @@ services:
     networks:
       - ambagrid-network
 
-  # 8. Transactional outbox publisher
+  # 8. Telemetry and site-health consumers
+  engine-rust:
+    build:
+      context: .
+      dockerfile: ./services/engine-rust/Dockerfile
+    restart: unless-stopped
+    command: ["serve"]
+    environment:
+      DATABASE_URL: postgres://ambagrid_admin:ambagrid_secure_pass@database:5432/ambagrid_operational
+      KAFKA_BROKERS: redpanda:29092
+      TELEMETRY_TOPIC: telemetry.ingested
+      SITE_HEALTH_TOPIC: site.health
+      LOG_FORMAT: json
+    depends_on:
+      database:
+        condition: service_healthy
+      redpanda-topics:
+        condition: service_completed_successfully
+    networks:
+      - ambagrid-network
+
+  # 9. Transactional outbox publisher
   #
   # Operator commands and engine alert transitions write business events into
   # Postgres inside the same transaction as the state change. This worker

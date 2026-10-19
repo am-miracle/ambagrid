@@ -1,0 +1,52 @@
+{
+  "gateway_id": "gw-01",
+  "queue_depth": 3,
+  "oldest_pending_at": "2026-01-01T00:00:00Z",
+  "last_event_timestamp": "2026-01-01T00:05:00Z",
+  "records": [
+    {
+      "sequence": 1001,
+      "site_id": "site-01",
+      "gateway_id": "gw-01",
+      "device_id": "meter-001",
+      "asset_type": "smart_meter",
+      "mqtt_topic": "africa-west/site-01/smartmeter/meter-001/telemetry",
+      "payload": "eyJkZXZpY2VfaWQiOiJtZXRlci0wMDEiLCJkZXZpY2VfdHlwZSI6IkRFVklDRV9UWVBFX1NNQVJUX01FVEVSIiwidGltZXN0YW1wX3V0YyI6MTcwMDAwMDAwMCwic2l0ZV9pZCI6InNpdGUtMDEifQ==",
+      "priority": 0,
+      "event_timestamp": "2026-01-01T00:05:00Z",
+      "edge_received_at": "2026-01-01T00:05:01Z",
+      "uploaded_at": "2026-01-01T00:05:02Z",
+      "replay": false
+    },
+    {
+      "sequence": 1002,
+      "site_id": "site-01",
+      "gateway_id": "gw-01",
+      "device_id": "inverter-003",
+      "asset_type": "solar_inverter",
+      "mqtt_topic": "africa-west/site-01/inverter/inverter-003/telemetry",
+      "payload": "eyJkZXZpY2VfaWQiOiJpbnZlcnRlci0wMDMiLCJkZXZpY2VfdHlwZSI6IkRFVklDRV9UWVBFX1NPTEFSX0lOVkVSVEVSIiwidGltZXN0YW1wX3V0YyI6MTcwMDAwMDMwMCwic2l0ZV9pZCI6InNpdGUtMDEifQ==",
+      "priority": 0,
+      "event_timestamp": "2026-01-01T00:05:00Z",
+      "edge_received_at": "2026-01-01T00:05:01Z",
+      "uploaded_at": "2026-01-01T00:05:02Z",
+      "replay": false
+    },
+    {
+      "sequence": 1003,
+      "site_id": "site-01",
+      "gateway_id": "gw-01",
+      "device_id": "bms-002",
+      "asset_type": "battery_bms",
+      "mqtt_topic": "africa-west/site-01/battery/bms-002/telemetry",
+      "payload": "eyJkZXZpY2VfaWQiOiJibXMtMDAyIiwiZGV2aWNlX3R5cGUiOiJERVZJQ0VfVFlQRV9CQVRURVJZX0JNUyIsInRpbWVzdGFtcF91dGMiOjE3MDAwMDA2MDAsInNpdGVfaWQiOiJzaXRlLTAxIn0=",
+      "priority": 10,
+      "event_timestamp": "2026-01-01T00:04:58Z",
+      "edge_received_at": "2026-01-01T00:04:59Z",
+      "uploaded_at": "2026-01-01T00:05:02Z",
+      "replay": true,
+      "critical_code": "BATTERY_OVERHEAT",
+      "critical_value": 68.5
+    }
+  ]
+}

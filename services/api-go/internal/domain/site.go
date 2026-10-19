@@ -13,23 +13,25 @@ const (
 
 // Site carries provisioned metadata and operational rollups for one site.
 type Site struct {
-	SiteID          string
-	Name            string
-	Country         *string
-	Region          *string
-	GridOperatorID  *string
-	Lat             *float64
-	Lng             *float64
-	Status          string
-	AssetCount      int64
-	LastSeenAt      *time.Time
-	HealthStatus    SiteHealthStatus
-	LastContactAt   *time.Time
-	LastEventAt     *time.Time
-	QueueDepth      int64
-	OldestPendingAt *time.Time
-	QueueGrowing    bool
-	OpenAlerts      AlertCounts
+	SiteID               string
+	Name                 string
+	Country              *string
+	Region               *string
+	GridOperatorID       *string
+	Lat                  *float64
+	Lng                  *float64
+	Status               string
+	AssetCount           int64
+	LastSeenAt           *time.Time
+	HealthStatus         SiteHealthStatus
+	LastContactAt        *time.Time
+	LastEventAt          *time.Time
+	QueueDepth           int64
+	OldestPendingAt      *time.Time
+	LastSuccessfulSyncAt *time.Time
+	LastFailedSyncReason *string
+	QueueGrowing         bool
+	OpenAlerts           AlertCounts
 }
 
 type AlertCounts struct {

@@ -3,11 +3,13 @@ package ingest
 import "time"
 
 type BatchRequest struct {
-	GatewayID          string         `json:"gateway_id"`
-	QueueDepth         int64          `json:"queue_depth"`
-	OldestPendingAt    *time.Time     `json:"oldest_pending_at"`
-	LastEventTimestamp *time.Time     `json:"last_event_timestamp"`
-	Records            []IngestRecord `json:"records"`
+	GatewayID            string         `json:"gateway_id"`
+	QueueDepth           int64          `json:"queue_depth"`
+	OldestPendingAt      *time.Time     `json:"oldest_pending_at"`
+	LastEventTimestamp   *time.Time     `json:"last_event_timestamp"`
+	LastSuccessfulSyncAt *time.Time     `json:"last_successful_sync_at"`
+	LastFailedSyncReason string         `json:"last_failed_sync_reason"`
+	Records              []IngestRecord `json:"records"`
 }
 
 type IngestRecord struct {

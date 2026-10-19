@@ -198,6 +198,26 @@ func (s *Store) checkAdmission(event domain.Event) error {
 	return nil
 }
 
+func (s *Store) Purge(ctx context.Context, retentionAge time.Duration) (int64, error) {
+	cutoffMS := time.Now().Add(-retentionAge).UTC().UnixMilli()
+	result, err := s.db.ExecContext(ctx,
+		"DELETE FROM queue_events WHERE status IN (?, ?) AND persisted_at_ms < ?",
+		domain.StatusAcknowledged, domain.StatusExpired, cutoffMS)
+	if err != nil {
+		return 0, fmt.Errorf("purge acknowledged events: %w", err)
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("read purge result: %w", err)
+	}
+	if deleted > 0 {
+		if _, err := s.db.ExecContext(ctx, "PRAGMA incremental_vacuum"); err != nil {
+			return deleted, fmt.Errorf("incremental vacuum after purge: %w", err)
+		}
+	}
+	return deleted, nil
+}
+
 func (s *Store) MarkFailed(ctx context.Context, sequence uint64, retryAt time.Time, cause string) error {
 	if retryAt.IsZero() {
 		return errors.New("retry timestamp is required")
@@ -208,7 +228,12 @@ func (s *Store) MarkFailed(ctx context.Context, sequence uint64, retryAt time.Ti
 	if len(cause) > maxFailureCauseBytes {
 		return errors.New("failure cause is too large")
 	}
-	result, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin failed event update: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
 UPDATE queue_events
 SET status = ?,
     attempt_count = attempt_count + 1,
@@ -224,6 +249,13 @@ WHERE sequence = ? AND status IN (?, ?)`, domain.StatusPendingUpload, retryAt.UT
 	}
 	if updated == 0 {
 		return fmt.Errorf("%w: sequence %d is not pending or uploaded", domain.ErrInvalidTransition, sequence)
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE edge_sync_state SET last_upload_failure_reason = ? WHERE singleton = 1`, cause); err != nil {
+		return fmt.Errorf("record upload failure: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit failed event update: %w", err)
 	}
 	return nil
 }

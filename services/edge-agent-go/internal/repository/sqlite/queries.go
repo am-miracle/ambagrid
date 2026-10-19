@@ -123,7 +123,8 @@ func (s *Store) Stats(ctx context.Context) (domain.QueueStats, error) {
 		CapacityBytes:        s.payloadCapacity(),
 		NormalAdmissionBytes: s.normalAdmissionLimit(),
 	}
-	var oldestMS, lastEventMS sql.NullInt64
+	var oldestMS, lastEventMS, lastSuccessMS sql.NullInt64
+	var lastFailure sql.NullString
 	// Keep the latest event after acknowledged rows leave the active queue.
 	if err := s.db.QueryRowContext(ctx, `
 SELECT COUNT(*) FILTER (WHERE status IN ('persisted', 'pending_upload', 'uploaded')),
@@ -144,6 +145,18 @@ FROM queue_events`).Scan(&stats.Depth, &stats.PayloadBytes, &oldestMS, &lastEven
 	if lastEventMS.Valid {
 		lastEvent := time.UnixMilli(lastEventMS.Int64).UTC()
 		stats.LastEventTimestamp = &lastEvent
+	}
+	if err := s.db.QueryRowContext(ctx, `
+SELECT last_upload_success_at_ms, last_upload_failure_reason
+FROM edge_sync_state WHERE singleton = 1`).Scan(&lastSuccessMS, &lastFailure); err != nil {
+		return domain.QueueStats{}, fmt.Errorf("read sync statistics: %w", err)
+	}
+	if lastSuccessMS.Valid {
+		lastSuccess := time.UnixMilli(lastSuccessMS.Int64).UTC()
+		stats.LastSuccessfulSyncAt = &lastSuccess
+	}
+	if lastFailure.Valid {
+		stats.LastFailedSyncReason = lastFailure.String
 	}
 	diskBytes, err := queueDiskBytes(s.cfg.Path)
 	if err != nil {

@@ -74,6 +74,10 @@ func (q *fakeQueue) MarkFailed(_ context.Context, sequence uint64, _ time.Time, 
 	return nil
 }
 
+func (q *fakeQueue) Purge(_ context.Context, _ time.Duration) (int64, error) {
+	return 0, nil
+}
+
 func (q *fakeQueue) Stats(_ context.Context) (domain.QueueStats, error) {
 	q.mu.RLock()
 	defer q.mu.RUnlock()
@@ -146,7 +150,7 @@ func TestUploader_SuccessfulBatch(t *testing.T) {
 		PollInterval:  time.Hour,
 		BaseDelay:     time.Second,
 		MaxDelay:      time.Minute,
-	}, queue, client)
+	}, queue, client, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -185,7 +189,7 @@ func TestUploader_ServerError_RetriesWithBackoff(t *testing.T) {
 		PollInterval:  time.Hour,
 		BaseDelay:     time.Second,
 		MaxDelay:      time.Minute,
-	}, queue, client)
+	}, queue, client, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -216,7 +220,7 @@ func TestUploader_DoesNotMarkUploadedBeforePublishConfirmed(t *testing.T) {
 
 	queue := newFakeQueue([]domain.Record{testRecord(1)})
 	client := uploader.NewIngestClient(server.URL+"/v1/ingest", "test-key", 5*time.Second)
-	ul := uploader.New(uploader.Config{PollInterval: time.Hour}, queue, client)
+	ul := uploader.New(uploader.Config{PollInterval: time.Hour}, queue, client, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go ul.Run(ctx)
@@ -253,7 +257,7 @@ func TestUploader_PartialRejection(t *testing.T) {
 		PollInterval:  time.Hour,
 		BaseDelay:     time.Second,
 		MaxDelay:      time.Minute,
-	}, queue, client)
+	}, queue, client, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -300,7 +304,7 @@ func TestUploader_UploadedAtTimestamp(t *testing.T) {
 		BatchSize:     50,
 		BatchMaxBytes: 1 << 20,
 		PollInterval:  time.Hour,
-	}, queue, client)
+	}, queue, client, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -337,21 +341,29 @@ func TestUploader_ReplayFlag(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Old record: event_timestamp far in the past → replay=true
-	old := testRecord(1)
-	old.EventTimestamp = time.Now().UTC().Add(-3 * time.Hour)
+	// A delayed device timestamp does not make a promptly uploaded record a replay.
+	oldButPrompt := testRecord(1)
+	oldButPrompt.EventTimestamp = time.Now().UTC().Add(-3 * time.Hour)
+	oldButPrompt.EdgeReceivedAt = time.Now().UTC()
 
-	// Fresh record: event_timestamp just now → replay=false
-	fresh := testRecord(2)
-	fresh.EventTimestamp = time.Now().UTC().Add(-10 * time.Second)
+	// A retry after a short outage is a replay even when it is less than two minutes old.
+	retriedButFresh := testRecord(2)
+	retriedButFresh.EventTimestamp = time.Now().UTC().Add(-30 * time.Second)
+	retriedButFresh.EdgeReceivedAt = time.Now().UTC()
+	retriedButFresh.AttemptCount = 1
 
-	queue := newFakeQueue([]domain.Record{old, fresh})
+	// Buffered during an outage (no prior attempt, but sat in the queue for 10 minutes).
+	bufferedDuringOutage := testRecord(3)
+	bufferedDuringOutage.EventTimestamp = time.Now().UTC().Add(-10 * time.Minute)
+	bufferedDuringOutage.EdgeReceivedAt = time.Now().UTC().Add(-10 * time.Minute)
+
+	queue := newFakeQueue([]domain.Record{oldButPrompt, retriedButFresh, bufferedDuringOutage})
 	client := uploader.NewIngestClient(server.URL+"/v1/ingest", "test-key", 5*time.Second)
 	ul := uploader.New(uploader.Config{
 		BatchSize:     50,
 		BatchMaxBytes: 1 << 20,
 		PollInterval:  time.Hour,
-	}, queue, client)
+	}, queue, client, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -360,14 +372,53 @@ func TestUploader_ReplayFlag(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	cancel()
 
-	if len(received.Records) != 2 {
-		t.Fatalf("expected 2 records, got %d", len(received.Records))
+	if len(received.Records) != 3 {
+		t.Fatalf("expected 3 records, got %d", len(received.Records))
 	}
-	if !received.Records[0].Replay {
-		t.Error("old record (3h delay) should have replay=true")
+	if received.Records[0].Replay {
+		t.Error("record uploaded on its first attempt should have replay=false despite an old device timestamp")
 	}
-	if received.Records[1].Replay {
-		t.Error("fresh record (10s delay) should have replay=false")
+	if !received.Records[1].Replay {
+		t.Error("record uploaded after a failed attempt should have replay=true despite a short delay")
+	}
+	if !received.Records[2].Replay {
+		t.Error("record buffered for >2m during outage should have replay=true even with AttemptCount=0")
+	}
+}
+
+func TestUploader_ExhaustedRetries_DropsRecord(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	exhausted := testRecord(1)
+	exhausted.AttemptCount = 4
+
+	queue := newFakeQueue([]domain.Record{exhausted})
+	client := uploader.NewIngestClient(server.URL+"/v1/ingest", "test-key", 5*time.Second)
+	ul := uploader.New(uploader.Config{
+		BatchSize:     50,
+		BatchMaxBytes: 1 << 20,
+		PollInterval:  time.Hour,
+		BaseDelay:     time.Second,
+		MaxDelay:      time.Minute,
+		MaxRetries:    5,
+	}, queue, client, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go ul.Run(ctx)
+	time.Sleep(500 * time.Millisecond)
+	cancel()
+
+	_, acked, failed := queue.snapshots()
+	if !acked[1] {
+		t.Fatal("exhausted record should be acked (dropped)")
+	}
+	if _, ok := failed[1]; ok {
+		t.Fatal("exhausted record should not be marked for retry")
 	}
 }
 
@@ -376,7 +427,7 @@ func TestUploader_EmptyQueue(t *testing.T) {
 	client := uploader.NewIngestClient("http://localhost:0/v1/ingest", "test-key", 5*time.Second)
 	ul := uploader.New(uploader.Config{
 		PollInterval: time.Hour,
-	}, queue, client)
+	}, queue, client, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()

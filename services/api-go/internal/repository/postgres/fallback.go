@@ -19,7 +19,7 @@ func NewFallbackStore(pool databasePool) *FallbackStore {
 	return &FallbackStore{pool: pool}
 }
 
-func (s *FallbackStore) RunFallbackTx(ctx context.Context, eventKey string, fn func(services.FallbackTx) (bool, error)) (bool, error) {
+func (s *FallbackStore) RunFallbackTx(ctx context.Context, eventKey domain.EventKey, fn func(services.FallbackTx) (bool, error)) (bool, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return false, fmt.Errorf("begin fallback tx: %w", err)
@@ -44,7 +44,7 @@ type fallbackTx struct {
 	tx pgx.Tx
 }
 
-func (t fallbackTx) FindFallbackEvent(ctx context.Context, eventKey string) (*domain.StoredFallbackEvent, error) {
+func (t fallbackTx) FindFallbackEvent(ctx context.Context, eventKey domain.EventKey) (*domain.StoredFallbackEvent, error) {
 	var e domain.StoredFallbackEvent
 	var rawCode string
 	err := t.tx.QueryRow(ctx,
@@ -77,7 +77,7 @@ func (t fallbackTx) LookupAssetType(ctx context.Context, assetID, siteID string)
 	return assetType, nil
 }
 
-func (t fallbackTx) FindAlertBySourceEvent(ctx context.Context, sourceEventID string) (string, error) {
+func (t fallbackTx) FindAlertBySourceEvent(ctx context.Context, sourceEventID domain.EventKey) (string, error) {
 	var alertID string
 	err := t.tx.QueryRow(ctx,
 		`SELECT alert_id::text FROM alerts WHERE source_event_id = $1 FOR UPDATE`,
@@ -138,7 +138,7 @@ func (t fallbackTx) InsertFallbackEvent(ctx context.Context, cmd domain.InsertFa
 	return nil
 }
 
-func (t fallbackTx) InsertReceipt(ctx context.Context, eventKey string, receipt domain.SMSReceipt, pricing domain.SMSPricing) (bool, error) {
+func (t fallbackTx) InsertReceipt(ctx context.Context, eventKey domain.EventKey, receipt domain.SMSReceipt, pricing domain.SMSPricing) (bool, error) {
 	result, err := t.tx.Exec(ctx, `
 		INSERT INTO sms_fallback_receipts(provider_message_id, event_key, gateway_id, sender, recipient, received_at, outbound_cost_minor, inbound_cost_minor, currency)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (provider_message_id) DO NOTHING`,
@@ -150,8 +150,8 @@ func (t fallbackTx) InsertReceipt(ctx context.Context, eventKey string, receipt 
 	return result.RowsAffected() > 0, nil
 }
 
-func (t fallbackTx) FindReceiptEventKey(ctx context.Context, providerMessageID string) (string, error) {
-	var eventKey string
+func (t fallbackTx) FindReceiptEventKey(ctx context.Context, providerMessageID string) (domain.EventKey, error) {
+	var eventKey domain.EventKey
 	err := t.tx.QueryRow(ctx,
 		`SELECT event_key FROM sms_fallback_receipts WHERE provider_message_id = $1`,
 		providerMessageID).Scan(&eventKey)

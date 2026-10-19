@@ -21,12 +21,14 @@ func NewKafkaSiteHealthStore(client *kgo.Client, topic string, timeout time.Dura
 
 func (s *KafkaSiteHealthStore) RecordContact(ctx context.Context, report SiteHealthReport) error {
 	value, err := json.Marshal(siteHealthEvent{
-		SiteID:             report.SiteID,
-		GatewayID:          report.GatewayID,
-		ContactAt:          report.ContactAt,
-		LastEventTimestamp: report.LastEventTimestamp,
-		QueueDepth:         report.QueueDepth,
-		OldestPendingAt:    report.OldestPendingAt,
+		SiteID:               report.SiteID,
+		GatewayID:            report.GatewayID,
+		ContactAt:            report.ContactAt,
+		LastEventTimestamp:   report.LastEventTimestamp,
+		QueueDepth:           report.QueueDepth,
+		OldestPendingAt:      report.OldestPendingAt,
+		LastSuccessfulSyncAt: report.LastSuccessfulSyncAt,
+		LastFailedSyncReason: report.LastFailedSyncReason,
 	})
 	if err != nil {
 		return fmt.Errorf("marshal site health: %w", err)
@@ -45,10 +47,12 @@ func (s *KafkaSiteHealthStore) RecordContact(ctx context.Context, report SiteHea
 }
 
 type siteHealthEvent struct {
-	SiteID             string     `json:"site_id"`
-	GatewayID          string     `json:"gateway_id"`
-	ContactAt          time.Time  `json:"contact_at"`
-	LastEventTimestamp *time.Time `json:"last_event_timestamp,omitempty"`
-	QueueDepth         int64      `json:"queue_depth"`
-	OldestPendingAt    *time.Time `json:"oldest_pending_at,omitempty"`
+	SiteID               string     `json:"site_id"`
+	GatewayID            string     `json:"gateway_id"`
+	ContactAt            time.Time  `json:"contact_at"`
+	LastEventTimestamp   *time.Time `json:"last_event_timestamp,omitempty"`
+	QueueDepth           int64      `json:"queue_depth"`
+	OldestPendingAt      *time.Time `json:"oldest_pending_at,omitempty"`
+	LastSuccessfulSyncAt *time.Time `json:"last_successful_sync_at,omitempty"`
+	LastFailedSyncReason string     `json:"last_failed_sync_reason,omitempty"`
 }

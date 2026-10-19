@@ -157,6 +157,8 @@ contact is recent, it is `delayed` when the latest measurement is older than
   "queue_depth": 0,
   "oldest_pending_at": null,
   "oldest_pending_record_age_seconds": null,
+  "last_successful_sync_at": "2026-09-03T01:58:35.535397+01:00",
+  "last_failed_sync_reason": null,
   "queue_growing": false,
   "open_alerts": { "total": 1, "critical": 1, "warning": 0, "info": 0 }
 }
