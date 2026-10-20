@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"edge-agent-go/internal/fallback"
 )
 
 const (
@@ -42,6 +44,7 @@ type SMSConfig struct {
 	HourlyLimit      int
 	DailyLimit       int
 	RetryInterval    time.Duration
+	SendTimeout      time.Duration
 	BatteryOverheatC float64
 	Debounce         time.Duration
 }
@@ -164,6 +167,10 @@ func FromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	smsSendTimeout, err := envDuration("EDGE_SMS_SEND_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
 	smsDebounce, err := envDuration("EDGE_SMS_DEBOUNCE", 30*time.Second)
 	if err != nil {
 		return Config{}, err
@@ -232,7 +239,7 @@ func FromEnv() (Config, error) {
 			Enabled: smsEnabled, Destination: envString("EDGE_SMS_DESTINATION", ""), ModemID: envString("EDGE_SMS_MODEM_ID", "0"),
 			PollInterval: smsPollInterval, FailureThreshold: smsFailureThreshold, OfflineAfter: smsOfflineAfter,
 			MaxAttempts: smsMaxAttempts, HourlyLimit: smsHourlyLimit, DailyLimit: smsDailyLimit,
-			RetryInterval: smsRetryInterval, BatteryOverheatC: batteryOverheatC, Debounce: smsDebounce,
+			RetryInterval: smsRetryInterval, SendTimeout: smsSendTimeout, BatteryOverheatC: batteryOverheatC, Debounce: smsDebounce,
 		},
 		HealthAddr: envString("EDGE_HEALTH_ADDR", defaultHealthAddr),
 	}
@@ -250,6 +257,14 @@ func FromEnv() (Config, error) {
 	}
 	if cfg.SMS.FailureThreshold < 1 || cfg.SMS.MaxAttempts < 1 || cfg.SMS.HourlyLimit < 1 || cfg.SMS.DailyLimit < 1 || cfg.SMS.BatteryOverheatC <= 0 || cfg.SMS.Debounce <= 0 {
 		return Config{}, fmt.Errorf("SMS fallback thresholds and limits must be positive")
+	}
+	if cfg.SMS.MaxAttempts > fallback.MaxIncidentAttempts {
+		return Config{}, fmt.Errorf("EDGE_SMS_MAX_ATTEMPTS must not exceed %d", fallback.MaxIncidentAttempts)
+	}
+	minimumRetryInterval := fallback.MinimumRetryInterval(cfg.SMS.MaxAttempts)
+	if cfg.SMS.RetryInterval < minimumRetryInterval {
+		return Config{}, fmt.Errorf("EDGE_SMS_RETRY_INTERVAL must be at least %s for %d attempts over %s",
+			minimumRetryInterval, cfg.SMS.MaxAttempts, fallback.IncidentAttemptWindow)
 	}
 
 	return cfg, nil

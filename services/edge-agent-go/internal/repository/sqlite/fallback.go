@@ -233,19 +233,23 @@ func (s *Store) RecordFallbackAttempt(ctx context.Context, result fallback.Attem
 		}
 		return fmt.Errorf("fallback attempt reservation not found for %s", result.EventKey)
 	}
-	var nextAttempt any
-	if result.NextAttemptAt != nil {
-		nextAttempt = result.NextAttemptAt.UnixMilli()
-	}
 	var sentAt any
 	if result.Succeeded {
 		sentAt = result.AttemptedAt.UnixMilli()
 	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE fallback_incidents SET sms_attempt_count = sms_attempt_count + 1,
-			next_sms_attempt_at_ms = ?, sms_sent_at_ms = COALESCE(sms_sent_at_ms, ?), last_error = ?
-		WHERE event_key = ?`, nextAttempt, sentAt, result.FailureReason, result.EventKey); err != nil {
-		return fmt.Errorf("update fallback attempt: %w", err)
+	if result.NextAttemptAt != nil {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE fallback_incidents SET next_sms_attempt_at_ms = ?,
+				sms_sent_at_ms = COALESCE(sms_sent_at_ms, ?), last_error = ?
+			WHERE event_key = ?`, result.NextAttemptAt.UnixMilli(), sentAt, result.FailureReason, result.EventKey); err != nil {
+			return fmt.Errorf("update fallback attempt: %w", err)
+		}
+	} else {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE fallback_incidents SET sms_sent_at_ms = COALESCE(sms_sent_at_ms, ?), last_error = ?
+			WHERE event_key = ?`, sentAt, result.FailureReason, result.EventKey); err != nil {
+			return fmt.Errorf("update fallback attempt: %w", err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit fallback attempt: %w", err)
@@ -253,11 +257,29 @@ func (s *Store) RecordFallbackAttempt(ctx context.Context, result fallback.Attem
 	return nil
 }
 
-func (s *Store) ReserveFallbackAttempt(ctx context.Context, eventKey fallback.EventKey, attemptedAt time.Time) error {
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO fallback_attempts(event_key, attempted_at_ms) VALUES (?, ?)`, eventKey, attemptedAt.UnixMilli())
+func (s *Store) ReserveFallbackAttempt(ctx context.Context, eventKey fallback.EventKey, attemptedAt time.Time, retryAfter time.Duration) error {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		return fmt.Errorf("begin reserve fallback attempt: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO fallback_attempts(event_key, attempted_at_ms) VALUES (?, ?)`, eventKey, attemptedAt.UnixMilli()); err != nil {
 		return fmt.Errorf("reserve fallback attempt: %w", err)
+	}
+	nextAttemptAt := attemptedAt.Add(retryAfter).UnixMilli()
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE fallback_incidents
+		SET sms_attempt_count = sms_attempt_count + 1,
+			next_sms_attempt_at_ms = CASE
+				WHEN next_sms_attempt_at_ms IS NULL OR next_sms_attempt_at_ms < ? THEN ?
+				ELSE next_sms_attempt_at_ms
+			END
+		WHERE event_key = ?`, nextAttemptAt, nextAttemptAt, eventKey); err != nil {
+		return fmt.Errorf("set fallback retry delay: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit reserve fallback attempt: %w", err)
 	}
 	return nil
 }

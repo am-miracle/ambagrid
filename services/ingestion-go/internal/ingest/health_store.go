@@ -10,9 +10,13 @@ import (
 )
 
 type KafkaSiteHealthStore struct {
-	client  *kgo.Client
+	client  kafkaSyncProducer
 	topic   string
 	timeout time.Duration
+}
+
+type kafkaSyncProducer interface {
+	ProduceSync(context.Context, ...*kgo.Record) kgo.ProduceResults
 }
 
 func NewKafkaSiteHealthStore(client *kgo.Client, topic string, timeout time.Duration) *KafkaSiteHealthStore {

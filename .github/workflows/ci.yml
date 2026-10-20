@@ -10,6 +10,20 @@ jobs:
   go:
     name: Go
     runs-on: ubuntu-latest
+    services:
+      database:
+        image: timescale/timescaledb:2.17.2-pg15
+        env:
+          POSTGRES_USER: ambagrid_admin
+          POSTGRES_PASSWORD: ambagrid_secure_pass
+          POSTGRES_DB: ambagrid_operational
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ambagrid_admin -d ambagrid_operational"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -40,8 +54,18 @@ jobs:
         working-directory: services/api-go
         run: go vet ./...
 
+      - name: Apply database migrations for API integration tests
+        env:
+          DATABASE_URL: postgres://ambagrid_admin:ambagrid_secure_pass@localhost:5432/ambagrid_operational?sslmode=disable
+        run: |
+          for migration in services/engine-rust/migrations/*.sql; do
+            psql "$DATABASE_URL" --set ON_ERROR_STOP=on --file "$migration"
+          done
+
       - name: Test API service
         working-directory: services/api-go
+        env:
+          DATABASE_URL: postgres://ambagrid_admin:ambagrid_secure_pass@localhost:5432/ambagrid_operational?sslmode=disable
         run: go test -race ./...
 
       - name: Check ingestion formatting

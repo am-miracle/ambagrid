@@ -10,9 +10,10 @@ import (
 )
 
 type fakeStore struct {
-	candidates []fallback.Candidate
-	attempts   []fallback.AttemptResult
-	reserveErr error
+	candidates    []fallback.Candidate
+	attempts      []fallback.AttemptResult
+	reserveErr    error
+	reservedDelay time.Duration
 }
 
 func (s *fakeStore) FallbackCandidates(context.Context, time.Time) ([]fallback.Candidate, error) {
@@ -24,7 +25,8 @@ func (s *fakeStore) RecordFallbackAttempt(_ context.Context, result fallback.Att
 	return nil
 }
 
-func (s *fakeStore) ReserveFallbackAttempt(context.Context, fallback.EventKey, time.Time) error {
+func (s *fakeStore) ReserveFallbackAttempt(_ context.Context, _ fallback.EventKey, _ time.Time, retryAfter time.Duration) error {
+	s.reservedDelay = retryAfter
 	return s.reserveErr
 }
 
@@ -49,7 +51,7 @@ func TestCoordinatorSendsEligibleCriticalIncident(t *testing.T) {
 	coordinator := fallback.NewCoordinator(fallback.Config{
 		Destination: "+2348000000000", FailureThreshold: 3,
 		OfflineAfter: 2 * time.Minute, MaxAttempts: 3,
-		HourlyLimit: 6, DailyLimit: 20, RetryInterval: 5 * time.Minute,
+		HourlyLimit: 6, DailyLimit: 20, RetryInterval: 7*time.Minute + 30*time.Second,
 	}, store, sender)
 	coordinator.SetClock(func() time.Time { return now })
 
@@ -77,7 +79,7 @@ func TestCoordinatorWaitsForConnectivityThreshold(t *testing.T) {
 	coordinator := fallback.NewCoordinator(fallback.Config{
 		Destination: "+2348000000000", FailureThreshold: 3,
 		OfflineAfter: 2 * time.Minute, MaxAttempts: 3,
-		HourlyLimit: 6, DailyLimit: 20, RetryInterval: 5 * time.Minute,
+		HourlyLimit: 6, DailyLimit: 20, RetryInterval: 7*time.Minute + 30*time.Second,
 	}, store, sender)
 	coordinator.SetClock(func() time.Time { return now })
 
@@ -120,6 +122,69 @@ func TestCoordinatorDoesNotSendWhenAttemptCannotBeReserved(t *testing.T) {
 	}
 	if len(sender.messages) != 0 {
 		t.Fatalf("messages = %v, want none", sender.messages)
+	}
+}
+
+func TestCoordinatorPassesRetryIntervalToReservation(t *testing.T) {
+	now := time.Unix(1730000200, 0).UTC()
+	store := &fakeStore{candidates: []fallback.Candidate{{
+		Event:    fallback.Event{SiteID: "site-01", AssetID: "inv-01", Sequence: 1, Code: fallback.InverterFailure, OccurredAt: now},
+		OpenedAt: now, UploadFailures: 3,
+	}}}
+	sender := &fakeSender{}
+	retryInterval := 7*time.Minute + 30*time.Second
+	coordinator := fallback.NewCoordinator(fallback.Config{
+		Destination: "+2348000000000", FailureThreshold: 3, MaxAttempts: 3,
+		HourlyLimit: 6, DailyLimit: 20, RetryInterval: retryInterval,
+	}, store, sender)
+	coordinator.SetClock(func() time.Time { return now })
+	if err := coordinator.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if store.reservedDelay != retryInterval {
+		t.Fatalf("reserved delay = %v, want %v", store.reservedDelay, retryInterval)
+	}
+}
+
+func TestCoordinatorEnforcesFifteenMinuteAttemptWindow(t *testing.T) {
+	now := time.Unix(1730000200, 0).UTC()
+	store := &fakeStore{candidates: []fallback.Candidate{{
+		Event:    fallback.Event{SiteID: "site-01", AssetID: "inv-01", Sequence: 1, Code: fallback.InverterFailure, OccurredAt: now},
+		OpenedAt: now, UploadFailures: 3,
+	}}}
+	coordinator := fallback.NewCoordinator(fallback.Config{
+		Destination: "+2348000000000", FailureThreshold: 3, MaxAttempts: 3,
+		HourlyLimit: 6, DailyLimit: 20, RetryInterval: time.Minute,
+	}, store, &fakeSender{})
+	coordinator.SetClock(func() time.Time { return now })
+	if err := coordinator.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := 7*time.Minute + 30*time.Second
+	if store.reservedDelay != want {
+		t.Fatalf("reserved delay = %v, want enforced minimum %v", store.reservedDelay, want)
+	}
+}
+
+func TestCoordinatorSkipsCandidateWithPendingRetryDelay(t *testing.T) {
+	now := time.Unix(1730000200, 0).UTC()
+	retryAt := now.Add(5 * time.Minute)
+	store := &fakeStore{candidates: []fallback.Candidate{{
+		Event:    fallback.Event{SiteID: "site-01", AssetID: "inv-01", Sequence: 1, Code: fallback.InverterFailure, OccurredAt: now},
+		OpenedAt: now, UploadFailures: 3, Attempts: 1,
+		NextAttemptAt: &retryAt,
+	}}}
+	sender := &fakeSender{}
+	coordinator := fallback.NewCoordinator(fallback.Config{
+		Destination: "+2348000000000", FailureThreshold: 3, MaxAttempts: 3,
+		HourlyLimit: 6, DailyLimit: 20, RetryInterval: 7*time.Minute + 30*time.Second,
+	}, store, sender)
+	coordinator.SetClock(func() time.Time { return now })
+	if err := coordinator.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.messages) != 0 {
+		t.Fatalf("sent %d messages, want none while retry delay is active", len(sender.messages))
 	}
 }
 

@@ -3,10 +3,13 @@ package domain
 import "time"
 
 // Reading is a vendor-neutral sample produced by a hardware adapter.
+// Payload holds the canonical AmbaGrid JSON that the adapter produced;
+// the collector preserves it unchanged in the queued event.
 type Reading struct {
 	DeviceID            string
 	AssetType           AssetType
 	TakenAt             time.Time
+	Payload             []byte
 	Metrics             *ElectricalMetrics
 	InternalTemperature float64
 	RelayClosed         bool
@@ -24,17 +27,4 @@ type ElectricalMetrics struct {
 	ActivePower *float64 `json:"active_power,omitempty"`
 	Frequency   *float64 `json:"frequency,omitempty"`
 	TotalKWh    *float64 `json:"total_kwh,omitempty"`
-}
-
-// TelemetryPayload is the normalized JSON contract accepted by ingestion-go.
-type TelemetryPayload struct {
-	DeviceID            string             `json:"device_id"`
-	DeviceType          string             `json:"device_type"`
-	TimestampUTC        int64              `json:"timestamp_utc"`
-	SiteID              string             `json:"site_id"`
-	Metrics             *ElectricalMetrics `json:"metrics,omitempty"`
-	InternalTemperature float64            `json:"internal_temperature"`
-	RelayClosed         bool               `json:"relay_closed"`
-	BatterySOCPct       float64            `json:"battery_soc_pct"`
-	SolarIrradiance     float64            `json:"solar_irradiance"`
 }

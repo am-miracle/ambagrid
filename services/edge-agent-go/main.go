@@ -76,7 +76,7 @@ func run() (runErr error) {
 			Interval:         cfg.Collector.Interval,
 			BatteryOverheatC: cfg.SMS.BatteryOverheatC,
 			FallbackDebounce: cfg.SMS.Debounce,
-		}, durableQueue, simulator.New())
+		}, durableQueue, simulator.New(cfg.Queue.SiteID))
 		if err != nil {
 			return fmt.Errorf("configure telemetry collector: %w", err)
 		}
@@ -93,7 +93,7 @@ func run() (runErr error) {
 			FailureThreshold: cfg.SMS.FailureThreshold, OfflineAfter: cfg.SMS.OfflineAfter,
 			MaxAttempts: cfg.SMS.MaxAttempts, HourlyLimit: cfg.SMS.HourlyLimit,
 			DailyLimit: cfg.SMS.DailyLimit, RetryInterval: cfg.SMS.RetryInterval,
-		}, durableQueue, fallback.NewModemManagerSender(cfg.SMS.ModemID, nil))
+		}, durableQueue, fallback.NewModemManagerSender(cfg.SMS.ModemID, nil, cfg.SMS.SendTimeout))
 		workerWG.Add(1)
 		go func() {
 			defer workerWG.Done()

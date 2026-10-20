@@ -1,7 +1,6 @@
 package collector
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -20,25 +19,14 @@ func normalize(siteID, region string, reading domain.Reading, receivedAt time.Ti
 	if reading.TakenAt.IsZero() {
 		return domain.Event{}, errors.New("reading timestamp is required")
 	}
-	payload, err := json.Marshal(domain.TelemetryPayload{
-		DeviceID:            reading.DeviceID,
-		DeviceType:          reading.AssetType.DeviceTypeName(),
-		TimestampUTC:        reading.TakenAt.UTC().Unix(),
-		SiteID:              siteID,
-		Metrics:             reading.Metrics,
-		InternalTemperature: reading.InternalTemperature,
-		RelayClosed:         reading.RelayClosed,
-		BatterySOCPct:       reading.BatterySOCPct,
-		SolarIrradiance:     reading.SolarIrradiance,
-	})
-	if err != nil {
-		return domain.Event{}, fmt.Errorf("encode normalized telemetry: %w", err)
+	if len(reading.Payload) == 0 {
+		return domain.Event{}, errors.New("reading payload must not be empty")
 	}
 	return domain.Event{
 		DeviceID:       reading.DeviceID,
 		AssetType:      reading.AssetType,
 		MQTTTopic:      fmt.Sprintf("%s/%s/%s/%s/telemetry", region, siteID, reading.AssetType.TopicSegment(), reading.DeviceID),
-		Payload:        payload,
+		Payload:        reading.Payload,
 		Priority:       domain.PriorityNormal,
 		EventTimestamp: reading.TakenAt.UTC(),
 		EdgeReceivedAt: receivedAt.UTC(),

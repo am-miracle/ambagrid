@@ -39,6 +39,7 @@ func Open(ctx context.Context, cfg Config) (*Store, error) {
 		"_journal_mode": {"WAL"},
 		"_synchronous":  {"FULL"},
 		"_pragma": {
+			"fullfsync(ON)",
 			"trusted_schema(OFF)",
 			fmt.Sprintf("journal_size_limit(%d)", walBudget(cfg.MaxStorageBytes)),
 			fmt.Sprintf("wal_autocheckpoint(%d)", max(int64(1), walBudget(cfg.MaxStorageBytes)/4096)),

@@ -106,10 +106,7 @@ func (u *Uploader) uploadBatch(ctx context.Context) (int, error) {
 	uploadedAt := u.now().UTC()
 
 	// An empty batch is still sent as a gateway heartbeat.
-	uploadCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	result, err := u.client.Upload(uploadCtx, records, uploadedAt, HealthReport{
+	result, err := u.client.Upload(ctx, records, uploadedAt, HealthReport{
 		GatewayID:            u.cfg.GatewayID,
 		QueueDepth:           stats.Depth,
 		OldestPendingAt:      stats.OldestPendingAt,

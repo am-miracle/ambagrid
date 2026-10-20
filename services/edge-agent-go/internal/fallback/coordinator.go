@@ -8,6 +8,18 @@ import (
 	"time"
 )
 
+const (
+	MaxIncidentAttempts   = 3
+	IncidentAttemptWindow = 15 * time.Minute
+)
+
+func MinimumRetryInterval(maxAttempts int) time.Duration {
+	if maxAttempts <= 1 {
+		return 0
+	}
+	return IncidentAttemptWindow / time.Duration(MaxIncidentAttempts-1)
+}
+
 type Candidate struct {
 	Event
 	OpenedAt          time.Time
@@ -29,7 +41,7 @@ type AttemptResult struct {
 
 type Store interface {
 	FallbackCandidates(ctx context.Context, now time.Time) ([]Candidate, error)
-	ReserveFallbackAttempt(ctx context.Context, eventKey EventKey, attemptedAt time.Time) error
+	ReserveFallbackAttempt(ctx context.Context, eventKey EventKey, attemptedAt time.Time, retryAfter time.Duration) error
 	RecordFallbackAttempt(ctx context.Context, result AttemptResult) error
 }
 
@@ -58,6 +70,12 @@ type Coordinator struct {
 func NewCoordinator(cfg Config, store Store, sender Sender) *Coordinator {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = 5 * time.Second
+	}
+	if cfg.MaxAttempts <= 0 || cfg.MaxAttempts > MaxIncidentAttempts {
+		cfg.MaxAttempts = MaxIncidentAttempts
+	}
+	if minimum := MinimumRetryInterval(cfg.MaxAttempts); cfg.RetryInterval < minimum {
+		cfg.RetryInterval = minimum
 	}
 	return &Coordinator{cfg: cfg, store: store, sender: sender, now: time.Now}
 }
@@ -103,7 +121,7 @@ func (c *Coordinator) RunOnce(ctx context.Context) error {
 			resultErr = errors.Join(resultErr, err)
 			continue
 		}
-		if err := c.store.ReserveFallbackAttempt(ctx, candidate.EventKey(), now); err != nil {
+		if err := c.store.ReserveFallbackAttempt(ctx, candidate.EventKey(), now, c.cfg.RetryInterval); err != nil {
 			resultErr = errors.Join(resultErr, fmt.Errorf("reserve %s: %w", candidate.EventKey(), err))
 			continue
 		}

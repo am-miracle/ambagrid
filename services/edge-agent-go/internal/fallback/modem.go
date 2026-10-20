@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 )
 
 type CommandRunner interface {
@@ -19,16 +20,22 @@ func (execRunner) Run(ctx context.Context, name string, args ...string) ([]byte,
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
+const DefaultSendTimeout = 30 * time.Second
+
 type ModemManagerSender struct {
-	modem  string
-	runner CommandRunner
+	modem       string
+	runner      CommandRunner
+	sendTimeout time.Duration
 }
 
-func NewModemManagerSender(modem string, runner CommandRunner) *ModemManagerSender {
+func NewModemManagerSender(modem string, runner CommandRunner, timeout time.Duration) *ModemManagerSender {
 	if runner == nil {
 		runner = execRunner{}
 	}
-	return &ModemManagerSender{modem: modem, runner: runner}
+	if timeout <= 0 {
+		timeout = DefaultSendTimeout
+	}
+	return &ModemManagerSender{modem: modem, runner: runner, sendTimeout: timeout}
 }
 
 func (s *ModemManagerSender) Send(ctx context.Context, destination, message string) error {
@@ -38,6 +45,9 @@ func (s *ModemManagerSender) Send(ctx context.Context, destination, message stri
 	if strings.ContainsAny(destination, ",=") || strings.Contains(message, ",") {
 		return errors.New("destination or message contains an unsupported modem separator")
 	}
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithTimeout(ctx, s.sendTimeout)
+	defer cancel()
 	output, err := s.runner.Run(ctx, "mmcli", "-m", s.modem,
 		"--messaging-create-sms=text="+message+",number="+destination)
 	if err != nil {

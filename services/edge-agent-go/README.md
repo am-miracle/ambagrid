@@ -13,7 +13,7 @@ services:
 
 - `internal/config` owns environment configuration.
 - `internal/adapter/simulator` simulates meter, battery, and inverter hardware.
-- `internal/collector` normalizes adapter readings and persists them.
+- `internal/collector` validates, envelopes, and persists adapter readings without reshaping their payloads.
 - `internal/domain` owns queue events, records, state, statistics, and errors.
 - `internal/repository/sqlite` owns the durable adapter, with schema setup,
   queries, mutations, and capacity policy in separate files.
@@ -81,7 +81,8 @@ gateways default to a 256 MiB filesystem reserve.
 | `EDGE_SMS_MAX_ATTEMPTS` | `3` | Maximum SMS attempts for one active incident. |
 | `EDGE_SMS_HOURLY_LIMIT` | `6` | Site-wide attempt limit over one hour. |
 | `EDGE_SMS_DAILY_LIMIT` | `20` | Site-wide attempt limit over 24 hours. |
-| `EDGE_SMS_RETRY_INTERVAL` | `5m` | Delay after a failed modem send. |
+| `EDGE_SMS_RETRY_INTERVAL` | `7m30s` | Minimum spacing between attempts, spreading three attempts over 15 minutes. |
+| `EDGE_SMS_SEND_TIMEOUT` | `30s` | Maximum time allowed for one modem SMS create-and-send operation. |
 | `EDGE_SMS_BATTERY_OVERHEAT_C` | `55` | Battery temperature that opens a critical fallback incident. |
 | `EDGE_SMS_DEBOUNCE` | `30s` | Time inverter failure, tamper, and site-outage signals must remain active before opening an incident. |
 

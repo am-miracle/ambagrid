@@ -65,7 +65,8 @@ quickly. Normal upload and eventual replay continue after an SMS attempt;
 acceptance by the modem does not acknowledge the queued event.
 
 Fallback state and attempt counts must be durable across edge-agent restarts.
-For one incident, the agent makes at most 3 SMS attempts over 15 minutes. It
+For one incident, the agent makes at most 3 SMS attempts over 15 minutes, with
+attempts spaced at least 7 minutes 30 seconds apart. It
 also enforces a default site budget of 6 attempts per hour and 20 per day.
 Rate-limited incidents remain in the normal replay queue and are reported in
 local health metrics.

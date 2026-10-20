@@ -43,6 +43,9 @@ func TestFromEnvBuildsEdgeQueueConfiguration(t *testing.T) {
 	if cfg.SMS.Debounce != 45*time.Second {
 		t.Fatalf("SMS debounce = %v, want 45s", cfg.SMS.Debounce)
 	}
+	if cfg.SMS.RetryInterval != 7*time.Minute+30*time.Second {
+		t.Fatalf("SMS retry interval = %v, want 7m30s", cfg.SMS.RetryInterval)
+	}
 }
 
 func TestFromEnvRequiresStableEdgeIdentity(t *testing.T) {
@@ -60,5 +63,26 @@ func TestFromEnvRejectsNonFiniteBatteryThreshold(t *testing.T) {
 	t.Setenv("EDGE_SMS_BATTERY_OVERHEAT_C", "NaN")
 	if _, err := config.FromEnv(); err == nil {
 		t.Fatal("FromEnv() accepted NaN battery threshold")
+	}
+}
+
+func TestFromEnvRejectsSMSAttemptPolicyOutsideFifteenMinuteWindow(t *testing.T) {
+	t.Setenv("EDGE_SITE_ID", "site-01")
+	t.Setenv("EDGE_GATEWAY_ID", "gateway-01")
+	t.Setenv("EDGE_SMS_MAX_ATTEMPTS", "3")
+	t.Setenv("EDGE_SMS_RETRY_INTERVAL", "7m29s")
+	if _, err := config.FromEnv(); err == nil {
+		t.Fatal("FromEnv() accepted SMS retries that exhaust three attempts before 15 minutes")
+	}
+
+	t.Setenv("EDGE_SMS_RETRY_INTERVAL", "7m30s")
+	t.Setenv("EDGE_SMS_MAX_ATTEMPTS", "2")
+	if _, err := config.FromEnv(); err != nil {
+		t.Fatalf("FromEnv() rejected a lower attempt limit with valid spacing: %v", err)
+	}
+
+	t.Setenv("EDGE_SMS_MAX_ATTEMPTS", "4")
+	if _, err := config.FromEnv(); err == nil {
+		t.Fatal("FromEnv() accepted more than three SMS attempts per incident")
 	}
 }

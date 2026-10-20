@@ -34,7 +34,7 @@ func TestSimulatedReadingsAreNormalizedAndQueued(t *testing.T) {
 
 	c, err := collector.New(collector.Config{
 		SiteID: "ng-kaji-01", Region: "africa-west", Interval: time.Second,
-	}, store, simulator.New())
+	}, store, simulator.New("ng-kaji-01"))
 	if err != nil {
 		t.Fatalf("create collector: %v", err)
 	}
@@ -63,17 +63,57 @@ func TestSimulatedReadingsAreNormalizedAndQueued(t *testing.T) {
 		if record.EventTimestamp.IsZero() || record.EdgeReceivedAt.IsZero() {
 			t.Errorf("record %d timestamps were not captured", i)
 		}
-		var payload domain.TelemetryPayload
+		var payload map[string]interface{}
 		if err := json.Unmarshal(record.Payload, &payload); err != nil {
 			t.Errorf("decode record %d payload: %v", i, err)
 			continue
 		}
-		if payload.SiteID != record.SiteID || payload.DeviceID != record.DeviceID || payload.TimestampUTC != record.EventTimestamp.Unix() {
-			t.Errorf("record %d payload identity/timestamp does not match envelope: %#v", i, payload)
+		if payload["site_id"] != record.SiteID || payload["device_id"] != record.DeviceID {
+			t.Errorf("record %d payload identity does not match envelope", i)
+		}
+		if int64(payload["timestamp_utc"].(float64)) != record.EventTimestamp.Unix() {
+			t.Errorf("record %d payload timestamp does not match envelope", i)
 		}
 	}
 	if records[0].MQTTTopic != "africa-west/ng-kaji-01/smartmeter/meter-01/telemetry" {
 		t.Fatalf("meter topic = %q", records[0].MQTTTopic)
+	}
+}
+
+func TestAdapterPayloadBytesArePreservedExactly(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := queuesqlite.Open(ctx, queuesqlite.Config{
+		Path: filepath.Join(t.TempDir(), "queue.db"), SiteID: "site-01", GatewayID: "gateway-01",
+		MaxStorageBytes: 8 << 20, WarningPercent: 70, CriticalReservePercent: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	now := time.Unix(1730000000, 0).UTC()
+	original := []byte(`{  "device_id":"meter-01", "unknown_field": true, "timestamp_utc": 1730000000,  "site_id":"site-01"}`)
+	source := fixedSource{readings: []domain.Reading{{
+		DeviceID: "meter-01", AssetType: domain.AssetSmartMeter, TakenAt: now,
+		Payload: original,
+	}}}
+	c, err := collector.New(collector.Config{SiteID: "site-01", Region: "africa-west", Interval: time.Second}, store, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.CollectOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	records, err := store.Ready(ctx, 1, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+	if string(records[0].Payload) != string(original) {
+		t.Fatalf("payload was reshaped:\n  got:  %s\n  want: %s", records[0].Payload, original)
 	}
 }
 
@@ -90,6 +130,7 @@ func TestBatteryOverheatIsQueuedAsCriticalFallback(t *testing.T) {
 	now := time.Unix(1730000000, 0).UTC()
 	source := fixedSource{readings: []domain.Reading{{
 		DeviceID: "batt-01", AssetType: domain.AssetBatteryBMS, TakenAt: now, InternalTemperature: 68.2,
+		Payload: testPayload("batt-01", "ng-kaji-01", now),
 	}}}
 	c, err := collector.New(collector.Config{SiteID: "ng-kaji-01", Region: "africa-west", Interval: time.Second, BatteryOverheatC: 55}, store, source)
 	if err != nil {
@@ -127,6 +168,7 @@ func TestInverterFailureRequiresLocalDebounce(t *testing.T) {
 	now := time.Unix(1730000000, 0).UTC()
 	source := fixedSource{readings: []domain.Reading{{
 		DeviceID: "inv-01", AssetType: domain.AssetSolarInverter, TakenAt: now, InverterFailed: true,
+		Payload: testPayload("inv-01", "site-01", now),
 	}}}
 	c, err := collector.New(collector.Config{SiteID: "site-01", Region: "africa-west", Interval: time.Second}, store, source)
 	if err != nil {
@@ -188,6 +230,7 @@ func TestInverterHardFaultBypassesDebounce(t *testing.T) {
 	now := time.Unix(1730000000, 0).UTC()
 	source := fixedSource{readings: []domain.Reading{{
 		DeviceID: "inv-01", AssetType: domain.AssetSolarInverter, TakenAt: now, InverterHardFault: true,
+		Payload: testPayload("inv-01", "site-01", now),
 	}}}
 	c, err := collector.New(collector.Config{SiteID: "site-01", Region: "africa-west", Interval: time.Second}, store, source)
 	if err != nil {
@@ -213,7 +256,7 @@ func TestIndependentCriticalConditionsGetIndependentSequences(t *testing.T) {
 	}
 	defer store.Close()
 	now := time.Unix(1730000000, 0).UTC()
-	source := fixedSource{readings: []domain.Reading{{DeviceID: "inv-01", AssetType: domain.AssetSolarInverter, TakenAt: now, InverterFailed: true, TamperDetected: true}}}
+	source := fixedSource{readings: []domain.Reading{{DeviceID: "inv-01", AssetType: domain.AssetSolarInverter, TakenAt: now, InverterFailed: true, TamperDetected: true, Payload: testPayload("inv-01", "site-01", now)}}}
 	c, err := collector.New(collector.Config{SiteID: "site-01", Region: "africa-west", Interval: time.Second}, store, source)
 	if err != nil {
 		t.Fatal(err)
@@ -241,6 +284,7 @@ func TestCriticalIncidentIsDurableBeforeRecordBecomesUploadable(t *testing.T) {
 	now := time.Unix(1730000000, 0).UTC()
 	source := fixedSource{readings: []domain.Reading{{
 		DeviceID: "batt-01", AssetType: domain.AssetBatteryBMS, TakenAt: now, InternalTemperature: 68.2,
+		Payload: testPayload("batt-01", "site-01", now),
 	}}}
 	c, err := collector.New(collector.Config{
 		SiteID: "site-01", Region: "africa-west", Interval: time.Second, BatteryOverheatC: 55,
@@ -270,6 +314,7 @@ func TestDebounceStateSurvivesRestart(t *testing.T) {
 	now := time.Unix(1730000000, 0).UTC()
 	source := fixedSource{readings: []domain.Reading{{
 		DeviceID: "inv-01", AssetType: domain.AssetSolarInverter, TakenAt: now, InverterFailed: true,
+		Payload: testPayload("inv-01", "site-01", now),
 	}}}
 
 	c1, err := collector.New(collector.Config{SiteID: "site-01", Region: "africa-west", Interval: time.Second}, store, source)
@@ -321,6 +366,7 @@ func TestCollectionWaitsForDebounceRestore(t *testing.T) {
 	now := time.Unix(1730000000, 0).UTC()
 	source := &mutableSource{readings: []domain.Reading{{
 		DeviceID: "inv-01", AssetType: domain.AssetSolarInverter, TakenAt: now, InverterFailed: true,
+		Payload: testPayload("inv-01", "site-01", now),
 	}}}
 	c, err := collector.New(collector.Config{
 		SiteID: "site-01", Region: "africa-west", Interval: time.Second,
@@ -351,6 +397,7 @@ func TestDebounceDoesNotAdvanceWhenPersistenceFails(t *testing.T) {
 	now := time.Unix(1730000000, 0).UTC()
 	source := &mutableSource{readings: []domain.Reading{{
 		DeviceID: "inv-01", AssetType: domain.AssetSolarInverter, TakenAt: now, InverterFailed: true,
+		Payload: testPayload("inv-01", "site-01", now),
 	}}}
 	c, err := collector.New(collector.Config{
 		SiteID: "site-01", Region: "africa-west", Interval: time.Second, FallbackDebounce: 30 * time.Second,
@@ -388,6 +435,7 @@ func TestDeleteFailureKeepsDebounceStateUntilRecoveryPersists(t *testing.T) {
 	now := time.Unix(1730000000, 0).UTC()
 	source := &mutableSource{readings: []domain.Reading{{
 		DeviceID: "inv-01", AssetType: domain.AssetSolarInverter, TakenAt: now, InverterFailed: true,
+		Payload: testPayload("inv-01", "site-01", now),
 	}}}
 	c, err := collector.New(collector.Config{
 		SiteID: "site-01", Region: "africa-west", Interval: time.Second, FallbackDebounce: 30 * time.Second,
@@ -475,6 +523,13 @@ func (*orderedQueue) Stats(context.Context) (domain.QueueStats, error) {
 type fixedSource struct{ readings []domain.Reading }
 
 func (s fixedSource) Read(context.Context) ([]domain.Reading, error) { return s.readings, nil }
+
+func testPayload(deviceID, siteID string, takenAt time.Time) []byte {
+	p, _ := json.Marshal(map[string]interface{}{
+		"device_id": deviceID, "site_id": siteID, "timestamp_utc": takenAt.UTC().Unix(),
+	})
+	return p
+}
 
 type mutableSource struct {
 	readings []domain.Reading
