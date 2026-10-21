@@ -51,6 +51,7 @@ export interface FleetSite {
 	lastSeenAt: number | null;
 	healthStatus: Site["health_status"];
 	lastContactAt: number | null;
+	lastSmsHeartbeatAt: number | null;
 	queueDepth: number;
 	oldestPendingAt: number | null;
 	lastSuccessfulSyncAt: number | null;
@@ -126,6 +127,9 @@ export function buildSites(
 			healthStatus: site.health_status,
 			lastContactAt: site.last_contact_at
 				? Date.parse(site.last_contact_at)
+				: null,
+			lastSmsHeartbeatAt: site.last_sms_heartbeat_at
+				? Date.parse(site.last_sms_heartbeat_at)
 				: null,
 			queueDepth: site.queue_depth,
 			oldestPendingAt: site.oldest_pending_at

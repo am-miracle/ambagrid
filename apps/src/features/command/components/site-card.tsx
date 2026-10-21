@@ -137,8 +137,12 @@ export function SiteCard({
 					value={formatAge(toIso(site.lastSeenAt), now)}
 				/>
 				<MetaRow
-					label="Gateway contact"
+					label="Data heartbeat"
 					value={formatAge(toIso(site.lastContactAt), now)}
+				/>
+				<MetaRow
+					label="SMS heartbeat"
+					value={formatAge(toIso(site.lastSmsHeartbeatAt), now)}
 				/>
 				<MetaRow
 					label="Health"
