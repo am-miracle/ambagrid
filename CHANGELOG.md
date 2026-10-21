@@ -31,16 +31,19 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **edge:** Persist dedup state and surface fleet health
 - **edge:** Harden durable telemetry sync
 - **edge:** Add SMS liveness heartbeats
+- **ui:** Show SMS heartbeat age on site card
 
 ### Changed
 
 - **alerts:** Move SMS fallback request rules out of the repository
+- **edge:** Drop unused upload retryable flag
 
 ### Documentation
 
 - Add open source project foundations
 - Add ontology and roadmap docs
 - Regenerate changelog
+- Explain edge durability and fallback locking invariants
 
 ### Fixed
 
@@ -52,6 +55,8 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **edge:** Complete replay and fallback hardening
 - **edge:** Close durable fallback integrity gaps
 - **edge:** Complete durable sync integration
+- **edge:** Derive SMS heartbeat deadline from declared interval
+- **engine:** Log site health offset store failures
 
 ### Maintenance
 
