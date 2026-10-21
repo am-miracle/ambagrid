@@ -85,14 +85,18 @@ pub async fn run(
             }
         };
         let Some(payload) = message.payload() else {
-            let _ = consumer.store_offset_from_message(&message);
+            if let Err(err) = consumer.store_offset_from_message(&message) {
+                tracing::error!(error = %err, partition = message.partition(), offset = message.offset(), "store empty site health offset failed");
+            }
             continue;
         };
         let event: SiteHealthEvent = match serde_json::from_slice(payload) {
             Ok(event) => event,
             Err(err) => {
                 tracing::warn!(error = %err, "discarding malformed site health event");
-                let _ = consumer.store_offset_from_message(&message);
+                if let Err(store_err) = consumer.store_offset_from_message(&message) {
+                    tracing::error!(error = %store_err, partition = message.partition(), offset = message.offset(), "store malformed site health offset failed");
+                }
                 continue;
             }
         };
