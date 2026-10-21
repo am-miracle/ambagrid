@@ -98,6 +98,9 @@ CREATE TABLE IF NOT EXISTS heartbeat_attempts (
 ) STRICT;
 `
 
+// Incremental migrations are historical upgrade programs, not fragments of
+// the current schema. Keep their DDL self-contained and immutable even where it
+// duplicates schema above; changing an old step can break existing gateways.
 const migrateV1ToV2 = `
 ALTER TABLE queue_events ADD COLUMN asset_type TEXT NOT NULL DEFAULT 'smart_meter'
     CHECK (asset_type IN ('smart_meter', 'battery_bms', 'solar_inverter'));
@@ -168,6 +171,8 @@ ALTER TABLE edge_sync_state ADD COLUMN replay_mode_active INTEGER NOT NULL DEFAU
     CHECK (replay_mode_active IN (0, 1));
 `
 
+// SQLite cannot extend a column CHECK constraint in place. Rebuild the table
+// to add the abandoned state and rejection counter without weakening either.
 const migrateV7ToV8 = `
 DROP INDEX IF EXISTS queue_events_ready;
 ALTER TABLE queue_events RENAME TO queue_events_v7;

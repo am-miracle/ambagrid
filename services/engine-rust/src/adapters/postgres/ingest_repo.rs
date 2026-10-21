@@ -219,6 +219,8 @@ async fn claim_dedup(
 }
 
 async fn lock_event(tx: &mut Transaction<'_, Postgres>, event_key: &str) -> Result<(), PortError> {
+    // api-go takes the same transaction-scoped lock when SMS arrives first.
+    // Sharing the key closes the race between replay and webhook alert creation.
     query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(event_key)
         .execute(&mut **tx)

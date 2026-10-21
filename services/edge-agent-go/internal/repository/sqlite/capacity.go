@@ -16,10 +16,14 @@ func (s *Store) normalAdmissionLimit() int64 {
 	return s.payloadCapacity() * int64(100-s.cfg.CriticalReservePercent) / 100
 }
 
+// Payloads stop at 65% so the configured total can also contain SQLite pages,
+// indexes, the WAL, shared memory, and the temporary duplication of a checkpoint.
 func (s *Store) payloadCapacity() int64 {
 	return s.cfg.MaxStorageBytes * 65 / 100
 }
 
+// The database and WAL have separate caps below the total filesystem budget;
+// their remaining margin is what makes the pre-write headroom check meaningful.
 func (s *Store) databaseBudget() int64 {
 	return s.cfg.MaxStorageBytes * 80 / 100
 }
@@ -29,6 +33,8 @@ func walBudget(maxStorageBytes int64) int64 {
 }
 
 func (s *Store) writeHeadroom(event domain.Event) int64 {
+	// A WAL checkpoint can briefly require both the appended WAL pages and their
+	// copies in the main database, so admission reserves both sides of the write.
 	recordBytes := int64(len(event.Payload) + len(event.DeviceID) + len(event.MQTTTopic) + 64)
 	return 2 * (recordBytes + 2*s.pageSize)
 }

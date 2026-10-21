@@ -26,6 +26,8 @@ func (s *FallbackStore) RunFallbackTx(ctx context.Context, eventKey domain.Event
 	}
 	defer tx.Rollback(ctx)
 
+	// The engine's normal replay path takes the same key lock. Serializing both
+	// arrival orders prevents SMS and replay from opening separate alerts.
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, eventKey); err != nil {
 		return false, fmt.Errorf("lock fallback event: %w", err)
 	}
@@ -165,6 +167,8 @@ func (t fallbackTx) GetMonthlySMSUsage(ctx context.Context, at time.Time, rental
 	return monthlySMSUsage(ctx, t.tx, at, rentalMinor)
 }
 
+// Both receipt streams consume the same account budget. Add the fixed monthly
+// rental after combining them so it is charged exactly once.
 const monthlySMSUsageSQL = `
 	SELECT COALESCE(SUM(outbound_cost_minor + inbound_cost_minor), 0) + $2
 	FROM (

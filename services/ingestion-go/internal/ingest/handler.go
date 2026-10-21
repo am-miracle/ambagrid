@@ -113,6 +113,9 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
+	// Contact is a property of the authenticated request, independent of whether
+	// individual records are accepted. Persist it first so an empty heartbeat or
+	// a batch containing bad telemetry still proves gateway liveness.
 	if err := h.health.RecordContact(ctx, SiteHealthReport{
 		SiteID: siteID, GatewayID: batch.GatewayID, ContactAt: time.Now().UTC(),
 		LastEventTimestamp: batch.LastEventTimestamp, QueueDepth: batch.QueueDepth,

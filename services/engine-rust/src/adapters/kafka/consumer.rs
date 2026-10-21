@@ -222,6 +222,8 @@ where
 }
 
 fn parse_edge_provenance(message: &impl Message) -> Option<EdgeProvenance> {
+    // Provenance is all-or-nothing: partial headers would mix edge timestamps
+    // with broker-derived identity and make replay analytics misleading.
     let gateway_id = header_value(message, "gateway_id")?;
     let replay = header_value(message, "replay").is_some_and(|v| v == "true");
     let edge_received_at =

@@ -12,6 +12,10 @@ import (
 )
 
 func (s *Store) recoverFallbackIncidents(ctx context.Context) error {
+	// Every reading observed during a condition carries its critical code, but
+	// only the first belongs to the incident. On restart, suppress later rows
+	// already covered by an earlier unresolved incident before reconstructing
+	// any incident whose original insert was interrupted.
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE queue_events AS q SET critical_code = NULL, critical_value = NULL
 		WHERE q.critical_code IS NOT NULL
@@ -237,6 +241,8 @@ func (s *Store) RecordFallbackAttempt(ctx context.Context, result fallback.Attem
 }
 
 func (s *Store) ReserveFallbackAttempt(ctx context.Context, eventKey fallback.EventKey, attemptedAt time.Time, retryAfter time.Duration) error {
+	// Reserve before invoking the modem so a crash after transmission still
+	// consumes an attempt and preserves the retry window across restart.
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin reserve fallback attempt: %w", err)

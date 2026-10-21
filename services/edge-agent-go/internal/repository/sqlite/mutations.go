@@ -378,6 +378,9 @@ WHERE sequence = ? AND status IN (?, ?)`, domain.StatusPendingUpload, rejectionI
 	if updated == 0 {
 		return fmt.Errorf("%w: sequence %d is not pending or uploaded", domain.ErrInvalidTransition, sequence)
 	}
+	// One failed request establishes an outage for the whole queue. Mark both
+	// existing rows and replay_mode_active so later inserts retain provenance
+	// until every outage-era record has been acknowledged.
 	if _, err := tx.ExecContext(ctx, `
 UPDATE queue_events SET replay_required = 1
 WHERE status IN ('persisted', 'pending_upload', 'uploaded')`); err != nil {

@@ -171,6 +171,8 @@ func (u *Uploader) processResponse(ctx context.Context, records []domain.Record,
 }
 
 func (u *Uploader) handleFailure(ctx context.Context, records []domain.Record, uploadErr error) {
+	// Request-level failures retain telemetry indefinitely. Only explicit
+	// per-record rejections consume the bounded abandonment budget below.
 	// Apply failure bookkeeping to the whole attempted batch even if shutdown
 	// arrives while the HTTP request is completing. Partial updates can let later
 	// sequences overtake earlier ones on the next run.

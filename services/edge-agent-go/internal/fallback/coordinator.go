@@ -168,6 +168,8 @@ func (c *Coordinator) eligible(candidate Candidate, now time.Time) bool {
 	}
 	reference := candidate.OpenedAt
 	if candidate.LastUploadSuccess != nil {
+		// OfflineAfter is gateway-wide: a successful upload before this incident
+		// still marks when the current connectivity outage began.
 		reference = *candidate.LastUploadSuccess
 	}
 	return now.Sub(reference) >= c.cfg.OfflineAfter
