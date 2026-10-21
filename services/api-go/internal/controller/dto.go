@@ -377,6 +377,7 @@ type siteDTO struct {
 	LastSuccessfulSyncAt    *time.Time              `json:"last_successful_sync_at"`
 	LastFailedSyncReason    *string                 `json:"last_failed_sync_reason"`
 	QueueGrowing            bool                    `json:"queue_growing"`
+	LastSMSHeartbeatAt      *time.Time              `json:"last_sms_heartbeat_at"`
 	OpenAlerts              alertCountsDTO          `json:"open_alerts"`
 }
 
@@ -416,6 +417,7 @@ func toSiteDTO(site domain.Site) siteDTO {
 		LastSuccessfulSyncAt:    site.LastSuccessfulSyncAt,
 		LastFailedSyncReason:    site.LastFailedSyncReason,
 		QueueGrowing:            site.QueueGrowing,
+		LastSMSHeartbeatAt:      site.LastSMSHeartbeatAt,
 		OpenAlerts: alertCountsDTO{
 			Total:    site.OpenAlerts.Total,
 			Critical: site.OpenAlerts.Critical,

@@ -98,6 +98,9 @@ gateways default to a 256 MiB filesystem reserve.
 | `EDGE_SMS_RETRY_INTERVAL` | `7m30s` | Minimum spacing between attempts, spreading three attempts over 15 minutes. |
 | `EDGE_SMS_SEND_TIMEOUT` | `30s` | Maximum time allowed for one modem SMS create-and-send operation. |
 | `EDGE_SMS_BATTERY_OVERHEAT_C` | `55` | Battery temperature that opens a critical fallback incident. |
+| `EDGE_SMS_HEARTBEAT_ENABLED` | `true` | Send SMS liveness heartbeats while packet data is unavailable. |
+| `EDGE_SMS_HEARTBEAT_INTERVAL` | `30m` | Spacing between heartbeats; must be at least `EDGE_SMS_OFFLINE_AFTER`. |
+| `EDGE_SMS_HEARTBEAT_DAILY_LIMIT` | `48` | Heartbeat attempts over 24 hours, counted separately from critical alerts. |
 | `EDGE_SMS_DEBOUNCE` | `30s` | Time inverter failure, tamper, and site-outage signals must remain active before opening an incident. |
 
 Each collection cycle writes one normalized record for a smart meter, battery
@@ -151,6 +154,15 @@ most recent measurement timestamp. When the queue is empty, the uploader still
 sends this envelope as a heartbeat on its normal poll interval. This lets the
 server distinguish a connected gateway with delayed measurements from a site
 that has stopped contacting the platform.
+
+When packet data is down for `EDGE_SMS_OFFLINE_AFTER`, the SMS coordinator
+sends `AMBAGRID|v=1|kind=HB|site=<site>|gw=<gateway>|seq=<n>|ts=<unix>` every
+`EDGE_SMS_HEARTBEAT_INTERVAL`, after any due critical alerts. `seq` comes from a
+dedicated durable counter, so heartbeats never consume event sequences. Each
+attempt is persisted before sending, and attempts count only against
+`EDGE_SMS_HEARTBEAT_DAILY_LIMIT`, never the critical-alert hourly or daily
+limits. A failed send is retried after `EDGE_SMS_RETRY_INTERVAL`. Heartbeats
+stop as soon as an HTTP upload succeeds.
 
 Delivery is intentionally at-least-once. A lost response after upstream
 delivery causes a safe retry rather than data loss. Ingestion is stateless, so

@@ -93,11 +93,35 @@ The qualifying codes, send thresholds, idempotency contract, provider shape,
 rate limits, and cost controls are defined in
 [Critical alert fallback design](critical-alert-fallback.md).
 
-The version 1 policy deliberately keeps gateway online/offline heartbeats on
-the HTTP `site.health` path. It does not send them by SMS: a gateway that cannot
-reach the data service cannot authoritatively report an "online" transition,
-and periodic heartbeat messages would consume the emergency SMS budget needed
-for critical asset and site incidents.
+### SMS Liveness Heartbeats
+
+While packet data is unavailable, the gateway also sends a compact liveness
+heartbeat by SMS:
+
+```text
+AMBAGRID|v=1|kind=HB|site=ng-kaji-01|gw=gateway-01|seq=42|ts=1730000000
+```
+
+A heartbeat only proves the gateway is online. Offline is always inferred when
+expected heartbeats stop, because a powered-off or disconnected gateway cannot
+report it. The first heartbeat after a silent interval marks the site reachable
+again. Once HTTP uploads recover, SMS heartbeats stop and the normal empty-batch
+heartbeat resumes.
+
+Heartbeats are not alerts. They are parsed separately from critical codes,
+authenticated against the same sender-to-site/gateway mapping, and stored in
+`sms_heartbeats` with receipts in `sms_heartbeat_receipts`, deduplicated by
+provider message ID and by `(site, gateway, seq)`. They never touch
+`sms_fallback_events`, alerts, or `site_health`, so the queue and sync fields
+there keep describing the last HTTP upload.
+
+Heartbeats have their own durable sequence and their own daily budget on the
+edge, separate from the critical-alert limits, so they can never use up the SMS
+allowance needed for incidents. If that budget runs out, the site correctly
+falls to offline while critical SMS keeps working. Server-side cost accounting
+counts both message types toward the monthly SMS budget. The API applies a
+separate, longer offline threshold to SMS contact (`API_SITE_SMS_OFFLINE_AFTER`)
+because heartbeats are much sparser than HTTP polling.
 
 ## OTA Updates
 

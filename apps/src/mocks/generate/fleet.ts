@@ -405,6 +405,7 @@ export const siteRowsById = new Map(
 			| "last_successful_sync_at"
 			| "last_failed_sync_reason"
 			| "queue_growing"
+			| "last_sms_heartbeat_at"
 			| "open_alerts"
 		>[]
 	).map((row) => [row.site_id, row]),

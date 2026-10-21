@@ -71,6 +71,7 @@ export interface Site {
 	last_successful_sync_at: string | null;
 	last_failed_sync_reason: string | null;
 	queue_growing: boolean;
+	last_sms_heartbeat_at: string | null;
 	open_alerts: AlertCounts;
 }
 

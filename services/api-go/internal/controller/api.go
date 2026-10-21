@@ -19,6 +19,7 @@ type API struct {
 	AllowedOrigins []string
 	DevMode        bool
 	Fallback       FallbackService
+	Heartbeats     HeartbeatService
 	SMSWebhook     SMSWebhookProvider
 }
 

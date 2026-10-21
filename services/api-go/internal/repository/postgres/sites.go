@@ -44,6 +44,7 @@ SELECT s.site_id,
        h.last_successful_sync_at,
        h.last_failed_sync_reason,
        coalesce(h.queue_growing, false),
+       hb.contact_at,
        coalesce(o.total, 0),
        coalesce(o.critical, 0),
        coalesce(o.warning, 0),
@@ -51,7 +52,13 @@ SELECT s.site_id,
 FROM sites s
 LEFT JOIN asset_rollup a ON a.site_id = s.site_id
 LEFT JOIN open_alert_rollup o ON o.site_id = s.site_id
-LEFT JOIN site_health h ON h.site_id = s.site_id`
+LEFT JOIN site_health h ON h.site_id = s.site_id
+LEFT JOIN LATERAL (
+    SELECT contact_at FROM sms_heartbeats
+    WHERE site_id = s.site_id
+    ORDER BY contact_at DESC
+    LIMIT 1
+) hb ON true`
 
 func buildListSitesQuery(afterSiteID *string, limit int) (string, []any) {
 	b := newPredicates()
@@ -102,6 +109,7 @@ func (s *Store) ListSites(ctx context.Context, query domain.SiteQuery) (page.Pag
 			&site.LastSuccessfulSyncAt,
 			&site.LastFailedSyncReason,
 			&site.QueueGrowing,
+			&site.LastSMSHeartbeatAt,
 			&site.OpenAlerts.Total,
 			&site.OpenAlerts.Critical,
 			&site.OpenAlerts.Warning,

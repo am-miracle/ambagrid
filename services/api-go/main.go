@@ -53,6 +53,7 @@ func main() {
 
 	webhooks := buildWebhookRoutes(cfg, logger)
 	var fallbackService controller.FallbackService
+	var heartbeatService controller.HeartbeatService
 	var smsWebhook controller.SMSWebhookProvider
 	if cfg.SMSEnabled {
 		senders := make(map[string]webhook.SMSSender, len(cfg.SMSSenders))
@@ -60,11 +61,13 @@ func main() {
 			senders[number] = webhook.SMSSender{SiteID: identity.SiteID, GatewayID: identity.GatewayID}
 		}
 		fallbackStore := postgres.NewFallbackStore(pool)
-		fallbackService = services.NewFallbackService(fallbackStore, cfg.AlertOpenedTopic, domain.SMSPricing{
+		smsFallback := services.NewFallbackService(fallbackStore, cfg.AlertOpenedTopic, domain.SMSPricing{
 			OutboundCostMinor: cfg.SMSOutboundCostMinor, InboundCostMinor: cfg.SMSInboundCostMinor,
 			NumberRentalMinor: cfg.SMSNumberRentalMinor, MonthlyBudgetMinor: cfg.SMSMonthlyBudgetMinor,
 			Currency: cfg.SMSCurrency,
 		})
+		fallbackService = smsFallback
+		heartbeatService = smsFallback.Heartbeats(postgres.NewHeartbeatStore(pool))
 		smsWebhook, err = webhook.NewSMS(cfg.SMSWebhookSecret, senders)
 		if err != nil {
 			logger.Error("configure SMS webhook", "error", err)
@@ -74,9 +77,11 @@ func main() {
 	}
 
 	api := controller.API{
-		Assets:         services.NewAssetService(store, limits),
-		Alerts:         services.NewAlertService(store, limits, globalHistoryLimits),
-		Sites:          services.NewSiteService(store, limits, cfg.SiteOfflineAfter, cfg.SiteEventStaleAfter),
+		Assets: services.NewAssetService(store, limits),
+		Alerts: services.NewAlertService(store, limits, globalHistoryLimits),
+		Sites: services.NewSiteService(store, limits, services.SiteHealthThresholds{
+			OfflineAfter: cfg.SiteOfflineAfter, SMSOfflineAfter: cfg.SiteSMSOfflineAfter, EventStaleAfter: cfg.SiteEventStaleAfter,
+		}),
 		Payments:       services.NewPaymentService(store),
 		Health:         services.NewHealthService(store),
 		Webhooks:       webhooks,
@@ -85,6 +90,7 @@ func main() {
 		AllowedOrigins: cfg.CORSAllowedOrigins,
 		DevMode:        cfg.DevMode,
 		Fallback:       fallbackService,
+		Heartbeats:     heartbeatService,
 		SMSWebhook:     smsWebhook,
 	}
 

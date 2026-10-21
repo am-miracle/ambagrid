@@ -133,11 +133,20 @@ site. It does not identify a human caller. Sites backfilled by the migration
 may return `null` until ownership is assigned; production provisioning must
 supply a GridOperator.
 
-`health_status` is derived when the response is built. A site is `offline`
-after `API_SITE_OFFLINE_AFTER` without an authenticated gateway contact. While
-contact is recent, it is `delayed` when the latest measurement is older than
-`API_SITE_EVENT_STALE_AFTER` or the pending queue is growing; otherwise it is
-`live`. Queue age is calculated from `oldest_pending_at` on each response.
+`health_status` is derived when the response is built. While HTTP contact
+(`last_contact_at`) is within `API_SITE_OFFLINE_AFTER`, a site is `delayed` when
+the latest measurement is older than `API_SITE_EVENT_STALE_AFTER` or the pending
+queue is growing; otherwise it is `live`. Without recent HTTP contact, a site
+whose gateway sent an SMS heartbeat (`last_sms_heartbeat_at`) within
+`API_SITE_SMS_OFFLINE_AFTER` is `delayed`: the gateway is powered and on the
+cellular network, but no telemetry is flowing. Otherwise it is `offline`.
+Offline is always inferred from silence; no message ever reports it.
+
+`last_sms_heartbeat_at` is the earlier of the gateway's send time and the
+provider's receive time, so neither clock skew nor store-and-forward delay can
+overstate liveness. SMS heartbeats never change `last_contact_at` or the queue
+and sync fields, which always describe the last HTTP upload. Queue age is
+calculated from `oldest_pending_at` on each response.
 
 ```json
 {
@@ -160,6 +169,7 @@ contact is recent, it is `delayed` when the latest measurement is older than
   "last_successful_sync_at": "2026-09-03T01:58:35.535397+01:00",
   "last_failed_sync_reason": null,
   "queue_growing": false,
+  "last_sms_heartbeat_at": null,
   "open_alerts": { "total": 1, "critical": 1, "warning": 0, "info": 0 }
 }
 ```
@@ -388,6 +398,7 @@ is unreachable, so the replica leaves the load balancer instead.
 | `API_MAX_PAGE_SIZE` | `200` | page size ceiling |
 | `API_GLOBAL_HISTORY_PAGE_SIZE` | `25` | default and ceiling for unscoped alert history |
 | `API_SITE_OFFLINE_AFTER` | `2m` | time without gateway contact before a site is offline |
+| `API_SITE_SMS_OFFLINE_AFTER` | `75m` | time without an SMS heartbeat before an SMS-only site is offline; must exceed `API_SITE_OFFLINE_AFTER` |
 | `API_SITE_EVENT_STALE_AFTER` | `2m` | measurement lag before a contacted site is delayed |
 | `DB_MAX_CONNS` | `10` | pool ceiling per replica |
 | `DB_MIN_CONNS` | `1` | warm connections |

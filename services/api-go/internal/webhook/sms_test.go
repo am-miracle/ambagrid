@@ -29,12 +29,111 @@ func TestSMSParsesAuthenticatedCriticalMessage(t *testing.T) {
 	if err := provider.VerifySignature(body, hex.EncodeToString(mac.Sum(nil))); err != nil {
 		t.Fatal(err)
 	}
-	event, receipt, err := provider.Parse(body)
+	inbound, err := provider.Parse(body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event.EventKey() != "edge:ng-kaji-01:18422" || receipt.GatewayID != "gateway-01" {
-		t.Fatalf("event=%+v receipt=%+v", event, receipt)
+	if inbound.Heartbeat != nil || inbound.Critical == nil {
+		t.Fatalf("inbound = %+v, want a critical event", inbound)
+	}
+	if inbound.Critical.EventKey() != "edge:ng-kaji-01:18422" || inbound.Receipt.GatewayID != "gateway-01" {
+		t.Fatalf("event=%+v receipt=%+v", inbound.Critical, inbound.Receipt)
+	}
+}
+
+type heartbeatFixture struct {
+	HeartbeatKeyPrefix string `json:"heartbeat_key_prefix"`
+	Message            string `json:"message"`
+	Heartbeat          struct {
+		SiteID     string `json:"site_id"`
+		GatewayID  string `json:"gateway_id"`
+		Sequence   uint64 `json:"sequence"`
+		SentAtUnix int64  `json:"sent_at_unix"`
+	} `json:"heartbeat"`
+	HeartbeatKey string `json:"heartbeat_key"`
+}
+
+func loadHeartbeatFixture(t *testing.T) heartbeatFixture {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "proto", "fixtures", "sms_heartbeat_v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture heartbeatFixture
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	return fixture
+}
+
+func heartbeatBody(t *testing.T, from, message string) []byte {
+	t.Helper()
+	body, err := json.Marshal(map[string]string{
+		"message_id": "provider-hb-1", "from": from, "to": "1234",
+		"body": message, "received_at": "2024-10-27T03:40:00Z",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func TestSMSParsesHeartbeatFromSharedContract(t *testing.T) {
+	fixture := loadHeartbeatFixture(t)
+	provider, err := NewSMS("secret", map[string]SMSSender{"+2348000000000": {SiteID: "ng-kaji-01", GatewayID: "gateway-01"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbound, err := provider.Parse(heartbeatBody(t, "+2348000000000", fixture.Message))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inbound.Critical != nil || inbound.Heartbeat == nil {
+		t.Fatalf("inbound = %+v, want a heartbeat", inbound)
+	}
+	got := *inbound.Heartbeat
+	if got.SiteID != fixture.Heartbeat.SiteID || got.GatewayID != fixture.Heartbeat.GatewayID ||
+		got.Sequence != fixture.Heartbeat.Sequence || got.SentAt.Unix() != fixture.Heartbeat.SentAtUnix {
+		t.Fatalf("heartbeat = %+v, fixture = %+v", got, fixture.Heartbeat)
+	}
+	if string(got.Key()) != fixture.HeartbeatKey || !strings.HasPrefix(fixture.HeartbeatKey, fixture.HeartbeatKeyPrefix) {
+		t.Fatalf("heartbeat key = %q, fixture = %q", got.Key(), fixture.HeartbeatKey)
+	}
+}
+
+func TestSMSRejectsHeartbeatFromAnotherGateway(t *testing.T) {
+	fixture := loadHeartbeatFixture(t)
+	provider, err := NewSMS("secret", map[string]SMSSender{
+		"+2348000000000": {SiteID: "ng-kaji-01", GatewayID: "gateway-02"},
+		"+2348000000001": {SiteID: "ng-other-01", GatewayID: "gateway-01"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, from := range []string{"+2348000000000", "+2348000000001", "+2349999999999"} {
+		if _, err := provider.Parse(heartbeatBody(t, from, fixture.Message)); err == nil {
+			t.Fatalf("accepted heartbeat from %s", from)
+		}
+	}
+}
+
+func TestSMSRejectsMalformedHeartbeats(t *testing.T) {
+	for name, message := range map[string]string{
+		"unknown kind":   "AMBAGRID|v=1|kind=PING|site=ng-kaji-01|gw=gateway-01|seq=42|ts=1730000000",
+		"zero sequence":  "AMBAGRID|v=1|kind=HB|site=ng-kaji-01|gw=gateway-01|seq=0|ts=1730000000",
+		"reordered":      "AMBAGRID|v=1|kind=HB|gw=gateway-01|site=ng-kaji-01|seq=42|ts=1730000000",
+		"critical field": "AMBAGRID|v=1|kind=HB|site=ng-kaji-01|gw=gateway-01|seq=42|code=SITE_OUTAGE|ts=1730000000",
+		"bad gateway":    "AMBAGRID|v=1|kind=HB|site=ng-kaji-01|gw=gate.way|seq=42|ts=1730000000",
+	} {
+		t.Run(name, func(t *testing.T) {
+			values, keys, err := splitSMSMessage(message)
+			if err == nil {
+				_, err = parseHeartbeat(values, keys)
+			}
+			if err == nil {
+				t.Fatalf("accepted %q", message)
+			}
+		})
 	}
 }
 

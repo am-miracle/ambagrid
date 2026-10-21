@@ -31,6 +31,7 @@ type Site struct {
 	LastSuccessfulSyncAt *time.Time
 	LastFailedSyncReason *string
 	QueueGrowing         bool
+	LastSMSHeartbeatAt   *time.Time
 	OpenAlerts           AlertCounts
 }
 

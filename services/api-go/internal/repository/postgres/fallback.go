@@ -162,15 +162,23 @@ func (t fallbackTx) FindReceiptEventKey(ctx context.Context, providerMessageID s
 }
 
 func (t fallbackTx) GetMonthlySMSUsage(ctx context.Context, at time.Time, rentalMinor int64) (int64, error) {
+	return monthlySMSUsage(ctx, t.tx, at, rentalMinor)
+}
+
+const monthlySMSUsageSQL = `
+	SELECT COALESCE(SUM(outbound_cost_minor + inbound_cost_minor), 0) + $2
+	FROM (
+	    SELECT outbound_cost_minor, inbound_cost_minor, received_at FROM sms_fallback_receipts
+	    UNION ALL
+	    SELECT outbound_cost_minor, inbound_cost_minor, received_at FROM sms_heartbeat_receipts
+	) AS receipt
+	WHERE received_at >= date_trunc('month', $1::timestamptz)
+	  AND received_at < date_trunc('month', $1::timestamptz) + interval '1 month'`
+
+func monthlySMSUsage(ctx context.Context, tx pgx.Tx, at time.Time, rentalMinor int64) (int64, error) {
 	var usage int64
-	err := t.tx.QueryRow(ctx, `
-		SELECT COALESCE(SUM(outbound_cost_minor + inbound_cost_minor), 0) + $2
-		FROM sms_fallback_receipts
-		WHERE received_at >= date_trunc('month', $1::timestamptz)
-		  AND received_at < date_trunc('month', $1::timestamptz) + interval '1 month'`,
-		at, rentalMinor).Scan(&usage)
-	if err != nil {
-		return 0, fmt.Errorf("read fallback SMS monthly cost: %w", err)
+	if err := tx.QueryRow(ctx, monthlySMSUsageSQL, at, rentalMinor).Scan(&usage); err != nil {
+		return 0, fmt.Errorf("read SMS monthly cost: %w", err)
 	}
 	return usage, nil
 }

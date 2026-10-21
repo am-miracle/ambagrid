@@ -227,6 +227,7 @@ export const handlers = [
 								: null,
 						last_failed_sync_reason: null,
 						queue_growing: false,
+						last_sms_heartbeat_at: null,
 						open_alerts: {
 							total: alerts.length,
 							critical: count("critical"),

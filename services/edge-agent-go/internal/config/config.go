@@ -47,6 +47,10 @@ type SMSConfig struct {
 	SendTimeout      time.Duration
 	BatteryOverheatC float64
 	Debounce         time.Duration
+
+	HeartbeatEnabled    bool
+	HeartbeatInterval   time.Duration
+	HeartbeatDailyLimit int
 }
 
 type CollectorConfig struct {
@@ -196,6 +200,18 @@ func FromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	heartbeatEnabled, err := envBool("EDGE_SMS_HEARTBEAT_ENABLED", true)
+	if err != nil {
+		return Config{}, err
+	}
+	heartbeatInterval, err := envDuration("EDGE_SMS_HEARTBEAT_INTERVAL", 30*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	heartbeatDailyLimit, err := envInt("EDGE_SMS_HEARTBEAT_DAILY_LIMIT", 48)
+	if err != nil {
+		return Config{}, err
+	}
 
 	collectorEnabled, err := envBool("EDGE_SIMULATOR_ENABLED", defaultCollectorEnabled)
 	if err != nil {
@@ -246,6 +262,7 @@ func FromEnv() (Config, error) {
 			PollInterval: smsPollInterval, FailureThreshold: smsFailureThreshold, OfflineAfter: smsOfflineAfter,
 			MaxAttempts: smsMaxAttempts, HourlyLimit: smsHourlyLimit, DailyLimit: smsDailyLimit,
 			RetryInterval: smsRetryInterval, SendTimeout: smsSendTimeout, BatteryOverheatC: batteryOverheatC, Debounce: smsDebounce,
+			HeartbeatEnabled: heartbeatEnabled, HeartbeatInterval: heartbeatInterval, HeartbeatDailyLimit: heartbeatDailyLimit,
 		},
 		HealthAddr: envString("EDGE_HEALTH_ADDR", defaultHealthAddr),
 	}
@@ -266,6 +283,19 @@ func FromEnv() (Config, error) {
 	}
 	if cfg.SMS.MaxAttempts > fallback.MaxIncidentAttempts {
 		return Config{}, fmt.Errorf("EDGE_SMS_MAX_ATTEMPTS must not exceed %d", fallback.MaxIncidentAttempts)
+	}
+	if cfg.SMS.HeartbeatDailyLimit < 1 {
+		return Config{}, fmt.Errorf("EDGE_SMS_HEARTBEAT_DAILY_LIMIT must be positive")
+	}
+	if cfg.SMS.HeartbeatInterval < cfg.SMS.OfflineAfter {
+		return Config{}, fmt.Errorf("EDGE_SMS_HEARTBEAT_INTERVAL must be at least EDGE_SMS_OFFLINE_AFTER")
+	}
+	if cfg.SMS.Enabled && cfg.SMS.HeartbeatEnabled {
+		if _, err := fallback.FormatHeartbeat(fallback.Heartbeat{
+			SiteID: siteID, GatewayID: gatewayID, Sequence: 1, SentAt: time.Unix(1, 0),
+		}); err != nil {
+			return Config{}, fmt.Errorf("EDGE_SITE_ID and EDGE_GATEWAY_ID cannot be sent in an SMS heartbeat: %w", err)
+		}
 	}
 	minimumRetryInterval := fallback.MinimumRetryInterval(cfg.SMS.MaxAttempts)
 	if cfg.SMS.RetryInterval < minimumRetryInterval {

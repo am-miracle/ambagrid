@@ -61,10 +61,13 @@ type Config struct {
 }
 
 type Coordinator struct {
-	cfg    Config
-	store  Store
-	sender Sender
-	now    func() time.Time
+	cfg          Config
+	store        Store
+	sender       Sender
+	now          func() time.Time
+	startedAt    time.Time
+	heartbeats   HeartbeatStore
+	heartbeatCfg HeartbeatConfig
 }
 
 func NewCoordinator(cfg Config, store Store, sender Sender) *Coordinator {
@@ -104,6 +107,9 @@ func (c *Coordinator) Run(ctx context.Context) {
 
 func (c *Coordinator) RunOnce(ctx context.Context) error {
 	now := c.now().UTC()
+	if c.startedAt.IsZero() {
+		c.startedAt = now
+	}
 	candidates, err := c.store.FallbackCandidates(ctx, now)
 	if err != nil {
 		return err
@@ -142,6 +148,10 @@ func (c *Coordinator) RunOnce(ctx context.Context) error {
 		if sendErr != nil {
 			resultErr = errors.Join(resultErr, fmt.Errorf("send %s: %w", candidate.EventKey(), sendErr))
 		}
+	}
+	// Runs after critical incidents so a heartbeat never delays an alert on the modem.
+	if c.heartbeats != nil {
+		resultErr = errors.Join(resultErr, c.runHeartbeat(ctx, now))
 	}
 	return resultErr
 }

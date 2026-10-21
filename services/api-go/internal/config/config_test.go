@@ -34,8 +34,8 @@ func TestFromEnvAppliesDefaults(t *testing.T) {
 	if cfg.DefaultPageSize != 50 || cfg.MaxPageSize != 200 {
 		t.Fatalf("page sizes = %d/%d", cfg.DefaultPageSize, cfg.MaxPageSize)
 	}
-	if cfg.SiteOfflineAfter != 2*time.Minute || cfg.SiteEventStaleAfter != 2*time.Minute {
-		t.Fatalf("site health thresholds = %s/%s", cfg.SiteOfflineAfter, cfg.SiteEventStaleAfter)
+	if cfg.SiteOfflineAfter != 2*time.Minute || cfg.SiteSMSOfflineAfter != 75*time.Minute || cfg.SiteEventStaleAfter != 2*time.Minute {
+		t.Fatalf("site health thresholds = %s/%s/%s", cfg.SiteOfflineAfter, cfg.SiteSMSOfflineAfter, cfg.SiteEventStaleAfter)
 	}
 	if cfg.AlertResolvedTopic != "alert.resolved" {
 		t.Fatalf("AlertResolvedTopic = %q", cfg.AlertResolvedTopic)
@@ -182,5 +182,14 @@ func TestFromEnvRequiresQueryTimeoutBelowStatementTimeout(t *testing.T) {
 
 	if _, err := FromEnv(); err == nil {
 		t.Fatal("FromEnv() accepted DB_QUERY_TIMEOUT >= DB_STATEMENT_TIMEOUT")
+	}
+}
+
+func TestFromEnvRequiresSMSOfflineThresholdBeyondHTTP(t *testing.T) {
+	setRequired(t)
+	t.Setenv("API_SITE_OFFLINE_AFTER", "10m")
+	t.Setenv("API_SITE_SMS_OFFLINE_AFTER", "5m")
+	if _, err := FromEnv(); err == nil {
+		t.Fatal("FromEnv() accepted an SMS offline threshold shorter than the HTTP one")
 	}
 }

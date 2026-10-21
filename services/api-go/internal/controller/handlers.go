@@ -245,12 +245,16 @@ func (a API) handleSMSFallback(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	event, receipt, err := a.SMSWebhook.Parse(body)
+	inbound, err := a.SMSWebhook.Parse(body)
 	if err != nil {
 		writeErrorBody(w, a.logger(), http.StatusBadRequest, codeInvalidArgument, err.Error(), RequestIDFrom(r.Context()))
 		return
 	}
-	created, err := a.Fallback.ReceiveSMS(r.Context(), event, receipt)
+	if inbound.Heartbeat != nil {
+		a.receiveSMSHeartbeat(w, r, *inbound.Heartbeat, inbound.Receipt)
+		return
+	}
+	created, err := a.Fallback.ReceiveSMS(r.Context(), *inbound.Critical, inbound.Receipt)
 	if err != nil {
 		writeError(w, r, a.logger(), err)
 		return
@@ -259,7 +263,24 @@ func (a API) handleSMSFallback(w http.ResponseWriter, r *http.Request) {
 	if created {
 		status = http.StatusCreated
 	}
-	writeJSON(w, a.logger(), status, map[string]any{"event_key": event.EventKey(), "created": created, "request_id": RequestIDFrom(r.Context())})
+	writeJSON(w, a.logger(), status, map[string]any{"event_key": inbound.Critical.EventKey(), "created": created, "request_id": RequestIDFrom(r.Context())})
+}
+
+func (a API) receiveSMSHeartbeat(w http.ResponseWriter, r *http.Request, heartbeat domain.GatewayHeartbeat, receipt domain.SMSReceipt) {
+	if a.Heartbeats == nil {
+		writeErrorBody(w, a.logger(), http.StatusBadRequest, codeInvalidArgument, "SMS heartbeats are not enabled", RequestIDFrom(r.Context()))
+		return
+	}
+	created, err := a.Heartbeats.ReceiveHeartbeat(r.Context(), heartbeat, receipt)
+	if err != nil {
+		writeError(w, r, a.logger(), err)
+		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, a.logger(), status, map[string]any{"heartbeat_key": heartbeat.Key(), "created": created, "request_id": RequestIDFrom(r.Context())})
 }
 
 func (a API) handleWebhookPayment(provider WebhookProvider) http.HandlerFunc {

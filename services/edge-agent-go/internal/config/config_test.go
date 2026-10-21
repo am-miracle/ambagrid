@@ -87,3 +87,25 @@ func TestFromEnvRejectsSMSAttemptPolicyOutsideFifteenMinuteWindow(t *testing.T) 
 		t.Fatal("FromEnv() accepted more than three SMS attempts per incident")
 	}
 }
+
+func TestFromEnvValidatesSMSHeartbeat(t *testing.T) {
+	tests := map[string]map[string]string{
+		"gateway ID not SMS-safe":  {"EDGE_GATEWAY_ID": "gateway.01"},
+		"interval below offline":   {"EDGE_SMS_HEARTBEAT_INTERVAL": "1m"},
+		"non-positive daily limit": {"EDGE_SMS_HEARTBEAT_DAILY_LIMIT": "0"},
+	}
+	for name, overrides := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("EDGE_SITE_ID", "ng-kaji-01")
+			t.Setenv("EDGE_GATEWAY_ID", "gateway-01")
+			t.Setenv("EDGE_SMS_ENABLED", "true")
+			t.Setenv("EDGE_SMS_DESTINATION", "+2348000000000")
+			for key, value := range overrides {
+				t.Setenv(key, value)
+			}
+			if _, err := config.FromEnv(); err == nil {
+				t.Fatal("FromEnv() accepted an invalid SMS heartbeat configuration")
+			}
+		})
+	}
+}

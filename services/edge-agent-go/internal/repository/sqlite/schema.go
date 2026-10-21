@@ -7,7 +7,7 @@ import (
 	"edge-agent-go/internal/domain"
 )
 
-const schemaVersion = 8
+const schemaVersion = 9
 
 const schema = `
 CREATE TABLE IF NOT EXISTS edge_identity (
@@ -88,6 +88,13 @@ CREATE TABLE IF NOT EXISTS debounce_conditions (
     code            TEXT NOT NULL,
     active_since_ms INTEGER NOT NULL,
     PRIMARY KEY (asset_id, code)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS heartbeat_attempts (
+    sequence        INTEGER PRIMARY KEY AUTOINCREMENT,
+    attempted_at_ms INTEGER NOT NULL,
+    succeeded       INTEGER CHECK (succeeded IN (0, 1)),
+    failure_reason  TEXT
 ) STRICT;
 `
 
@@ -204,6 +211,15 @@ ALTER TABLE edge_sync_state ADD COLUMN abandoned_count INTEGER NOT NULL DEFAULT 
     CHECK (abandoned_count >= 0);
 `
 
+const migrateV8ToV9 = `
+CREATE TABLE heartbeat_attempts (
+    sequence        INTEGER PRIMARY KEY AUTOINCREMENT,
+    attempted_at_ms INTEGER NOT NULL,
+    succeeded       INTEGER CHECK (succeeded IN (0, 1)),
+    failure_reason  TEXT
+) STRICT;
+`
+
 func (s *Store) initialize(ctx context.Context) error {
 	var version int
 	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
@@ -257,6 +273,7 @@ func (s *Store) migrateSchema(ctx context.Context, version int) error {
 			{5, migrateV5ToV6, "migrate queue schema from version 5 to 6"},
 			{6, migrateV6ToV7, "migrate queue schema from version 6 to 7"},
 			{7, migrateV7ToV8, "migrate queue schema from version 7 to 8"},
+			{8, migrateV8ToV9, "migrate queue schema from version 8 to 9"},
 		}
 		for _, m := range incremental {
 			if version > m.from {

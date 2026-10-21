@@ -11,19 +11,20 @@ import (
 
 // SiteService applies site listing rules.
 type SiteService struct {
-	sites           SiteRepository
-	limits          PageLimits
-	offlineAfter    time.Duration
-	eventStaleAfter time.Duration
-	now             func() time.Time
+	sites      SiteRepository
+	limits     PageLimits
+	thresholds SiteHealthThresholds
+	now        func() time.Time
 }
 
-func NewSiteService(sites SiteRepository, limits PageLimits, offlineAfter, eventStaleAfter time.Duration) *SiteService {
-	return &SiteService{
-		sites: sites, limits: limits,
-		offlineAfter: offlineAfter, eventStaleAfter: eventStaleAfter,
-		now: time.Now,
-	}
+type SiteHealthThresholds struct {
+	OfflineAfter    time.Duration
+	SMSOfflineAfter time.Duration
+	EventStaleAfter time.Duration
+}
+
+func NewSiteService(sites SiteRepository, limits PageLimits, thresholds SiteHealthThresholds) *SiteService {
+	return &SiteService{sites: sites, limits: limits, thresholds: thresholds, now: time.Now}
 }
 
 type ListSitesRequest struct {
@@ -48,16 +49,23 @@ func (s *SiteService) List(ctx context.Context, request ListSitesRequest) (page.
 
 	now := s.now().UTC()
 	for i := range result.Items {
-		result.Items[i].HealthStatus = siteHealthStatus(result.Items[i], now, s.offlineAfter, s.eventStaleAfter)
+		result.Items[i].HealthStatus = siteHealthStatus(result.Items[i], now, s.thresholds)
 	}
 	return result, nil
 }
 
-func siteHealthStatus(site domain.Site, now time.Time, offlineAfter, eventStaleAfter time.Duration) domain.SiteHealthStatus {
-	if site.LastContactAt == nil || site.LastContactAt.Before(now.Add(-offlineAfter)) {
+// Offline is always inferred from silence on both channels. SMS heartbeats are
+// sparse, so they get their own threshold, and an SMS-only gateway is at best
+// delayed because no telemetry is flowing.
+func siteHealthStatus(site domain.Site, now time.Time, thresholds SiteHealthThresholds) domain.SiteHealthStatus {
+	httpFresh := site.LastContactAt != nil && !site.LastContactAt.Before(now.Add(-thresholds.OfflineAfter))
+	if !httpFresh {
+		if site.LastSMSHeartbeatAt != nil && !site.LastSMSHeartbeatAt.Before(now.Add(-thresholds.SMSOfflineAfter)) {
+			return domain.SiteHealthDelayed
+		}
 		return domain.SiteHealthOffline
 	}
-	if site.LastEventAt == nil || site.LastEventAt.Before(now.Add(-eventStaleAfter)) || site.QueueGrowing {
+	if site.LastEventAt == nil || site.LastEventAt.Before(now.Add(-thresholds.EventStaleAfter)) || site.QueueGrowing {
 		return domain.SiteHealthDelayed
 	}
 	return domain.SiteHealthLive

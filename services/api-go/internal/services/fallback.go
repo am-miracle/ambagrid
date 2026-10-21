@@ -7,20 +7,27 @@ import (
 	"fmt"
 	"log/slog"
 	"sync/atomic"
+	"time"
 
 	"api-go/internal/domain"
 	"api-go/internal/repository"
 )
 
 type FallbackService struct {
-	repository        repository.FallbackRepository
-	topic             string
-	pricing           domain.SMSPricing
-	budgetWarnedMonth atomic.Int64
+	repository repository.FallbackRepository
+	topic      string
+	pricing    domain.SMSPricing
+	budget     *smsBudgetMonitor
 }
 
 func NewFallbackService(repository repository.FallbackRepository, topic string, pricing domain.SMSPricing) *FallbackService {
-	return &FallbackService{repository: repository, topic: topic, pricing: pricing}
+	return &FallbackService{repository: repository, topic: topic, pricing: pricing, budget: &smsBudgetMonitor{pricing: pricing}}
+}
+
+// Heartbeats shares pricing and budget warnings with critical fallback so the
+// monthly threshold reflects every inbound SMS.
+func (s *FallbackService) Heartbeats(repository repository.HeartbeatRepository) *HeartbeatService {
+	return &HeartbeatService{repository: repository, pricing: s.pricing, budget: s.budget}
 }
 
 func (s *FallbackService) ReceiveSMS(ctx context.Context, event domain.CriticalFallbackEvent, receipt domain.SMSReceipt) (bool, error) {
@@ -117,7 +124,7 @@ func (s *FallbackService) recordReceipt(ctx context.Context, tx repository.Fallb
 	if !inserted {
 		return s.checkReceiptConflict(ctx, tx, eventKey, receipt)
 	}
-	return s.checkBudgetThreshold(ctx, tx, receipt)
+	return s.budget.check(ctx, tx, receipt.ReceivedAt)
 }
 
 func (s *FallbackService) checkReceiptConflict(ctx context.Context, tx repository.FallbackTx, eventKey domain.EventKey, receipt domain.SMSReceipt) error {
@@ -134,18 +141,27 @@ func (s *FallbackService) checkReceiptConflict(ctx context.Context, tx repositor
 	return nil
 }
 
-func (s *FallbackService) checkBudgetThreshold(ctx context.Context, tx repository.FallbackTx, receipt domain.SMSReceipt) error {
-	if s.pricing.MonthlyBudgetMinor <= 0 {
+type smsUsageReader interface {
+	GetMonthlySMSUsage(ctx context.Context, at time.Time, rentalMinor int64) (int64, error)
+}
+
+type smsBudgetMonitor struct {
+	pricing     domain.SMSPricing
+	warnedMonth atomic.Int64
+}
+
+func (m *smsBudgetMonitor) check(ctx context.Context, usageReader smsUsageReader, receivedAt time.Time) error {
+	if m.pricing.MonthlyBudgetMinor <= 0 {
 		return nil
 	}
-	usage, err := tx.GetMonthlySMSUsage(ctx, receipt.ReceivedAt, s.pricing.NumberRentalMinor)
+	usage, err := usageReader.GetMonthlySMSUsage(ctx, receivedAt, m.pricing.NumberRentalMinor)
 	if err != nil {
 		return fmt.Errorf("read SMS fallback budget usage: %w", err)
 	}
-	month := int64(receipt.ReceivedAt.Year())*100 + int64(receipt.ReceivedAt.Month())
-	if usage*100 >= s.pricing.MonthlyBudgetMinor*80 && s.budgetWarnedMonth.Swap(month) != month {
+	month := int64(receivedAt.Year())*100 + int64(receivedAt.Month())
+	if usage*100 >= m.pricing.MonthlyBudgetMinor*80 && m.warnedMonth.Swap(month) != month {
 		slog.Warn("SMS fallback monthly budget threshold reached",
-			"usage_minor", usage, "budget_minor", s.pricing.MonthlyBudgetMinor, "currency", s.pricing.Currency)
+			"usage_minor", usage, "budget_minor", m.pricing.MonthlyBudgetMinor, "currency", m.pricing.Currency)
 	}
 	return nil
 }

@@ -43,6 +43,10 @@ type FallbackService interface {
 	ReceiveSMS(context.Context, domain.CriticalFallbackEvent, domain.SMSReceipt) (bool, error)
 }
 
+type HeartbeatService interface {
+	ReceiveHeartbeat(context.Context, domain.GatewayHeartbeat, domain.SMSReceipt) (bool, error)
+}
+
 type SignedWebhookProvider interface {
 	SignatureHeader() string
 	VerifySignature(body []byte, signature string) error
@@ -50,7 +54,7 @@ type SignedWebhookProvider interface {
 
 type SMSWebhookProvider interface {
 	SignedWebhookProvider
-	Parse(body []byte) (domain.CriticalFallbackEvent, domain.SMSReceipt, error)
+	Parse(body []byte) (domain.InboundSMS, error)
 }
 
 type WebhookProvider interface {

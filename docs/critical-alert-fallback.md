@@ -1,9 +1,10 @@
 # Critical Alert Fallback Design
 
 When packet data is unavailable, the edge agent may send a small set of urgent
-alerts by SMS. SMS is a secondary delivery path for alerts only. It never
-carries routine telemetry, commands, queue health, heartbeats, or recovery
-messages.
+alerts by SMS. Apart from the separate liveness heartbeat described in
+[Edge reliability](edge-reliability.md#sms-liveness-heartbeats), SMS carries
+only these alerts. It never carries routine telemetry, commands, queue health,
+or recovery messages.
 
 ## Critical event codes
 
@@ -17,7 +18,8 @@ Only these codes qualify in version 1:
 | `SITE_OUTAGE` | Site (`asset=site`) | The gateway confirms that the whole site has lost supply after local debounce. |
 
 Warnings, low battery, individual stale devices, queue growth, gateway
-offline/online heartbeats, payments, and meter commands do not qualify. Adding
+liveness heartbeats, payments, and meter commands do not qualify as critical
+codes. Heartbeats use their own message kind, storage, and budget. Adding
 a code requires an explicit policy change; provider configuration cannot turn
 an arbitrary event into an SMS alert.
 

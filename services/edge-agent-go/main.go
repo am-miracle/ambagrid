@@ -98,6 +98,12 @@ func run() (runErr error) {
 			MaxAttempts: cfg.SMS.MaxAttempts, HourlyLimit: cfg.SMS.HourlyLimit,
 			DailyLimit: cfg.SMS.DailyLimit, RetryInterval: cfg.SMS.RetryInterval,
 		}, durableQueue, fallback.NewModemManagerSender(cfg.SMS.ModemID, nil, cfg.SMS.SendTimeout))
+		if cfg.SMS.HeartbeatEnabled {
+			coordinator.EnableHeartbeat(fallback.HeartbeatConfig{
+				SiteID: cfg.Queue.SiteID, GatewayID: cfg.Queue.GatewayID,
+				Interval: cfg.SMS.HeartbeatInterval, DailyLimit: cfg.SMS.HeartbeatDailyLimit,
+			}, durableQueue)
+		}
 		workerWG.Add(1)
 		go func() {
 			defer workerWG.Done()

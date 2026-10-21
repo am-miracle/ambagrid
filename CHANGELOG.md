@@ -30,6 +30,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **alerts:** Add critical SMS fallback
 - **edge:** Persist dedup state and surface fleet health
 - **edge:** Harden durable telemetry sync
+- **edge:** Add SMS liveness heartbeats
 
 ### Changed
 

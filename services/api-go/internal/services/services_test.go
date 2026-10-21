@@ -50,6 +50,8 @@ func TestSiteHealthStatus(t *testing.T) {
 	currentEvent := now.Add(-45 * time.Second)
 	oldContact := now.Add(-3 * time.Minute)
 	staleEvent := now.Add(-3 * time.Minute)
+	recentHeartbeat := now.Add(-40 * time.Minute)
+	staleHeartbeat := now.Add(-80 * time.Minute)
 
 	tests := map[string]struct {
 		site domain.Site
@@ -72,11 +74,29 @@ func TestSiteHealthStatus(t *testing.T) {
 			want: domain.SiteHealthOffline,
 		},
 		"never contacted": {want: domain.SiteHealthOffline},
+		"SMS heartbeat only": {
+			site: domain.Site{LastContactAt: &oldContact, LastEventAt: &staleEvent, LastSMSHeartbeatAt: &recentHeartbeat},
+			want: domain.SiteHealthDelayed,
+		},
+		"SMS heartbeat without any HTTP contact": {
+			site: domain.Site{LastSMSHeartbeatAt: &recentHeartbeat},
+			want: domain.SiteHealthDelayed,
+		},
+		"SMS heartbeats stopped": {
+			site: domain.Site{LastContactAt: &oldContact, LastEventAt: &staleEvent, LastSMSHeartbeatAt: &staleHeartbeat},
+			want: domain.SiteHealthOffline,
+		},
+		"HTTP recovery supersedes heartbeat": {
+			site: domain.Site{LastContactAt: &recentContact, LastEventAt: &currentEvent, LastSMSHeartbeatAt: &staleHeartbeat},
+			want: domain.SiteHealthLive,
+		},
 	}
 
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			if got := siteHealthStatus(test.site, now, 2*time.Minute, 2*time.Minute); got != test.want {
+			if got := siteHealthStatus(test.site, now, SiteHealthThresholds{
+				OfflineAfter: 2 * time.Minute, SMSOfflineAfter: 75 * time.Minute, EventStaleAfter: 2 * time.Minute,
+			}); got != test.want {
 				t.Fatalf("siteHealthStatus() = %q, want %q", got, test.want)
 			}
 		})
