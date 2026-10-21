@@ -7,7 +7,7 @@ import (
 	"edge-agent-go/internal/domain"
 )
 
-const schemaVersion = 7
+const schemaVersion = 8
 
 const schema = `
 CREATE TABLE IF NOT EXISTS edge_identity (
@@ -30,8 +30,9 @@ CREATE TABLE IF NOT EXISTS queue_events (
     received_at_ms      INTEGER NOT NULL,
     persisted_at_ms     INTEGER NOT NULL,
     uploaded_at_ms      INTEGER,
-    status              TEXT NOT NULL CHECK (status IN ('persisted', 'pending_upload', 'uploaded', 'acknowledged', 'expired')),
+    status              TEXT NOT NULL CHECK (status IN ('persisted', 'pending_upload', 'uploaded', 'acknowledged', 'expired', 'abandoned')),
     attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+    rejection_count     INTEGER NOT NULL DEFAULT 0 CHECK (rejection_count >= 0),
     replay_required     INTEGER NOT NULL DEFAULT 0 CHECK (replay_required IN (0, 1)),
     next_attempt_at_ms  INTEGER,
     last_error          TEXT,
@@ -76,7 +77,8 @@ CREATE TABLE IF NOT EXISTS edge_sync_state (
     singleton                  INTEGER PRIMARY KEY CHECK (singleton = 1),
     last_upload_success_at_ms  INTEGER,
     last_upload_failure_reason TEXT,
-    replay_mode_active         INTEGER NOT NULL DEFAULT 0 CHECK (replay_mode_active IN (0, 1))
+    replay_mode_active         INTEGER NOT NULL DEFAULT 0 CHECK (replay_mode_active IN (0, 1)),
+    abandoned_count            INTEGER NOT NULL DEFAULT 0 CHECK (abandoned_count >= 0)
 ) STRICT;
 
 INSERT OR IGNORE INTO edge_sync_state(singleton) VALUES (1);
@@ -159,6 +161,49 @@ ALTER TABLE edge_sync_state ADD COLUMN replay_mode_active INTEGER NOT NULL DEFAU
     CHECK (replay_mode_active IN (0, 1));
 `
 
+const migrateV7ToV8 = `
+DROP INDEX IF EXISTS queue_events_ready;
+ALTER TABLE queue_events RENAME TO queue_events_v7;
+CREATE TABLE queue_events (
+    sequence            INTEGER PRIMARY KEY AUTOINCREMENT,
+    site_id             TEXT NOT NULL,
+    gateway_id          TEXT NOT NULL,
+    device_id           TEXT NOT NULL,
+    asset_type          TEXT NOT NULL CHECK (asset_type IN ('smart_meter', 'battery_bms', 'solar_inverter')),
+    mqtt_topic          TEXT NOT NULL,
+    payload             BLOB NOT NULL,
+    payload_bytes       INTEGER NOT NULL CHECK (payload_bytes >= 0),
+    priority            INTEGER NOT NULL CHECK (priority IN (0, 1)),
+    event_at_ms         INTEGER NOT NULL,
+    received_at_ms      INTEGER NOT NULL,
+    persisted_at_ms     INTEGER NOT NULL,
+    uploaded_at_ms      INTEGER,
+    status              TEXT NOT NULL CHECK (status IN ('persisted', 'pending_upload', 'uploaded', 'acknowledged', 'expired', 'abandoned')),
+    attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+    rejection_count     INTEGER NOT NULL DEFAULT 0 CHECK (rejection_count >= 0),
+    replay_required     INTEGER NOT NULL DEFAULT 0 CHECK (replay_required IN (0, 1)),
+    next_attempt_at_ms  INTEGER,
+    last_error          TEXT,
+    critical_code       TEXT,
+    critical_value      REAL
+) STRICT;
+INSERT INTO queue_events(
+    sequence, site_id, gateway_id, device_id, asset_type, mqtt_topic, payload, payload_bytes,
+    priority, event_at_ms, received_at_ms, persisted_at_ms, uploaded_at_ms, status,
+    attempt_count, rejection_count, replay_required, next_attempt_at_ms, last_error,
+    critical_code, critical_value
+)
+SELECT sequence, site_id, gateway_id, device_id, asset_type, mqtt_topic, CAST(payload AS BLOB), payload_bytes,
+       priority, event_at_ms, received_at_ms, persisted_at_ms, uploaded_at_ms, status,
+       attempt_count, 0, replay_required, next_attempt_at_ms, last_error,
+       critical_code, critical_value
+FROM queue_events_v7;
+DROP TABLE queue_events_v7;
+CREATE INDEX queue_events_ready ON queue_events(status, next_attempt_at_ms, sequence);
+ALTER TABLE edge_sync_state ADD COLUMN abandoned_count INTEGER NOT NULL DEFAULT 0
+    CHECK (abandoned_count >= 0);
+`
+
 func (s *Store) initialize(ctx context.Context) error {
 	var version int
 	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
@@ -211,6 +256,7 @@ func (s *Store) migrateSchema(ctx context.Context, version int) error {
 			{4, migrateV4ToV5, "migrate queue schema from version 4 to 5"},
 			{5, migrateV5ToV6, "migrate queue schema from version 5 to 6"},
 			{6, migrateV6ToV7, "migrate queue schema from version 6 to 7"},
+			{7, migrateV7ToV8, "migrate queue schema from version 7 to 8"},
 		}
 		for _, m := range incremental {
 			if version > m.from {

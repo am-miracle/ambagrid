@@ -62,15 +62,19 @@ func TestSuccessfulNormalUploadRemovesFallbackCandidate(t *testing.T) {
 	}
 	defer store.Close()
 	now := time.Unix(1730000200, 0).UTC()
+	sequence, err := store.Enqueue(ctx, testEvent([]byte("critical reading"), domain.PriorityCritical))
+	if err != nil {
+		t.Fatal(err)
+	}
 	event := fallback.Event{
-		SiteID: "site-01", AssetID: "inv-01", Sequence: 12,
+		SiteID: "site-01", AssetID: "inv-01", Sequence: sequence,
 		Code: fallback.InverterFailure, OccurredAt: now.Add(-time.Minute),
 	}
 	if _, err := store.OpenFallbackIncident(ctx, event, now); err != nil {
 		t.Fatalf("OpenFallbackIncident() error = %v", err)
 	}
-	if err := store.RecordFallbackUploadSuccess(ctx, event.Sequence, now); err != nil {
-		t.Fatalf("RecordFallbackUploadSuccess() error = %v", err)
+	if err := store.CompleteUpload(ctx, event.Sequence, now); err != nil {
+		t.Fatalf("CompleteUpload() error = %v", err)
 	}
 	candidates, err := store.FallbackCandidates(ctx, now)
 	if err != nil {

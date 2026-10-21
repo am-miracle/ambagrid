@@ -332,6 +332,9 @@ func TestFailedEventBlocksOnlyItsDeviceUntilRetry(t *testing.T) {
 	if stats.LastSuccessfulSyncAt == nil || !stats.LastSuccessfulSyncAt.Equal(succeededAt.Truncate(time.Millisecond)) {
 		t.Fatalf("last successful sync = %v, want %v", stats.LastSuccessfulSyncAt, succeededAt)
 	}
+	if stats.LastFailedSyncReason != "" {
+		t.Fatalf("last failed sync reason = %q, want cleared after successful contact", stats.LastFailedSyncReason)
+	}
 	records, err := q.Ready(ctx, 10, 1<<20)
 	if err != nil {
 		t.Fatalf("read ready events: %v", err)

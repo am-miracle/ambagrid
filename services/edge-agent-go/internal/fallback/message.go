@@ -53,12 +53,6 @@ func (e Event) EventKey() EventKey {
 	return NewEventKey(e.SiteID, e.Sequence)
 }
 
-// Validate checks that event fits the SMS wire contract.
-func Validate(event Event) error {
-	_, err := Format(event)
-	return err
-}
-
 func Format(event Event) (string, error) {
 	if !event.Code.Valid() {
 		return "", fmt.Errorf("unknown critical fallback code %q", event.Code)

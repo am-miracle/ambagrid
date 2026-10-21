@@ -6,9 +6,42 @@ use crate::domain::{
 pub const INTERNAL_TEMPERATURE_ALERT_KIND: &str = "internal_temperature";
 pub const BATTERY_OVERHEAT_ALERT_KIND: &str = "battery_overheat";
 
-pub fn critical_fallback_decision(reading: &Reading, code: &str) -> Option<AlertDecision> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CriticalCode {
+    BatteryOverheat,
+    InverterFailure,
+    TamperDetected,
+    SiteOutage,
+}
+
+impl CriticalCode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::BatteryOverheat => "BATTERY_OVERHEAT",
+            Self::InverterFailure => "INVERTER_FAILURE",
+            Self::TamperDetected => "TAMPER_DETECTED",
+            Self::SiteOutage => "SITE_OUTAGE",
+        }
+    }
+}
+
+impl TryFrom<&str> for CriticalCode {
+    type Error = ();
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "BATTERY_OVERHEAT" => Ok(Self::BatteryOverheat),
+            "INVERTER_FAILURE" => Ok(Self::InverterFailure),
+            "TAMPER_DETECTED" => Ok(Self::TamperDetected),
+            "SITE_OUTAGE" => Ok(Self::SiteOutage),
+            _ => Err(()),
+        }
+    }
+}
+
+pub fn critical_fallback_decision(reading: &Reading, code: CriticalCode) -> Option<AlertDecision> {
     let (asset_id, kind, reason) = match code {
-        "BATTERY_OVERHEAT" => (
+        CriticalCode::BatteryOverheat => (
             if reading.asset_type() == AssetType::BatteryBms {
                 reading.asset.asset_id.clone()
             } else {
@@ -20,7 +53,7 @@ pub fn critical_fallback_decision(reading: &Reading, code: &str) -> Option<Alert
                 reading.asset.internal_temperature?
             ),
         ),
-        "INVERTER_FAILURE" => {
+        CriticalCode::InverterFailure => {
             if reading.asset_type() != AssetType::SolarInverter {
                 return None;
             }
@@ -30,13 +63,12 @@ pub fn critical_fallback_decision(reading: &Reading, code: &str) -> Option<Alert
                 "inverter_failure".to_string(),
             )
         }
-        "TAMPER_DETECTED" => (
+        CriticalCode::TamperDetected => (
             reading.asset.asset_id.clone(),
             "tamper_detected",
             "tamper_detected".to_string(),
         ),
-        "SITE_OUTAGE" => ("site".to_string(), "site_outage", "site_outage".to_string()),
-        _ => return None,
+        CriticalCode::SiteOutage => ("site".to_string(), "site_outage", "site_outage".to_string()),
     };
     Some(AlertDecision {
         asset_id,
@@ -163,6 +195,25 @@ mod tests {
             ]
         );
         assert_eq!(contract["event_key_prefix"], "edge:");
+        let rules = contract["rules"].as_array().unwrap();
+        for rule in rules {
+            let code = CriticalCode::try_from(rule["code"].as_str().unwrap()).unwrap();
+            assert_eq!(code.as_str(), rule["code"].as_str().unwrap());
+            let expected_kind = match code {
+                CriticalCode::BatteryOverheat => BATTERY_OVERHEAT_ALERT_KIND,
+                CriticalCode::InverterFailure => "inverter_failure",
+                CriticalCode::TamperDetected => "tamper_detected",
+                CriticalCode::SiteOutage => "site_outage",
+            };
+            assert_eq!(expected_kind, rule["alert_kind"].as_str().unwrap());
+            let expected_asset = match code {
+                CriticalCode::BatteryOverheat => "battery_bms",
+                CriticalCode::InverterFailure => "solar_inverter",
+                CriticalCode::TamperDetected => "*",
+                CriticalCode::SiteOutage => "site",
+            };
+            assert_eq!(expected_asset, rule["asset_type"].as_str().unwrap());
+        }
     }
 
     #[test]
@@ -265,8 +316,8 @@ mod tests {
             edge: None,
         };
 
-        assert!(critical_fallback_decision(&reading, "BATTERY_OVERHEAT").is_none());
-        assert!(critical_fallback_decision(&reading, "INVERTER_FAILURE").is_none());
+        assert!(critical_fallback_decision(&reading, CriticalCode::BatteryOverheat).is_none());
+        assert!(critical_fallback_decision(&reading, CriticalCode::InverterFailure).is_none());
     }
 
     #[test]

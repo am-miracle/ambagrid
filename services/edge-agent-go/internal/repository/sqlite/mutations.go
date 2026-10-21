@@ -140,6 +140,101 @@ func (s *Store) Ack(ctx context.Context, sequence uint64) error {
 	return s.transition(ctx, sequence, domain.StatusUploaded, domain.StatusAcknowledged)
 }
 
+// CompleteUpload commits the queue acknowledgement and its related fallback
+// bookkeeping together. A crash can therefore leave the record retryable or
+// fully complete, but never stranded between those states.
+func (s *Store) CompleteUpload(ctx context.Context, sequence uint64, uploadedAt time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin upload completion: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
+UPDATE queue_events
+SET status = ?, uploaded_at_ms = ?, next_attempt_at_ms = NULL, last_error = NULL
+WHERE sequence = ? AND status IN (?, ?)`, domain.StatusAcknowledged, uploadedAt.UTC().UnixMilli(), sequence,
+		domain.StatusPendingUpload, domain.StatusUploaded)
+	if err != nil {
+		return fmt.Errorf("complete queue event %d: %w", sequence, err)
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read upload completion result: %w", err)
+	}
+	if updated == 0 {
+		var current domain.EventStatus
+		if err := tx.QueryRowContext(ctx, "SELECT status FROM queue_events WHERE sequence = ?", sequence).Scan(&current); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("%w: sequence %d", domain.ErrEventNotFound, sequence)
+			}
+			return fmt.Errorf("read queue event %d status: %w", sequence, err)
+		}
+		if current != domain.StatusAcknowledged {
+			return fmt.Errorf("%w: sequence %d is %s, expected %s before completion", domain.ErrInvalidTransition, sequence, current, domain.StatusPendingUpload)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE fallback_incidents SET normal_delivered_at_ms = ? WHERE sequence = ?`, uploadedAt.UTC().UnixMilli(), sequence); err != nil {
+		return fmt.Errorf("mark fallback normally delivered: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE edge_sync_state
+SET last_upload_success_at_ms = ?, last_upload_failure_reason = NULL,
+    replay_mode_active = EXISTS(
+        SELECT 1 FROM queue_events
+        WHERE status IN ('persisted', 'pending_upload', 'uploaded') AND replay_required = 1
+    )
+WHERE singleton = 1`, uploadedAt.UTC().UnixMilli()); err != nil {
+		return fmt.Errorf("record upload completion: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit upload completion: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) Abandon(ctx context.Context, sequence uint64, cause string) error {
+	if len(cause) > maxFailureCauseBytes {
+		cause = cause[:maxFailureCauseBytes]
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin queue abandonment: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
+UPDATE queue_events
+SET status = ?, attempt_count = attempt_count + 1, rejection_count = rejection_count + 1,
+    next_attempt_at_ms = NULL, last_error = ?
+WHERE sequence = ? AND status = ?`, domain.StatusAbandoned, cause, sequence, domain.StatusPendingUpload)
+	if err != nil {
+		return fmt.Errorf("abandon queue event %d: %w", sequence, err)
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read abandon result: %w", err)
+	}
+	if updated > 0 {
+		if _, err := tx.ExecContext(ctx, `UPDATE edge_sync_state SET abandoned_count = abandoned_count + 1 WHERE singleton = 1`); err != nil {
+			return fmt.Errorf("count abandoned queue event: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit queue abandonment: %w", err)
+		}
+		return nil
+	}
+	var current domain.EventStatus
+	if err := tx.QueryRowContext(ctx, "SELECT status FROM queue_events WHERE sequence = ?", sequence).Scan(&current); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: sequence %d", domain.ErrEventNotFound, sequence)
+		}
+		return fmt.Errorf("read queue event %d status: %w", sequence, err)
+	}
+	if current == domain.StatusAbandoned {
+		return nil
+	}
+	return fmt.Errorf("%w: sequence %d is %s, expected %s before %s", domain.ErrInvalidTransition, sequence, current, domain.StatusPendingUpload, domain.StatusAbandoned)
+}
+
 func (s *Store) Expire(ctx context.Context, sequence uint64) error {
 	return s.transition(ctx, sequence, domain.StatusAcknowledged, domain.StatusExpired)
 }
@@ -220,10 +315,10 @@ func (s *Store) checkAdmission(event domain.Event) error {
 func (s *Store) Purge(ctx context.Context, retentionAge time.Duration) (int64, error) {
 	cutoffMS := time.Now().Add(-retentionAge).UTC().UnixMilli()
 	result, err := s.db.ExecContext(ctx,
-		"DELETE FROM queue_events WHERE status IN (?, ?) AND persisted_at_ms < ?",
-		domain.StatusAcknowledged, domain.StatusExpired, cutoffMS)
+		"DELETE FROM queue_events WHERE status IN (?, ?, ?) AND persisted_at_ms < ?",
+		domain.StatusAcknowledged, domain.StatusExpired, domain.StatusAbandoned, cutoffMS)
 	if err != nil {
-		return 0, fmt.Errorf("purge acknowledged events: %w", err)
+		return 0, fmt.Errorf("purge terminal queue events: %w", err)
 	}
 	deleted, err := result.RowsAffected()
 	if err != nil {
@@ -238,6 +333,14 @@ func (s *Store) Purge(ctx context.Context, retentionAge time.Duration) (int64, e
 }
 
 func (s *Store) MarkFailed(ctx context.Context, sequence uint64, retryAt time.Time, cause string) error {
+	return s.markFailed(ctx, sequence, retryAt, cause, false)
+}
+
+func (s *Store) MarkRejected(ctx context.Context, sequence uint64, retryAt time.Time, cause string) error {
+	return s.markFailed(ctx, sequence, retryAt, cause, true)
+}
+
+func (s *Store) markFailed(ctx context.Context, sequence uint64, retryAt time.Time, cause string, rejected bool) error {
 	if retryAt.IsZero() {
 		return errors.New("retry timestamp is required")
 	}
@@ -252,14 +355,19 @@ func (s *Store) MarkFailed(ctx context.Context, sequence uint64, retryAt time.Ti
 		return fmt.Errorf("begin failed event update: %w", err)
 	}
 	defer tx.Rollback()
+	rejectionIncrement := 0
+	if rejected {
+		rejectionIncrement = 1
+	}
 	result, err := tx.ExecContext(ctx, `
 UPDATE queue_events
 SET status = ?,
     attempt_count = attempt_count + 1,
+    rejection_count = rejection_count + ?,
     replay_required = 1,
     next_attempt_at_ms = ?,
     last_error = ?
-WHERE sequence = ? AND status IN (?, ?)`, domain.StatusPendingUpload, retryAt.UTC().UnixMilli(), cause, sequence, domain.StatusPendingUpload, domain.StatusUploaded)
+WHERE sequence = ? AND status IN (?, ?)`, domain.StatusPendingUpload, rejectionIncrement, retryAt.UTC().UnixMilli(), cause, sequence, domain.StatusPendingUpload, domain.StatusUploaded)
 	if err != nil {
 		return fmt.Errorf("mark queue event %d failed: %w", sequence, err)
 	}

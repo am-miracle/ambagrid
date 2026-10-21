@@ -97,6 +97,10 @@ func FromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	apiKeys, err := parseAPIKeys(os.Getenv("INGEST_HTTP_API_KEYS"))
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
 		MQTTBroker:             envString("MQTT_BROKER", "tcp://localhost:1883"),
 		MQTTTopicFilter:        envString("MQTT_TOPIC_FILTER", "africa-west/+/+/+/telemetry"),
@@ -117,7 +121,7 @@ func FromEnv() (Config, error) {
 		HTTP: HTTPConfig{
 			Enabled:         httpEnabled,
 			Addr:            envString("INGEST_HTTP_ADDR", ":8090"),
-			APIKeys:         parseAPIKeys(os.Getenv("INGEST_HTTP_API_KEYS")),
+			APIKeys:         apiKeys,
 			MaxBodyBytes:    httpMaxBody,
 			ShutdownTimeout: httpShutdownTimeout,
 			HealthTopic:     envString("INGEST_HEALTH_TOPIC", "site.health"),
@@ -291,23 +295,31 @@ func envBool(key string, fallback bool) (bool, error) {
 	return value, nil
 }
 
-func parseAPIKeys(raw string) []APIKeyEntry {
+func parseAPIKeys(raw string) ([]APIKeyEntry, error) {
 	if strings.TrimSpace(raw) == "" {
-		return nil
+		return nil, nil
 	}
 	var entries []APIKeyEntry
-	for _, pair := range strings.Split(raw, ",") {
+	seenKeys := make(map[string]struct{})
+	index := 0
+	for pair := range strings.SplitSeq(raw, ",") {
+		index++
 		pair = strings.TrimSpace(pair)
 		if pair == "" {
 			continue
 		}
-		parts := strings.SplitN(pair, ":", 2)
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			continue
+		siteID, key, ok := strings.Cut(pair, ":")
+		siteID, key = strings.TrimSpace(siteID), strings.TrimSpace(key)
+		if !ok || siteID == "" || key == "" {
+			return nil, fmt.Errorf("INGEST_HTTP_API_KEYS entry %d must use site:key", index)
 		}
-		entries = append(entries, APIKeyEntry{Key: parts[1], SiteID: parts[0]})
+		if _, exists := seenKeys[key]; exists {
+			return nil, fmt.Errorf("INGEST_HTTP_API_KEYS entry %d duplicates an earlier key", index)
+		}
+		seenKeys[key] = struct{}{}
+		entries = append(entries, APIKeyEntry{Key: key, SiteID: siteID})
 	}
-	return entries
+	return entries, nil
 }
 
 func envInt64(key string, fallback int64) (int64, error) {

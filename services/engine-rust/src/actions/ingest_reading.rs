@@ -3,7 +3,7 @@ use crate::{
         actor::ResolutionActor,
         alert::Alert,
         asset::Reading,
-        rules::{ThresholdPolicy, critical_fallback_decision},
+        rules::{CriticalCode, ThresholdPolicy, critical_fallback_decision},
     },
     ports::{IngestRepository, PolicyOutcome, PortError},
 };
@@ -36,13 +36,14 @@ where
         reading: Reading,
         critical_code: Option<&str>,
     ) -> Result<IngestResult, PortError> {
-        let critical = critical_code.and_then(|code| {
+        let critical = critical_code.and_then(|raw_code| {
+            let code = CriticalCode::try_from(raw_code).ok()?;
             critical_fallback_decision(&reading, code).map(|decision| (decision, code))
         });
         let outcome = match critical {
             Some((decision, code)) => PolicyOutcome::OpenCritical {
                 decision,
-                code: code.to_owned(),
+                code: code.as_str().to_owned(),
             },
             None => match self.policy.evaluate(&reading) {
                 Some(decision) => PolicyOutcome::Open(decision),

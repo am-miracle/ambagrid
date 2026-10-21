@@ -36,6 +36,7 @@ jobs:
             go.sum
             services/api-go/go.sum
             services/ingestion-go/go.sum
+            services/edge-agent-go/go.sum
 
       - name: Check root Go formatting
         run: test -z "$(gofmt -l scripts)"
@@ -79,6 +80,18 @@ jobs:
       - name: Test ingestion service
         working-directory: services/ingestion-go
         run: go test -race ./...
+
+      - name: Check edge agent formatting
+        working-directory: services/edge-agent-go
+        run: test -z "$(gofmt -l .)"
+
+      - name: Vet edge agent
+        working-directory: services/edge-agent-go
+        run: go vet ./...
+
+      - name: Test edge agent
+        working-directory: services/edge-agent-go
+        run: go test -race -tags=integration ./...
 
   rust:
     name: Rust

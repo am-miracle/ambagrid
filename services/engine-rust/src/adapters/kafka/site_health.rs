@@ -4,12 +4,22 @@ use chrono::{DateTime, Utc};
 use rdkafka::{
     Message,
     consumer::{Consumer, StreamConsumer},
+    error::KafkaError,
 };
+
 use serde::Deserialize;
 use sqlx::{PgPool, query};
 
 use super::client_config;
 use crate::config::KafkaSecurity;
+
+#[derive(Debug, thiserror::Error)]
+pub enum SiteHealthConsumerError {
+    #[error("create site health Kafka consumer: {0}")]
+    CreateConsumer(#[source] KafkaError),
+    #[error("subscribe site health Kafka consumer: {0}")]
+    Subscribe(#[source] KafkaError),
+}
 
 const UPSERT_SITE_HEALTH: &str = r#"
     INSERT INTO site_health (
@@ -53,14 +63,17 @@ struct SiteHealthEvent {
 pub async fn run(
     config: SiteHealthConsumerConfig,
     pool: PgPool,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), SiteHealthConsumerError> {
     let consumer: StreamConsumer = client_config(&config.brokers, &config.security)
         .set("group.id", &config.group_id)
         .set("auto.offset.reset", "earliest")
         .set("enable.auto.commit", "true")
         .set("enable.auto.offset.store", "false")
-        .create()?;
-    consumer.subscribe(&[&config.topic])?;
+        .create()
+        .map_err(SiteHealthConsumerError::CreateConsumer)?;
+    consumer
+        .subscribe(&[&config.topic])
+        .map_err(SiteHealthConsumerError::Subscribe)?;
 
     loop {
         let message = match consumer.recv().await {

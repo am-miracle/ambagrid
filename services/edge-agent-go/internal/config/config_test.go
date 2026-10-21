@@ -19,6 +19,7 @@ func TestFromEnvBuildsEdgeQueueConfiguration(t *testing.T) {
 	t.Setenv("EDGE_QUEUE_CRITICAL_RESERVE_PERCENT", "15")
 	t.Setenv("EDGE_MIN_FILESYSTEM_FREE_BYTES", "1048576")
 	t.Setenv("EDGE_SIMULATOR_ENABLED", "true")
+	t.Setenv("EDGE_SIMULATOR_FAULTS", "true")
 	t.Setenv("EDGE_COLLECTOR_INTERVAL", "2s")
 	t.Setenv("EDGE_REGION", "africa-east")
 	t.Setenv("EDGE_SMS_DEBOUNCE", "45s")
@@ -37,7 +38,7 @@ func TestFromEnvBuildsEdgeQueueConfiguration(t *testing.T) {
 	if cfg.Queue.MinFilesystemFreeBytes != 1_048_576 || cfg.HealthAddr != "127.0.0.1:32112" {
 		t.Fatalf("service config = %#v", cfg)
 	}
-	if !cfg.Collector.Enabled || cfg.Collector.Interval != 2*time.Second || cfg.Collector.Region != "africa-east" {
+	if !cfg.Collector.Enabled || !cfg.Collector.Faults || cfg.Collector.Interval != 2*time.Second || cfg.Collector.Region != "africa-east" {
 		t.Fatalf("collector config = %#v", cfg.Collector)
 	}
 	if cfg.SMS.Debounce != 45*time.Second {

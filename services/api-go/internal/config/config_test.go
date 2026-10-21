@@ -2,6 +2,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -79,6 +80,17 @@ func TestFromEnvLoadsSMSFallbackSettings(t *testing.T) {
 	}
 	if cfg.SMSCurrency != "NGN" || cfg.SMSMonthlyBudgetMinor != 1000 || cfg.SMSSenders["+2348000000000"].GatewayID != "gateway-01" {
 		t.Fatalf("SMS config = %+v", cfg)
+	}
+}
+
+func TestFromEnvRejectsMalformedSMSSender(t *testing.T) {
+	setRequired(t)
+	const sender = "+2348000000000=missing-gateway"
+	t.Setenv("API_SMS_SENDERS", sender)
+	if _, err := FromEnv(); err == nil {
+		t.Fatal("FromEnv() accepted a malformed API_SMS_SENDERS entry")
+	} else if strings.Contains(err.Error(), "+2348000000000") {
+		t.Fatalf("configuration error exposed sender phone number: %v", err)
 	}
 }
 

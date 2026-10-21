@@ -19,6 +19,7 @@ type fakeQueue struct {
 	records       []domain.Record
 	uploaded      map[uint64]time.Time
 	acked         map[uint64]bool
+	abandoned     map[uint64]string
 	failed        map[uint64]string
 	readyCalls    atomic.Int64
 	uploadedCalls atomic.Int64
@@ -26,10 +27,11 @@ type fakeQueue struct {
 
 func newFakeQueue(records []domain.Record) *fakeQueue {
 	return &fakeQueue{
-		records:  records,
-		uploaded: make(map[uint64]time.Time),
-		acked:    make(map[uint64]bool),
-		failed:   make(map[uint64]string),
+		records:   records,
+		uploaded:  make(map[uint64]time.Time),
+		acked:     make(map[uint64]bool),
+		abandoned: make(map[uint64]string),
+		failed:    make(map[uint64]string),
 	}
 }
 
@@ -67,11 +69,29 @@ func (q *fakeQueue) Ack(_ context.Context, sequence uint64) error {
 	return nil
 }
 
+func (q *fakeQueue) CompleteUpload(ctx context.Context, sequence uint64, uploadedAt time.Time) error {
+	if err := q.MarkUploaded(ctx, sequence, uploadedAt); err != nil {
+		return err
+	}
+	return q.Ack(ctx, sequence)
+}
+
+func (q *fakeQueue) Abandon(_ context.Context, sequence uint64, cause string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.abandoned[sequence] = cause
+	return nil
+}
+
 func (q *fakeQueue) MarkFailed(_ context.Context, sequence uint64, _ time.Time, cause string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.failed[sequence] = cause
 	return nil
+}
+
+func (q *fakeQueue) MarkRejected(ctx context.Context, sequence uint64, retryAt time.Time, cause string) error {
+	return q.MarkFailed(ctx, sequence, retryAt, cause)
 }
 
 func (q *fakeQueue) Purge(_ context.Context, _ time.Duration) (int64, error) {
@@ -117,10 +137,7 @@ type fakeTracker struct {
 	contactFailure string
 }
 
-func (t *fakeTracker) RecordFallbackUploadFailure(context.Context, uint64) error { return nil }
-func (t *fakeTracker) RecordFallbackUploadSuccess(context.Context, uint64, time.Time) error {
-	return nil
-}
+func (t *fakeTracker) RecordFallbackUploadFailure(context.Context, uint64) error   { return nil }
 func (t *fakeTracker) RecordUploadContactSuccess(context.Context, time.Time) error { return nil }
 func (t *fakeTracker) RecordUploadContactFailure(_ context.Context, cause string) error {
 	t.mu.Lock()
@@ -408,14 +425,19 @@ func TestUploader_ReplayFlag(t *testing.T) {
 	}
 }
 
-func TestUploader_ExhaustedRetries_DropsRecord(t *testing.T) {
+func TestUploader_ExhaustedServerRejections_AbandonsRecord(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(uploader.BatchResponse{Rejected: []uploader.RecordError{{
+			Sequence: 1, Code: "validation_failed", Message: "invalid telemetry",
+		}}})
 	}))
 	defer server.Close()
 
 	exhausted := testRecord(1)
 	exhausted.AttemptCount = 4
+	exhausted.RejectionCount = 4
 
 	queue := newFakeQueue([]domain.Record{exhausted})
 	client := uploader.NewIngestClient(server.URL+"/v1/ingest", "test-key", 5*time.Second)
@@ -436,11 +458,47 @@ func TestUploader_ExhaustedRetries_DropsRecord(t *testing.T) {
 	cancel()
 
 	_, acked, failed := queue.snapshots()
-	if !acked[1] {
-		t.Fatal("exhausted record should be acked (dropped)")
+	queue.mu.RLock()
+	abandoned := queue.abandoned[1]
+	queue.mu.RUnlock()
+	if abandoned == "" {
+		t.Fatal("exhausted record should be durably abandoned")
+	}
+	if acked[1] {
+		t.Fatal("exhausted pending record must not be acknowledged through an invalid transition")
 	}
 	if _, ok := failed[1]; ok {
 		t.Fatal("exhausted record should not be marked for retry")
+	}
+}
+
+func TestUploader_TransportFailuresNeverAbandonRecord(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	record := testRecord(1)
+	record.AttemptCount = 100
+	queue := newFakeQueue([]domain.Record{record})
+	client := uploader.NewIngestClient(server.URL+"/v1/ingest", "test-key", 5*time.Second)
+	ul := uploader.New(uploader.Config{PollInterval: time.Hour, MaxRetries: 5}, queue, client, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go ul.Run(ctx)
+	time.Sleep(500 * time.Millisecond)
+	cancel()
+
+	queue.mu.RLock()
+	abandoned := queue.abandoned[1]
+	failed := queue.failed[1]
+	queue.mu.RUnlock()
+	if abandoned != "" {
+		t.Fatalf("transport failure abandoned record: %q", abandoned)
+	}
+	if failed == "" {
+		t.Fatal("transport failure should schedule the record for retry")
 	}
 }
 

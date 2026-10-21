@@ -66,6 +66,7 @@ func TestHealthAndMetricsExposeDurableQueueState(t *testing.T) {
 	}
 	for _, want := range []string{
 		"ambagrid_edge_queue_depth 1",
+		"ambagrid_edge_queue_abandoned_total 0",
 		"ambagrid_edge_queue_payload_bytes 17",
 		`ambagrid_edge_storage_state{state="healthy"} 1`,
 		`ambagrid_edge_fallback_rate_limited_incidents{reason="incident_attempt_limit"} 0`,

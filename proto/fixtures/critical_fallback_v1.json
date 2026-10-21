@@ -6,5 +6,35 @@
     "INVERTER_FAILURE",
     "TAMPER_DETECTED",
     "SITE_OUTAGE"
+  ],
+  "rules": [
+    {
+      "code": "BATTERY_OVERHEAT",
+      "asset_type": "battery_bms",
+      "alert_kind": "battery_overheat",
+      "requires_temperature": true,
+      "site_scoped": false
+    },
+    {
+      "code": "INVERTER_FAILURE",
+      "asset_type": "solar_inverter",
+      "alert_kind": "inverter_failure",
+      "requires_temperature": false,
+      "site_scoped": false
+    },
+    {
+      "code": "TAMPER_DETECTED",
+      "asset_type": "*",
+      "alert_kind": "tamper_detected",
+      "requires_temperature": false,
+      "site_scoped": false
+    },
+    {
+      "code": "SITE_OUTAGE",
+      "asset_type": "site",
+      "alert_kind": "site_outage",
+      "requires_temperature": false,
+      "site_scoped": true
+    }
   ]
 }

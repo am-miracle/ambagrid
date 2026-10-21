@@ -91,6 +91,29 @@ func TestCoordinatorWaitsForConnectivityThreshold(t *testing.T) {
 	}
 }
 
+func TestCoordinatorUsesLastSuccessfulUploadBeforeIncident(t *testing.T) {
+	now := time.Unix(1730000200, 0).UTC()
+	store := &fakeStore{candidates: []fallback.Candidate{{
+		Event: fallback.Event{SiteID: "ng-kaji-01", AssetID: "inv-01", Sequence: 10,
+			Code: fallback.InverterFailure, OccurredAt: now},
+		OpenedAt: now.Add(-time.Minute), UploadFailures: 1,
+		LastUploadSuccess: ptrTime(now.Add(-10 * time.Minute)),
+	}}}
+	sender := &fakeSender{}
+	coordinator := fallback.NewCoordinator(fallback.Config{
+		Destination: "+2348000000000", FailureThreshold: 3, OfflineAfter: 2 * time.Minute,
+		MaxAttempts: 3, HourlyLimit: 6, DailyLimit: 20,
+	}, store, sender)
+	coordinator.SetClock(func() time.Time { return now })
+
+	if err := coordinator.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.messages) != 1 {
+		t.Fatalf("sent messages = %v, want immediate fallback after an existing outage", sender.messages)
+	}
+}
+
 func TestCoordinatorEnforcesSiteBudgetAcrossCandidates(t *testing.T) {
 	now := time.Unix(1730000200, 0).UTC()
 	store := &fakeStore{candidates: []fallback.Candidate{

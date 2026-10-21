@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"api-go/internal/domain"
-	"api-go/internal/services"
+	"api-go/internal/repository"
 )
 
 type FallbackStore struct {
@@ -19,7 +19,7 @@ func NewFallbackStore(pool databasePool) *FallbackStore {
 	return &FallbackStore{pool: pool}
 }
 
-func (s *FallbackStore) RunFallbackTx(ctx context.Context, eventKey domain.EventKey, fn func(services.FallbackTx) (bool, error)) (bool, error) {
+func (s *FallbackStore) RunFallbackTx(ctx context.Context, eventKey domain.EventKey, fn func(repository.FallbackTx) (bool, error)) (bool, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return false, fmt.Errorf("begin fallback tx: %w", err)
@@ -69,7 +69,7 @@ func (t fallbackTx) LookupAssetType(ctx context.Context, assetID, siteID string)
 		`SELECT asset_type FROM assets WHERE asset_id = $1 AND site_id = $2`,
 		assetID, siteID).Scan(&assetType)
 	if err == pgx.ErrNoRows {
-		return "", fmt.Errorf("asset not found")
+		return "", fmt.Errorf("%w: asset %q at site %q", domain.ErrNotFound, assetID, siteID)
 	}
 	if err != nil {
 		return "", fmt.Errorf("lookup asset type: %w", err)
@@ -83,7 +83,7 @@ func (t fallbackTx) FindAlertBySourceEvent(ctx context.Context, sourceEventID do
 		`SELECT alert_id::text FROM alerts WHERE source_event_id = $1 FOR UPDATE`,
 		sourceEventID).Scan(&alertID)
 	if err == pgx.ErrNoRows {
-		return "", fmt.Errorf("alert not found")
+		return "", fmt.Errorf("%w: alert for source event %q", domain.ErrNotFound, sourceEventID)
 	}
 	if err != nil {
 		return "", fmt.Errorf("find alert by source event: %w", err)
@@ -97,7 +97,7 @@ func (t fallbackTx) FindOpenAlert(ctx context.Context, siteID, assetID, kind str
 		`SELECT alert_id::text FROM alerts WHERE site_id = $1 AND asset_id = $2 AND kind = $3 AND status = 'open' FOR UPDATE`,
 		siteID, assetID, kind).Scan(&alertID)
 	if err == pgx.ErrNoRows {
-		return "", fmt.Errorf("open alert not found")
+		return "", fmt.Errorf("%w: open %s alert for asset %q at site %q", domain.ErrNotFound, kind, assetID, siteID)
 	}
 	if err != nil {
 		return "", fmt.Errorf("find open alert: %w", err)

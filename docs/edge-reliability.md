@@ -93,6 +93,12 @@ The qualifying codes, send thresholds, idempotency contract, provider shape,
 rate limits, and cost controls are defined in
 [Critical alert fallback design](critical-alert-fallback.md).
 
+The version 1 policy deliberately keeps gateway online/offline heartbeats on
+the HTTP `site.health` path. It does not send them by SMS: a gateway that cannot
+reach the data service cannot authoritatively report an "online" transition,
+and periodic heartbeat messages would consume the emergency SMS budget needed
+for critical asset and site incidents.
+
 ## OTA Updates
 
 Over-the-air updates are important, but risky. Bad OTA can brick equipment or cut off a site.

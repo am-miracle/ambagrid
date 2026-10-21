@@ -33,8 +33,9 @@ export function FleetTable({
 	onSelectSite,
 }: FleetTableProps) {
 	const sorted = sortSites(sites, statuses);
-	const offlineIdx = sorted.findIndex((s) => statuses[s.id] !== "offline");
-	const hasOffline = offlineIdx > 0 || (offlineIdx === -1 && sorted.length > 0);
+	const firstOnlineIdx = sorted.findIndex((s) => statuses[s.id] !== "offline");
+	const hasOffline =
+		firstOnlineIdx > 0 || (firstOnlineIdx === -1 && sorted.length > 0);
 
 	return (
 		<>
@@ -48,7 +49,7 @@ export function FleetTable({
 				>
 					<span />
 					<span>Site</span>
-					<span>Gateway</span>
+					<span>Health</span>
 					<span>Contact</span>
 					<span>Queue</span>
 					<span>Oldest</span>
@@ -59,7 +60,7 @@ export function FleetTable({
 					const showDivider =
 						!isOffline &&
 						hasOffline &&
-						i === (offlineIdx === -1 ? sorted.length : offlineIdx);
+						i === (firstOnlineIdx === -1 ? sorted.length : firstOnlineIdx);
 
 					return (
 						<div key={s.id}>

@@ -70,13 +70,17 @@ func run() (runErr error) {
 	}()
 
 	if cfg.Collector.Enabled {
+		simulatorOptions := []simulator.Option{}
+		if cfg.Collector.Faults {
+			simulatorOptions = append(simulatorOptions, simulator.WithCriticalFaults())
+		}
 		telemetryCollector, err := collector.New(collector.Config{
 			SiteID:           cfg.Queue.SiteID,
 			Region:           cfg.Collector.Region,
 			Interval:         cfg.Collector.Interval,
 			BatteryOverheatC: cfg.SMS.BatteryOverheatC,
 			FallbackDebounce: cfg.SMS.Debounce,
-		}, durableQueue, simulator.New(cfg.Queue.SiteID))
+		}, durableQueue, simulator.New(cfg.Queue.SiteID, simulatorOptions...))
 		if err != nil {
 			return fmt.Errorf("configure telemetry collector: %w", err)
 		}

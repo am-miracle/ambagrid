@@ -62,6 +62,102 @@ func TestQueueEventLifecycle(t *testing.T) {
 	}
 }
 
+func TestCompleteUploadAcknowledgesPendingEventAtomically(t *testing.T) {
+	ctx := context.Background()
+	store := openTestQueue(t)
+	defer store.Close()
+	sequence, err := store.Enqueue(ctx, testEvent([]byte("reading"), domain.PriorityNormal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordUploadContactFailure(ctx, "network unavailable"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteUpload(ctx, sequence, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	assertRecordStatus(t, store, sequence, domain.StatusAcknowledged)
+	stats, err := store.Stats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.LastFailedSyncReason != "" {
+		t.Fatalf("last failure = %q, want cleared after recovery", stats.LastFailedSyncReason)
+	}
+}
+
+func TestAbandonExpiresPendingEventAndUnblocksDevice(t *testing.T) {
+	ctx := context.Background()
+	store := openTestQueue(t)
+	defer store.Close()
+	first, err := store.Enqueue(ctx, testEvent([]byte("first"), domain.PriorityNormal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Enqueue(ctx, testEvent([]byte("second"), domain.PriorityNormal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Abandon(ctx, first, "retry limit reached"); err != nil {
+		t.Fatal(err)
+	}
+	assertRecordStatus(t, store, first, domain.StatusAbandoned)
+	stats, err := store.Stats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.AbandonedTotal != 1 {
+		t.Fatalf("abandoned records = %d, want 1", stats.AbandonedTotal)
+	}
+	records, err := store.Ready(ctx, 10, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Sequence != second {
+		t.Fatalf("ready records = %#v, want sequence %d", records, second)
+	}
+	if _, err := store.Purge(ctx, -time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	stats, err = store.Stats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.AbandonedTotal != 1 {
+		t.Fatalf("abandoned total after purge = %d, want 1", stats.AbandonedTotal)
+	}
+}
+
+func TestServerRejectionCountIsSeparateFromTransportAttempts(t *testing.T) {
+	ctx := context.Background()
+	store := openTestQueue(t)
+	defer store.Close()
+	sequence, err := store.Enqueue(ctx, testEvent([]byte("reading"), domain.PriorityNormal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkFailed(ctx, sequence, time.Now().Add(time.Second), "network unavailable"); err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Record(ctx, sequence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.AttemptCount != 1 || record.RejectionCount != 0 {
+		t.Fatalf("counts after transport failure = attempts %d rejections %d", record.AttemptCount, record.RejectionCount)
+	}
+	if err := store.MarkRejected(ctx, sequence, time.Now().Add(time.Second), "invalid telemetry"); err != nil {
+		t.Fatal(err)
+	}
+	record, err = store.Record(ctx, sequence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.AttemptCount != 2 || record.RejectionCount != 1 {
+		t.Fatalf("counts after rejection = attempts %d rejections %d", record.AttemptCount, record.RejectionCount)
+	}
+}
+
 func TestUploadFailureReturnsUploadedEventToPending(t *testing.T) {
 	ctx := context.Background()
 	store := openTestQueue(t)

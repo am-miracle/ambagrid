@@ -63,4 +63,14 @@ PRAGMA user_version = 1;
 	if !record.ReplayRequired {
 		t.Fatal("active migrated record did not require replay after recovery")
 	}
+	if record.RejectionCount != 0 {
+		t.Fatalf("migrated rejection count = %d, want 0", record.RejectionCount)
+	}
+	sequence, err := store.Enqueue(ctx, testEvent([]byte("after migration"), domain.PriorityNormal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sequence != 2 {
+		t.Fatalf("sequence after migration = %d, want 2", sequence)
+	}
 }

@@ -51,6 +51,7 @@ type SMSConfig struct {
 
 type CollectorConfig struct {
 	Enabled  bool
+	Faults   bool
 	Region   string
 	Interval time.Duration
 }
@@ -200,6 +201,10 @@ func FromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	collectorFaults, err := envBool("EDGE_SIMULATOR_FAULTS", false)
+	if err != nil {
+		return Config{}, err
+	}
 	collectorInterval, err := envDuration("EDGE_COLLECTOR_INTERVAL", defaultCollectorInterval)
 	if err != nil {
 		return Config{}, err
@@ -220,6 +225,7 @@ func FromEnv() (Config, error) {
 		},
 		Collector: CollectorConfig{
 			Enabled:  collectorEnabled,
+			Faults:   collectorFaults,
 			Region:   envString("EDGE_REGION", defaultRegion),
 			Interval: collectorInterval,
 		},

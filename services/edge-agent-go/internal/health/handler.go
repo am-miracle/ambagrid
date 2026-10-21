@@ -29,6 +29,7 @@ func NewHandler(source StatsSource, fallbackPolicy domain.FallbackRateLimitPolic
 type healthResponse struct {
 	State                domain.QueueState `json:"state"`
 	QueueDepth           int64             `json:"queue_depth"`
+	AbandonedRecords     int64             `json:"abandoned_records_total"`
 	QueuePayloadBytes    int64             `json:"queue_payload_bytes"`
 	QueueCapacityBytes   int64             `json:"queue_capacity_bytes"`
 	QueueDiskBytes       int64             `json:"queue_disk_bytes"`
@@ -54,6 +55,7 @@ func healthHandler(source StatsSource) http.HandlerFunc {
 		payload, err := json.Marshal(healthResponse{
 			State:                stats.State,
 			QueueDepth:           stats.Depth,
+			AbandonedRecords:     stats.AbandonedTotal,
 			QueuePayloadBytes:    stats.PayloadBytes,
 			QueueCapacityBytes:   stats.CapacityBytes,
 			QueueDiskBytes:       stats.DiskBytes,

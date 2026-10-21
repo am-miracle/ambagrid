@@ -126,6 +126,10 @@ func FromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	smsSenders, err := parseSMSSenders(os.Getenv("API_SMS_SENDERS"))
+	if err != nil {
+		return Config{}, err
+	}
 
 	cfg := Config{
 		HTTPAddr:                   envString("API_HTTP_ADDR", ":8081"),
@@ -152,7 +156,7 @@ func FromEnv() (Config, error) {
 		PaystackSecretKey:          envString("PAYSTACK_SECRET_KEY", ""),
 		SMSEnabled:                 envBool("API_SMS_ENABLED"),
 		SMSWebhookSecret:           envString("API_SMS_WEBHOOK_SECRET", ""),
-		SMSSenders:                 parseSMSSenders(os.Getenv("API_SMS_SENDERS")),
+		SMSSenders:                 smsSenders,
 		SMSOutboundCostMinor:       smsOutboundCost,
 		SMSInboundCostMinor:        smsInboundCost,
 		SMSNumberRentalMinor:       smsNumberRental,
@@ -214,16 +218,27 @@ func FromEnv() (Config, error) {
 	return cfg, nil
 }
 
-func parseSMSSenders(raw string) map[string]SMSSender {
+func parseSMSSenders(raw string) (map[string]SMSSender, error) {
 	result := make(map[string]SMSSender)
-	for _, entry := range strings.Split(raw, ",") {
-		number, value, ok := strings.Cut(strings.TrimSpace(entry), "=")
-		siteID, gatewayID, identityOK := strings.Cut(value, ":")
-		if ok && identityOK && number != "" && siteID != "" && gatewayID != "" {
-			result[number] = SMSSender{SiteID: siteID, GatewayID: gatewayID}
+	index := 0
+	for entry := range strings.SplitSeq(raw, ",") {
+		index++
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
 		}
+		number, value, ok := strings.Cut(entry, "=")
+		siteID, gatewayID, identityOK := strings.Cut(value, ":")
+		number, siteID, gatewayID = strings.TrimSpace(number), strings.TrimSpace(siteID), strings.TrimSpace(gatewayID)
+		if !ok || !identityOK || number == "" || siteID == "" || gatewayID == "" {
+			return nil, fmt.Errorf("API_SMS_SENDERS entry %d must use number=site:gateway", index)
+		}
+		if _, exists := result[number]; exists {
+			return nil, fmt.Errorf("API_SMS_SENDERS entry %d duplicates an earlier sender", index)
+		}
+		result[number] = SMSSender{SiteID: siteID, GatewayID: gatewayID}
 	}
-	return result
+	return result, nil
 }
 
 func envString(key, fallback string) string {

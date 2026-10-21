@@ -14,6 +14,7 @@ type collector struct {
 	fallbackSource         FallbackStatsSource
 	fallbackPolicy         domain.FallbackRateLimitPolicy
 	depth                  *prometheus.Desc
+	abandoned              *prometheus.Desc
 	payloadBytes           *prometheus.Desc
 	capacityBytes          *prometheus.Desc
 	diskBytes              *prometheus.Desc
@@ -32,6 +33,7 @@ func newCollector(source StatsSource, fallbackPolicy domain.FallbackRateLimitPol
 		source:                 source,
 		fallbackPolicy:         fallbackPolicy,
 		depth:                  prometheus.NewDesc("ambagrid_edge_queue_depth", "Number of events waiting for upload.", nil, nil),
+		abandoned:              prometheus.NewDesc("ambagrid_edge_queue_abandoned_total", "Total number of undelivered events abandoned after terminal server rejections.", nil, nil),
 		payloadBytes:           prometheus.NewDesc("ambagrid_edge_queue_payload_bytes", "Payload bytes currently held in the durable queue.", nil, nil),
 		capacityBytes:          prometheus.NewDesc("ambagrid_edge_queue_capacity_bytes", "Payload capacity available within the configured storage budget.", nil, nil),
 		diskBytes:              prometheus.NewDesc("ambagrid_edge_queue_disk_bytes", "Bytes occupied by the SQLite database, WAL, and shared-memory files.", nil, nil),
@@ -53,6 +55,7 @@ func newCollector(source StatsSource, fallbackPolicy domain.FallbackRateLimitPol
 // Describe publishes every descriptor this collector may emit.
 func (c *collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.depth
+	ch <- c.abandoned
 	ch <- c.payloadBytes
 	ch <- c.capacityBytes
 	ch <- c.diskBytes
@@ -77,6 +80,7 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 	}
 	ch <- prometheus.MustNewConstMetric(c.statsAvailable, prometheus.GaugeValue, 1)
 	ch <- prometheus.MustNewConstMetric(c.depth, prometheus.GaugeValue, float64(stats.Depth))
+	ch <- prometheus.MustNewConstMetric(c.abandoned, prometheus.CounterValue, float64(stats.AbandonedTotal))
 	ch <- prometheus.MustNewConstMetric(c.payloadBytes, prometheus.GaugeValue, float64(stats.PayloadBytes))
 	ch <- prometheus.MustNewConstMetric(c.capacityBytes, prometheus.GaugeValue, float64(stats.CapacityBytes))
 	ch <- prometheus.MustNewConstMetric(c.diskBytes, prometheus.GaugeValue, float64(stats.DiskBytes))

@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"api-go/internal/domain"
-	"api-go/internal/services"
+	"api-go/internal/repository"
 )
 
 func TestFallbackTxLifecycleInPostgres(t *testing.T) {
@@ -59,7 +59,7 @@ func TestFallbackTxLifecycleInPostgres(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
 	t.Run("advisory lock and commit", func(t *testing.T) {
-		committed, err := store.RunFallbackTx(ctx, eventKey, func(tx services.FallbackTx) (bool, error) {
+		committed, err := store.RunFallbackTx(ctx, eventKey, func(tx repository.FallbackTx) (bool, error) {
 			stored, err := tx.FindFallbackEvent(ctx, eventKey)
 			if err != nil {
 				return false, err
@@ -111,7 +111,7 @@ func TestFallbackTxLifecycleInPostgres(t *testing.T) {
 	})
 
 	t.Run("find persisted event", func(t *testing.T) {
-		_, err := store.RunFallbackTx(ctx, eventKey, func(tx services.FallbackTx) (bool, error) {
+		_, err := store.RunFallbackTx(ctx, eventKey, func(tx repository.FallbackTx) (bool, error) {
 			stored, err := tx.FindFallbackEvent(ctx, eventKey)
 			if err != nil {
 				return false, err
@@ -130,7 +130,7 @@ func TestFallbackTxLifecycleInPostgres(t *testing.T) {
 	})
 
 	t.Run("find alert by source event", func(t *testing.T) {
-		_, err := store.RunFallbackTx(ctx, eventKey, func(tx services.FallbackTx) (bool, error) {
+		_, err := store.RunFallbackTx(ctx, eventKey, func(tx repository.FallbackTx) (bool, error) {
 			alertID, err := tx.FindAlertBySourceEvent(ctx, eventKey)
 			if err != nil {
 				return false, err
@@ -146,7 +146,7 @@ func TestFallbackTxLifecycleInPostgres(t *testing.T) {
 	})
 
 	t.Run("find open alert", func(t *testing.T) {
-		_, err := store.RunFallbackTx(ctx, eventKey, func(tx services.FallbackTx) (bool, error) {
+		_, err := store.RunFallbackTx(ctx, eventKey, func(tx repository.FallbackTx) (bool, error) {
 			alertID, err := tx.FindOpenAlert(ctx, siteID, assetID, "battery_overheat")
 			if err != nil {
 				return false, err
@@ -176,7 +176,7 @@ func TestFallbackTxLifecycleInPostgres(t *testing.T) {
 		}
 
 		var firstInserted, secondInserted bool
-		_, err := store.RunFallbackTx(ctx, eventKey, func(tx services.FallbackTx) (bool, error) {
+		_, err := store.RunFallbackTx(ctx, eventKey, func(tx repository.FallbackTx) (bool, error) {
 			var err error
 			firstInserted, err = tx.InsertReceipt(ctx, eventKey, receipt, pricing)
 			return false, err
@@ -188,7 +188,7 @@ func TestFallbackTxLifecycleInPostgres(t *testing.T) {
 			t.Fatal("first insert should succeed")
 		}
 
-		_, err = store.RunFallbackTx(ctx, eventKey, func(tx services.FallbackTx) (bool, error) {
+		_, err = store.RunFallbackTx(ctx, eventKey, func(tx repository.FallbackTx) (bool, error) {
 			var err error
 			secondInserted, err = tx.InsertReceipt(ctx, eventKey, receipt, pricing)
 			return false, err
@@ -202,7 +202,7 @@ func TestFallbackTxLifecycleInPostgres(t *testing.T) {
 	})
 
 	t.Run("receipt event key lookup", func(t *testing.T) {
-		_, err := store.RunFallbackTx(ctx, eventKey, func(tx services.FallbackTx) (bool, error) {
+		_, err := store.RunFallbackTx(ctx, eventKey, func(tx repository.FallbackTx) (bool, error) {
 			key, err := tx.FindReceiptEventKey(ctx, "msg-"+suffix)
 			if err != nil {
 				return false, err
@@ -219,7 +219,7 @@ func TestFallbackTxLifecycleInPostgres(t *testing.T) {
 
 	t.Run("monthly SMS usage", func(t *testing.T) {
 		rentalMinor := int64(1000)
-		_, err := store.RunFallbackTx(ctx, eventKey, func(tx services.FallbackTx) (bool, error) {
+		_, err := store.RunFallbackTx(ctx, eventKey, func(tx repository.FallbackTx) (bool, error) {
 			usage, err := tx.GetMonthlySMSUsage(ctx, now, rentalMinor)
 			if err != nil {
 				return false, err
@@ -243,7 +243,7 @@ func TestRunFallbackTxRollsBackOnCallbackError(t *testing.T) {
 	pool := &fakeDatabasePool{tx: tx}
 	store := NewFallbackStore(pool)
 
-	_, err := store.RunFallbackTx(context.Background(), "edge:site:1", func(services.FallbackTx) (bool, error) {
+	_, err := store.RunFallbackTx(context.Background(), "edge:site:1", func(repository.FallbackTx) (bool, error) {
 		return false, context.DeadlineExceeded
 	})
 

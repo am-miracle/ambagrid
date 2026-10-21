@@ -157,7 +157,7 @@ func (c *Coordinator) eligible(candidate Candidate, now time.Time) bool {
 		return true
 	}
 	reference := candidate.OpenedAt
-	if candidate.LastUploadSuccess != nil && candidate.LastUploadSuccess.After(reference) {
+	if candidate.LastUploadSuccess != nil {
 		reference = *candidate.LastUploadSuccess
 	}
 	return now.Sub(reference) >= c.cfg.OfflineAfter

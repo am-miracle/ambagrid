@@ -514,8 +514,13 @@ func (*orderedQueue) DeleteDebounceCondition(context.Context, string, fallback.C
 func (*orderedQueue) Ready(context.Context, int, int64) ([]domain.Record, error)  { return nil, nil }
 func (*orderedQueue) MarkUploaded(context.Context, uint64, time.Time) error       { return nil }
 func (*orderedQueue) Ack(context.Context, uint64) error                           { return nil }
+func (*orderedQueue) CompleteUpload(context.Context, uint64, time.Time) error     { return nil }
+func (*orderedQueue) Abandon(context.Context, uint64, string) error               { return nil }
 func (*orderedQueue) MarkFailed(context.Context, uint64, time.Time, string) error { return nil }
-func (*orderedQueue) Purge(context.Context, time.Duration) (int64, error)         { return 0, nil }
+func (*orderedQueue) MarkRejected(context.Context, uint64, time.Time, string) error {
+	return nil
+}
+func (*orderedQueue) Purge(context.Context, time.Duration) (int64, error) { return 0, nil }
 func (*orderedQueue) Stats(context.Context) (domain.QueueStats, error) {
 	return domain.QueueStats{}, nil
 }

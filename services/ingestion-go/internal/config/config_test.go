@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -94,6 +95,17 @@ func TestFromEnvDefaults(t *testing.T) {
 	}
 	if cfg.KafkaSecurity.Protocol != ProtocolPlaintext || cfg.KafkaSecurity.UsesTLS() || cfg.KafkaSecurity.UsesSASL() {
 		t.Errorf("KafkaSecurity = %+v, want plaintext", cfg.KafkaSecurity)
+	}
+}
+
+func TestFromEnvRejectsMalformedHTTPAPIKey(t *testing.T) {
+	clearEnv(t)
+	const secret = "secret-without-site-separator"
+	t.Setenv("INGEST_HTTP_API_KEYS", secret)
+	if _, err := FromEnv(); err == nil {
+		t.Fatal("FromEnv() accepted a malformed INGEST_HTTP_API_KEYS entry")
+	} else if strings.Contains(err.Error(), secret) {
+		t.Fatalf("configuration error exposed API key: %v", err)
 	}
 }
 

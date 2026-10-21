@@ -46,7 +46,7 @@ func (s *Store) recoverFallbackIncidents(ctx context.Context) error {
 }
 
 func (s *Store) OpenFallbackIncident(ctx context.Context, event fallback.Event, openedAt time.Time) (bool, error) {
-	if err := fallback.Validate(event); err != nil {
+	if _, err := fallback.Format(event); err != nil {
 		return false, err
 	}
 	result, err := s.db.ExecContext(ctx, `
@@ -86,28 +86,6 @@ func (s *Store) RecordFallbackUploadFailure(ctx context.Context, sequence uint64
 	return nil
 }
 
-func (s *Store) RecordFallbackUploadSuccess(ctx context.Context, sequence uint64, at time.Time) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin fallback upload success: %w", err)
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE fallback_incidents SET normal_delivered_at_ms = ? WHERE sequence = ?`, at.UnixMilli(), sequence); err != nil {
-		return fmt.Errorf("mark fallback normally delivered: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE edge_sync_state
-		SET last_upload_success_at_ms = ?
-		WHERE singleton = 1`, at.UnixMilli()); err != nil {
-		return fmt.Errorf("record upload success: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit fallback upload success: %w", err)
-	}
-	return nil
-}
-
 func (s *Store) RecordUploadContactFailure(ctx context.Context, cause string) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE edge_sync_state
@@ -123,6 +101,7 @@ func (s *Store) RecordUploadContactSuccess(ctx context.Context, at time.Time) er
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE edge_sync_state
 		SET last_upload_success_at_ms = ?,
+		    last_upload_failure_reason = NULL,
 		    replay_mode_active = EXISTS(
 		        SELECT 1 FROM queue_events
 		        WHERE status IN ('persisted', 'pending_upload', 'uploaded') AND replay_required = 1

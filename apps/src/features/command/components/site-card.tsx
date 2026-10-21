@@ -141,7 +141,7 @@ export function SiteCard({
 					value={formatAge(toIso(site.lastContactAt), now)}
 				/>
 				<MetaRow
-					label="Gateway"
+					label="Health"
 					value={site.healthStatus}
 					color={STATUS_COLOR[healthTone]}
 				/>

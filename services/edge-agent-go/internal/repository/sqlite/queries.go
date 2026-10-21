@@ -17,7 +17,7 @@ func (s *Store) Ready(ctx context.Context, limit int, maxBytes int64) ([]domain.
 	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT sequence, site_id, gateway_id, device_id, asset_type, mqtt_topic, payload, priority, status,
-       event_at_ms, received_at_ms, persisted_at_ms, uploaded_at_ms, attempt_count,
+       event_at_ms, received_at_ms, persisted_at_ms, uploaded_at_ms, attempt_count, rejection_count,
        replay_required, next_attempt_at_ms, COALESCE(last_error, ''), COALESCE(critical_code, ''), critical_value
 FROM queue_events
 WHERE status = ?
@@ -46,7 +46,7 @@ LIMIT ?`, domain.StatusPendingUpload, time.Now().UTC().UnixMilli(), limit)
 		if err := rows.Scan(
 			&record.Sequence, &record.SiteID, &record.GatewayID, &record.DeviceID, &record.AssetType,
 			&record.MQTTTopic, &record.Payload, &record.Priority, &record.Status, &eventMS,
-			&receivedMS, &persistedMS, &uploadedMS, &record.AttemptCount, &record.ReplayRequired, &nextAttemptMS,
+			&receivedMS, &persistedMS, &uploadedMS, &record.AttemptCount, &record.RejectionCount, &record.ReplayRequired, &nextAttemptMS,
 			&record.LastError, &record.CriticalCode, &criticalValue,
 		); err != nil {
 			return nil, fmt.Errorf("scan ready event: %w", err)
@@ -85,13 +85,13 @@ func (s *Store) Record(ctx context.Context, sequence uint64) (domain.Record, err
 	var criticalValue sql.NullFloat64
 	err := s.db.QueryRowContext(ctx, `
 SELECT sequence, site_id, gateway_id, device_id, asset_type, mqtt_topic, payload, priority, status,
-       event_at_ms, received_at_ms, persisted_at_ms, uploaded_at_ms, attempt_count,
+       event_at_ms, received_at_ms, persisted_at_ms, uploaded_at_ms, attempt_count, rejection_count,
        replay_required, next_attempt_at_ms, COALESCE(last_error, ''), COALESCE(critical_code, ''), critical_value
 FROM queue_events
 WHERE sequence = ?`, sequence).Scan(
 		&record.Sequence, &record.SiteID, &record.GatewayID, &record.DeviceID, &record.AssetType,
 		&record.MQTTTopic, &record.Payload, &record.Priority, &record.Status, &eventMS,
-		&receivedMS, &persistedMS, &uploadedMS, &record.AttemptCount, &record.ReplayRequired, &nextAttemptMS, &record.LastError,
+		&receivedMS, &persistedMS, &uploadedMS, &record.AttemptCount, &record.RejectionCount, &record.ReplayRequired, &nextAttemptMS, &record.LastError,
 		&record.CriticalCode, &criticalValue,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -147,8 +147,8 @@ FROM queue_events`).Scan(&stats.Depth, &stats.PayloadBytes, &oldestMS, &lastEven
 		stats.LastEventTimestamp = &lastEvent
 	}
 	if err := s.db.QueryRowContext(ctx, `
-SELECT last_upload_success_at_ms, last_upload_failure_reason
-FROM edge_sync_state WHERE singleton = 1`).Scan(&lastSuccessMS, &lastFailure); err != nil {
+SELECT last_upload_success_at_ms, last_upload_failure_reason, abandoned_count
+FROM edge_sync_state WHERE singleton = 1`).Scan(&lastSuccessMS, &lastFailure, &stats.AbandonedTotal); err != nil {
 		return domain.QueueStats{}, fmt.Errorf("read sync statistics: %w", err)
 	}
 	if lastSuccessMS.Valid {

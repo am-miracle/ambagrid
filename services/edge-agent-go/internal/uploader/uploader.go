@@ -33,7 +33,6 @@ type Uploader struct {
 
 type UploadTracker interface {
 	RecordFallbackUploadFailure(context.Context, uint64) error
-	RecordFallbackUploadSuccess(context.Context, uint64, time.Time) error
 	RecordUploadContactSuccess(context.Context, time.Time) error
 	RecordUploadContactFailure(context.Context, string) error
 }
@@ -115,7 +114,7 @@ func (u *Uploader) uploadBatch(ctx context.Context) (int, error) {
 		LastFailedSyncReason: stats.LastFailedSyncReason,
 	})
 	if err != nil {
-		u.handleFailure(ctx, records, result, err)
+		u.handleFailure(ctx, records, err)
 		return 0, err
 	}
 	u.processResponse(ctx, records, result, uploadedAt)
@@ -141,30 +140,22 @@ func (u *Uploader) processResponse(ctx context.Context, records []domain.Record,
 	for _, rej := range result.Response.Rejected {
 		rejectedSet[rej.Sequence] = rej
 	}
+	// Once ingestion confirms publication, finish the local transaction even if
+	// shutdown cancels the upload loop at the same instant. Replaying an already
+	// accepted batch would otherwise create avoidable duplicate deliveries.
+	completionCtx := context.WithoutCancel(ctx)
+	failureAt := u.now().UTC()
 
 	for _, r := range records {
 		if acceptedSet[r.Sequence] {
-			// The ingestion service only accepts a record after publishing it.
-			// Keep the local row pending until that confirmation arrives so a
-			// crash during the request cannot strand it in uploaded.
-			if err := u.queue.MarkUploaded(ctx, r.Sequence, uploadedAt); err != nil {
-				slog.Error("mark uploaded", "sequence", r.Sequence, "error", err)
-				continue
-			}
-			if u.tracker != nil {
-				if err := u.tracker.RecordFallbackUploadSuccess(ctx, r.Sequence, uploadedAt); err != nil {
-					slog.Error("record critical upload success", "sequence", r.Sequence, "error", err)
-					continue
-				}
-			}
-			if err := u.queue.Ack(ctx, r.Sequence); err != nil {
-				slog.Error("ack record", "sequence", r.Sequence, "error", err)
+			if err := u.queue.CompleteUpload(completionCtx, r.Sequence, uploadedAt); err != nil {
+				slog.Error("complete upload", "sequence", r.Sequence, "error", err)
 			}
 			continue
 		}
 
 		if rej, ok := rejectedSet[r.Sequence]; ok {
-			u.failRecord(ctx, r, rej.Code+": "+rej.Message)
+			u.rejectRecord(ctx, r, rej.Code+": "+rej.Message, failureAt)
 			slog.Warn("record rejected by server",
 				"sequence", r.Sequence,
 				"code", rej.Code,
@@ -175,11 +166,15 @@ func (u *Uploader) processResponse(ctx context.Context, records []domain.Record,
 
 		// A successful batch response must account for every record. Treat an
 		// omitted sequence as retryable instead of spinning on it immediately.
-		u.failRecord(ctx, r, "invalid ingestion response: sequence was neither accepted nor rejected")
+		u.rejectRecord(ctx, r, "invalid ingestion response: sequence was neither accepted nor rejected", failureAt)
 	}
 }
 
-func (u *Uploader) handleFailure(ctx context.Context, records []domain.Record, result *UploadResult, uploadErr error) {
+func (u *Uploader) handleFailure(ctx context.Context, records []domain.Record, uploadErr error) {
+	// Apply failure bookkeeping to the whole attempted batch even if shutdown
+	// arrives while the HTTP request is completing. Partial updates can let later
+	// sequences overtake earlier ones on the next run.
+	ctx = context.WithoutCancel(ctx)
 	cause := uploadErr.Error()
 	if len(cause) > 2048 {
 		cause = cause[:2048]
@@ -189,26 +184,35 @@ func (u *Uploader) handleFailure(ctx context.Context, records []domain.Record, r
 			slog.Error("record upload contact failure", "error", err)
 		}
 	}
+	failureAt := u.now().UTC()
 	for _, r := range records {
-		u.failRecord(ctx, r, cause)
+		u.retryRecord(ctx, r, cause, failureAt)
 	}
 }
 
-func (u *Uploader) failRecord(ctx context.Context, r domain.Record, cause string) {
-	if r.AttemptCount+1 >= u.cfg.MaxRetries {
-		slog.Error("record exhausted retries, dropping",
+func (u *Uploader) rejectRecord(ctx context.Context, r domain.Record, cause string, failureAt time.Time) {
+	if r.RejectionCount+1 >= u.cfg.MaxRetries {
+		slog.Error("record exhausted server rejections, abandoning",
 			"sequence", r.Sequence,
-			"attempts", r.AttemptCount+1,
+			"rejections", r.RejectionCount+1,
 			"max_retries", u.cfg.MaxRetries,
 			"last_error", cause,
 		)
-		if err := u.queue.Ack(ctx, r.Sequence); err != nil {
-			slog.Error("ack exhausted record", "sequence", r.Sequence, "error", err)
+		if err := u.queue.Abandon(ctx, r.Sequence, cause); err != nil {
+			slog.Error("abandon exhausted record", "sequence", r.Sequence, "error", err)
 		}
 		u.recordFallbackFailure(ctx, r.Sequence)
 		return
 	}
-	retryAt := u.retryTime(r.AttemptCount)
+	retryAt := u.retryTime(r.AttemptCount, failureAt)
+	if err := u.queue.MarkRejected(ctx, r.Sequence, retryAt, cause); err != nil {
+		slog.Error("mark rejected", "sequence", r.Sequence, "error", err)
+	}
+	u.recordFallbackFailure(ctx, r.Sequence)
+}
+
+func (u *Uploader) retryRecord(ctx context.Context, r domain.Record, cause string, failureAt time.Time) {
+	retryAt := u.retryTime(r.AttemptCount, failureAt)
 	if err := u.queue.MarkFailed(ctx, r.Sequence, retryAt, cause); err != nil {
 		slog.Error("mark failed", "sequence", r.Sequence, "error", err)
 	}
@@ -224,10 +228,10 @@ func (u *Uploader) recordFallbackFailure(ctx context.Context, sequence uint64) {
 	}
 }
 
-func (u *Uploader) retryTime(attemptCount int) time.Time {
+func (u *Uploader) retryTime(attemptCount int, now time.Time) time.Time {
 	delay := float64(u.cfg.BaseDelay) * math.Pow(2, float64(attemptCount))
 	if delay > float64(u.cfg.MaxDelay) {
 		delay = float64(u.cfg.MaxDelay)
 	}
-	return u.now().UTC().Add(time.Duration(delay))
+	return now.Add(time.Duration(delay))
 }

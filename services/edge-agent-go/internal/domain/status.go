@@ -8,4 +8,5 @@ const (
 	StatusUploaded      EventStatus = "uploaded"
 	StatusAcknowledged  EventStatus = "acknowledged"
 	StatusExpired       EventStatus = "expired"
+	StatusAbandoned     EventStatus = "abandoned"
 )

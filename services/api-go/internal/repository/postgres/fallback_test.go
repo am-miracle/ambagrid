@@ -1,5 +1,5 @@
 package postgres
 
-import "api-go/internal/services"
+import "api-go/internal/repository"
 
-var _ services.FallbackTx = fallbackTx{}
+var _ repository.FallbackTx = fallbackTx{}

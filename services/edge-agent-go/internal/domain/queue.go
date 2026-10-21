@@ -28,6 +28,7 @@ type QueueStats struct {
 	LastEventTimestamp   *time.Time
 	LastSuccessfulSyncAt *time.Time
 	LastFailedSyncReason string
+	AbandonedTotal       int64
 	State                QueueState
 }
 
@@ -52,7 +53,10 @@ type Queue interface {
 	Ready(ctx context.Context, limit int, maxBytes int64) ([]Record, error)
 	MarkUploaded(ctx context.Context, sequence uint64, uploadedAt time.Time) error
 	Ack(ctx context.Context, sequence uint64) error
+	CompleteUpload(ctx context.Context, sequence uint64, uploadedAt time.Time) error
+	Abandon(ctx context.Context, sequence uint64, cause string) error
 	MarkFailed(ctx context.Context, sequence uint64, retryAt time.Time, cause string) error
+	MarkRejected(ctx context.Context, sequence uint64, retryAt time.Time, cause string) error
 	Purge(ctx context.Context, retentionAge time.Duration) (int64, error)
 	Stats(ctx context.Context) (QueueStats, error)
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"api-go/internal/domain"
+	"api-go/internal/repository"
 )
 
 type fakeFallbackTx struct {
@@ -14,7 +15,9 @@ type fakeFallbackTx struct {
 	assetType        string
 	lookupAssetErr   error
 	sourceAlertID    string
+	sourceAlertErr   error
 	openAlertID      string
+	openAlertErr     error
 	createdAlertID   string
 	createAlertErr   error
 	insertEventErr   error
@@ -38,15 +41,21 @@ func (f *fakeFallbackTx) LookupAssetType(context.Context, string, string) (strin
 }
 
 func (f *fakeFallbackTx) FindAlertBySourceEvent(context.Context, domain.EventKey) (string, error) {
+	if f.sourceAlertErr != nil {
+		return "", f.sourceAlertErr
+	}
 	if f.sourceAlertID == "" {
-		return "", errors.New("not found")
+		return "", domain.ErrNotFound
 	}
 	return f.sourceAlertID, nil
 }
 
 func (f *fakeFallbackTx) FindOpenAlert(context.Context, string, string, string) (string, error) {
+	if f.openAlertErr != nil {
+		return "", f.openAlertErr
+	}
 	if f.openAlertID == "" {
-		return "", errors.New("not found")
+		return "", domain.ErrNotFound
 	}
 	return f.openAlertID, nil
 }
@@ -84,7 +93,7 @@ type fakeFallbackRepository struct {
 	tx *fakeFallbackTx
 }
 
-func (f *fakeFallbackRepository) RunFallbackTx(ctx context.Context, _ domain.EventKey, fn func(FallbackTx) (bool, error)) (bool, error) {
+func (f *fakeFallbackRepository) RunFallbackTx(ctx context.Context, _ domain.EventKey, fn func(repository.FallbackTx) (bool, error)) (bool, error) {
 	return fn(f.tx)
 }
 
@@ -131,6 +140,27 @@ func TestFallbackServiceRejectsCodeForWrongAssetType(t *testing.T) {
 	}
 	if tx.eventInsertCalls != 0 {
 		t.Fatalf("event insert calls = %d, want 0", tx.eventInsertCalls)
+	}
+}
+
+func TestFallbackServicePropagatesAssetLookupFailure(t *testing.T) {
+	tx := &fakeFallbackTx{lookupAssetErr: errors.New("database unavailable")}
+	_, err := NewFallbackService(&fakeFallbackRepository{tx: tx}, "alert.opened", domain.SMSPricing{}).
+		ReceiveSMS(context.Background(), testEvent(), domain.SMSReceipt{})
+	if err == nil || errors.Is(err, domain.ErrInvalidID) {
+		t.Fatalf("error = %v, want operational lookup failure", err)
+	}
+}
+
+func TestFallbackServiceDoesNotCreateAlertWhenLookupFails(t *testing.T) {
+	tx := &fakeFallbackTx{assetType: "battery_bms", sourceAlertErr: errors.New("database unavailable")}
+	_, err := NewFallbackService(&fakeFallbackRepository{tx: tx}, "alert.opened", domain.SMSPricing{}).
+		ReceiveSMS(context.Background(), testEvent(), domain.SMSReceipt{})
+	if err == nil {
+		t.Fatal("error = nil, want alert lookup failure")
+	}
+	if tx.createdAlertID != "" || tx.eventInsertCalls != 0 {
+		t.Fatal("lookup failure must not create a duplicate alert")
 	}
 }
 
@@ -242,5 +272,17 @@ func TestFallbackServiceWarnsNearBudgetWithoutFailing(t *testing.T) {
 
 	if err != nil {
 		t.Fatalf("ReceiveSMS() error = %v, want budget threshold to only warn", err)
+	}
+}
+
+func TestFallbackServicePropagatesBudgetLookupFailure(t *testing.T) {
+	tx := &fakeFallbackTx{
+		assetType: "battery_bms", createdAlertID: "alert-01", insertedReturns: true,
+		usageErr: errors.New("database unavailable"),
+	}
+	_, err := NewFallbackService(&fakeFallbackRepository{tx: tx}, "alert.opened", domain.SMSPricing{MonthlyBudgetMinor: 1000}).
+		ReceiveSMS(context.Background(), testEvent(), domain.SMSReceipt{ProviderMessageID: "msg-01"})
+	if err == nil {
+		t.Fatal("error = nil, want budget usage failure")
 	}
 }

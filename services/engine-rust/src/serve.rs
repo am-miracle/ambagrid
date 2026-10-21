@@ -59,6 +59,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
     tokio::select! {
         result = telemetry => result.map_err(Into::into),
-        result = health => result,
+        result = health => result.map_err(Into::into),
     }
 }

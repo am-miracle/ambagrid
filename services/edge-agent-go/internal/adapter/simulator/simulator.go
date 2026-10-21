@@ -16,10 +16,21 @@ type Source struct {
 	mu     sync.Mutex
 	cycle  uint64
 	now    func() time.Time
+	faults bool
 }
 
-func New(siteID string) *Source {
-	return &Source{siteID: siteID, now: time.Now}
+type Option func(*Source)
+
+func WithCriticalFaults() Option {
+	return func(source *Source) { source.faults = true }
+}
+
+func New(siteID string, options ...Option) *Source {
+	source := &Source{siteID: siteID, now: time.Now}
+	for _, option := range options {
+		option(source)
+	}
+	return source
 }
 
 func (s *Source) Read(ctx context.Context) ([]domain.Reading, error) {
@@ -64,6 +75,13 @@ func (s *Source) Read(ctx context.Context) ([]domain.Reading, error) {
 		InternalTemperature: 42 + 2*math.Sin(phase/2),
 		RelayClosed:         true,
 		SolarIrradiance:     650 + 100*math.Sin(phase/3),
+	}
+	if s.faults {
+		outage := true
+		meter.TamperDetected = true
+		battery.InternalTemperature = 68.2
+		battery.SiteOutage = &outage
+		inverter.InverterHardFault = true
 	}
 
 	readings := []domain.Reading{meter, battery, inverter}

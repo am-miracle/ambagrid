@@ -44,6 +44,19 @@ Local status is available at:
 - `http://localhost:2112/health`
 - `http://localhost:2112/metrics`
 
+The repository Compose stack runs this path end to end with deterministic
+critical simulator conditions:
+
+```bash
+docker compose up --build
+```
+
+It enables ingestion HTTP on port 8090, provisions the `lagos-epe` demo site,
+persists the edge queue in the `edge_queue` volume, and exposes edge health on
+port 2112. SMS remains disabled because the container has no physical modem;
+the critical event identity and normal upload path still reach Kafka and the
+engine.
+
 `EDGE_MIN_FILESYSTEM_FREE_BYTES=0` is useful for development only. Deployed
 gateways default to a 256 MiB filesystem reserve.
 
@@ -60,6 +73,7 @@ gateways default to a 256 MiB filesystem reserve.
 | `EDGE_QUEUE_CRITICAL_RESERVE_PERCENT` | `10` | Payload capacity held back from normal telemetry. |
 | `EDGE_MIN_FILESYSTEM_FREE_BYTES` | `268435456` | Filesystem reserve below which all new writes stop. |
 | `EDGE_SIMULATOR_ENABLED` | `false` | Run the simulated meter, battery, and inverter source. |
+| `EDGE_SIMULATOR_FAULTS` | `false` | Emit deterministic critical conditions for local end-to-end testing. |
 | `EDGE_COLLECTOR_INTERVAL` | `5s` | Interval between simulated collection cycles. |
 | `EDGE_REGION` | `africa-west` | Region used in normalized MQTT topic envelopes. |
 | `EDGE_HEALTH_ADDR` | `:2112` | Local health HTTP listen address. |
@@ -72,7 +86,7 @@ gateways default to a 256 MiB filesystem reserve.
 | `EDGE_UPLOADER_TIMEOUT` | `30s` | HTTP request timeout per batch upload. |
 | `EDGE_UPLOADER_BASE_DELAY` | `1s` | Initial backoff delay after a failed upload. |
 | `EDGE_UPLOADER_MAX_DELAY` | `5m` | Ceiling on exponential backoff. |
-| `EDGE_UPLOADER_MAX_RETRIES` | `20` | Max retry attempts before a record is abandoned. |
+| `EDGE_UPLOADER_MAX_RETRIES` | `20` | Max explicit server rejections before a record is abandoned; connectivity retries are unlimited. |
 | `EDGE_SMS_ENABLED` | `false` | Enable one-way SMS fallback for critical alerts. |
 | `EDGE_SMS_DESTINATION` | required when enabled | Platform phone number that receives fallback messages. |
 | `EDGE_SMS_MODEM_ID` | `0` | ModemManager modem identifier passed to `mmcli`. |
@@ -96,6 +110,7 @@ The status lifecycle is:
 
 ```text
 persisted -> pending_upload -> uploaded -> acknowledged -> expired
+                     \-> abandoned (terminal server rejections only)
 ```
 
 The collector first commits `persisted`, then promotes the record to
@@ -125,8 +140,11 @@ The uploader:
 3. POSTs batches to the ingestion service with `(site_id, sequence)` as the
    stable event identity. Ingestion publishes every accepted delivery with the
    corresponding `source_event_id`; durable consumers deduplicate on that ID.
-4. Calls `Ack` for each sequence the server accepts, `MarkFailed` with
-   exponential backoff for rejections or transport errors.
+4. Atomically acknowledges each accepted sequence with its fallback-delivery
+   bookkeeping, and calls `MarkFailed` with exponential backoff for rejections
+   or transport errors. Connectivity failures retry indefinitely. Records that
+   exhaust the server-rejection budget become `abandoned`, releasing later
+   records for delivery while remaining visible in health metrics.
 
 Every upload includes the current queue depth, oldest pending timestamp, and
 most recent measurement timestamp. When the queue is empty, the uploader still
@@ -134,9 +152,9 @@ sends this envelope as a heartbeat on its normal poll interval. This lets the
 server distinguish a connected gateway with delayed measurements from a site
 that has stopped contacting the platform.
 
-Delivery is intentionally at-least-once. A process crash after upstream
-delivery and before `Ack` causes a safe duplicate rather than data loss.
-Ingestion is stateless, so retries may create duplicate stream records.
+Delivery is intentionally at-least-once. A lost response after upstream
+delivery causes a safe retry rather than data loss. Ingestion is stateless, so
+durable consumers deduplicate retried stream records by `source_event_id`.
 
 Critical battery overheat, inverter failure, tamper, and site outage events are
 stored as durable incidents. After three failed uploads or two minutes without
