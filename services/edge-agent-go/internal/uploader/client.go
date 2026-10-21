@@ -1,6 +1,5 @@
 // client.go is the HTTP transport for uploading telemetry batches to the
-// ingestion service. It maps domain.Record → wire JSON, sends the batch, and
-// classifies responses as retryable (network/5xx) or terminal (401).
+// ingestion service. It maps domain.Record → wire JSON and sends the batch.
 package uploader
 
 import (
@@ -83,7 +82,6 @@ type RecordError struct {
 type UploadResult struct {
 	Response   *BatchResponse
 	StatusCode int
-	Retryable  bool
 }
 
 func (c *IngestClient) Upload(ctx context.Context, records []domain.Record, uploadedAt time.Time, health HealthReport) (*UploadResult, error) {
@@ -129,36 +127,36 @@ func (c *IngestClient) Upload(ctx context.Context, records []domain.Record, uplo
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return &UploadResult{Retryable: true}, fmt.Errorf("send upload request: %w", err)
+		return &UploadResult{}, fmt.Errorf("send upload request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return &UploadResult{StatusCode: resp.StatusCode, Retryable: true}, fmt.Errorf("read upload response: %w", err)
+		return &UploadResult{StatusCode: resp.StatusCode}, fmt.Errorf("read upload response: %w", err)
 	}
 
-	// 401 is terminal — retrying with the same key will never succeed.
+	// Preserve 401 as a distinct operational error: credentials need intervention,
+	// while the uploader keeps the affected telemetry durable for later recovery.
 	if resp.StatusCode == http.StatusUnauthorized {
-		return &UploadResult{StatusCode: resp.StatusCode, Retryable: false},
+		return &UploadResult{StatusCode: resp.StatusCode},
 			fmt.Errorf("authentication failed (HTTP %d)", resp.StatusCode)
 	}
 
 	if resp.StatusCode >= 500 {
-		return &UploadResult{StatusCode: resp.StatusCode, Retryable: true},
+		return &UploadResult{StatusCode: resp.StatusCode},
 			fmt.Errorf("server error (HTTP %d): %s", resp.StatusCode, truncate(string(respBody), 256))
 	}
 
 	var batchResp BatchResponse
 	if err := json.Unmarshal(respBody, &batchResp); err != nil {
-		return &UploadResult{StatusCode: resp.StatusCode, Retryable: true},
+		return &UploadResult{StatusCode: resp.StatusCode},
 			fmt.Errorf("decode upload response: %w", err)
 	}
 
 	return &UploadResult{
 		Response:   &batchResp,
 		StatusCode: resp.StatusCode,
-		Retryable:  false,
 	}, nil
 }
 
