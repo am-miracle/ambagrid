@@ -1,11 +1,14 @@
 {
   "version": 1,
   "heartbeat_key_prefix": "hb:",
-  "message": "AMBAGRID|v=1|kind=HB|site=ng-kaji-01|gw=gateway-01|seq=42|ts=1730000000",
+  "min_interval_seconds": 60,
+  "max_interval_seconds": 86400,
+  "message": "AMBAGRID|v=1|kind=HB|site=ng-kaji-01|gw=gateway-01|seq=42|int=1800|ts=1730000000",
   "heartbeat": {
     "site_id": "ng-kaji-01",
     "gateway_id": "gateway-01",
     "sequence": 42,
+    "interval_seconds": 1800,
     "sent_at_unix": 1730000000
   },
   "heartbeat_key": "hb:ng-kaji-01:gateway-01:42"

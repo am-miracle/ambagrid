@@ -99,7 +99,7 @@ While packet data is unavailable, the gateway also sends a compact liveness
 heartbeat by SMS:
 
 ```text
-AMBAGRID|v=1|kind=HB|site=ng-kaji-01|gw=gateway-01|seq=42|ts=1730000000
+AMBAGRID|v=1|kind=HB|site=ng-kaji-01|gw=gateway-01|seq=42|int=1800|ts=1730000000
 ```
 
 A heartbeat only proves the gateway is online. Offline is always inferred when
@@ -119,9 +119,12 @@ Heartbeats have their own durable sequence and their own daily budget on the
 edge, separate from the critical-alert limits, so they can never use up the SMS
 allowance needed for incidents. If that budget runs out, the site correctly
 falls to offline while critical SMS keeps working. Server-side cost accounting
-counts both message types toward the monthly SMS budget. The API applies a
-separate, longer offline threshold to SMS contact (`API_SITE_SMS_OFFLINE_AFTER`)
-because heartbeats are much sparser than HTTP polling.
+counts both message types toward the monthly SMS budget.
+
+Each heartbeat declares its interval in seconds (`int`, 60 to 86400). The API
+treats the site as reachable until 2.5 declared intervals after that heartbeat,
+which tolerates one lost SMS without flapping. The offline deadline therefore
+follows the gateway's own schedule instead of a second setting that could drift.
 
 ## OTA Updates
 

@@ -27,7 +27,6 @@ type Config struct {
 	MaxPageSize           int
 	GlobalHistoryPageSize int
 	SiteOfflineAfter      time.Duration
-	SiteSMSOfflineAfter   time.Duration
 	SiteEventStaleAfter   time.Duration
 
 	AlertResolvedTopic         string
@@ -107,11 +106,6 @@ func FromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	// Defaults to 2.5 edge heartbeat intervals so one lost SMS does not flap the site offline.
-	siteSMSOfflineAfter, err := envDuration("API_SITE_SMS_OFFLINE_AFTER", 75*time.Minute)
-	if err != nil {
-		return Config{}, err
-	}
 	siteEventStaleAfter, err := envDuration("API_SITE_EVENT_STALE_AFTER", 2*time.Minute)
 	if err != nil {
 		return Config{}, err
@@ -153,7 +147,6 @@ func FromEnv() (Config, error) {
 		MaxPageSize:                maxPageSize,
 		GlobalHistoryPageSize:      globalHistoryPageSize,
 		SiteOfflineAfter:           siteOfflineAfter,
-		SiteSMSOfflineAfter:        siteSMSOfflineAfter,
 		SiteEventStaleAfter:        siteEventStaleAfter,
 		AlertResolvedTopic:         envConfiguredString("ALERT_RESOLVED_TOPIC", "alert.resolved"),
 		PaymentConfirmedTopic:      envConfiguredString("PAYMENT_CONFIRMED_TOPIC", "payment.confirmed"),
@@ -213,9 +206,6 @@ func FromEnv() (Config, error) {
 	}
 	if cfg.AlertOpenedTopic == "" {
 		return Config{}, fmt.Errorf("ALERT_OPENED_TOPIC must not be empty")
-	}
-	if cfg.SiteSMSOfflineAfter <= cfg.SiteOfflineAfter {
-		return Config{}, fmt.Errorf("API_SITE_SMS_OFFLINE_AFTER must be longer than API_SITE_OFFLINE_AFTER")
 	}
 	if cfg.SMSEnabled && (cfg.SMSWebhookSecret == "" || len(cfg.SMSSenders) == 0) {
 		return Config{}, fmt.Errorf("API_SMS_WEBHOOK_SECRET and API_SMS_SENDERS must be set when SMS fallback is enabled")

@@ -9,6 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"api-go/internal/domain"
 )
 
 type gsmSeptetFixture struct {
@@ -45,12 +48,15 @@ type heartbeatFixture struct {
 	HeartbeatKeyPrefix string `json:"heartbeat_key_prefix"`
 	Message            string `json:"message"`
 	Heartbeat          struct {
-		SiteID     string `json:"site_id"`
-		GatewayID  string `json:"gateway_id"`
-		Sequence   uint64 `json:"sequence"`
-		SentAtUnix int64  `json:"sent_at_unix"`
+		SiteID          string `json:"site_id"`
+		GatewayID       string `json:"gateway_id"`
+		Sequence        uint64 `json:"sequence"`
+		IntervalSeconds int64  `json:"interval_seconds"`
+		SentAtUnix      int64  `json:"sent_at_unix"`
 	} `json:"heartbeat"`
-	HeartbeatKey string `json:"heartbeat_key"`
+	MinIntervalSeconds int64  `json:"min_interval_seconds"`
+	MaxIntervalSeconds int64  `json:"max_interval_seconds"`
+	HeartbeatKey       string `json:"heartbeat_key"`
 }
 
 func loadHeartbeatFixture(t *testing.T) heartbeatFixture {
@@ -93,11 +99,17 @@ func TestSMSParsesHeartbeatFromSharedContract(t *testing.T) {
 	}
 	got := *inbound.Heartbeat
 	if got.SiteID != fixture.Heartbeat.SiteID || got.GatewayID != fixture.Heartbeat.GatewayID ||
-		got.Sequence != fixture.Heartbeat.Sequence || got.SentAt.Unix() != fixture.Heartbeat.SentAtUnix {
+		got.Sequence != fixture.Heartbeat.Sequence || got.SentAt.Unix() != fixture.Heartbeat.SentAtUnix ||
+		got.Interval != time.Duration(fixture.Heartbeat.IntervalSeconds)*time.Second {
 		t.Fatalf("heartbeat = %+v, fixture = %+v", got, fixture.Heartbeat)
 	}
 	if string(got.Key()) != fixture.HeartbeatKey || !strings.HasPrefix(fixture.HeartbeatKey, fixture.HeartbeatKeyPrefix) {
 		t.Fatalf("heartbeat key = %q, fixture = %q", got.Key(), fixture.HeartbeatKey)
+	}
+	if domain.MinHeartbeatInterval != time.Duration(fixture.MinIntervalSeconds)*time.Second ||
+		domain.MaxHeartbeatInterval != time.Duration(fixture.MaxIntervalSeconds)*time.Second {
+		t.Fatalf("interval bounds = %s..%s, fixture = %ds..%ds", domain.MinHeartbeatInterval, domain.MaxHeartbeatInterval,
+			fixture.MinIntervalSeconds, fixture.MaxIntervalSeconds)
 	}
 }
 
@@ -119,11 +131,14 @@ func TestSMSRejectsHeartbeatFromAnotherGateway(t *testing.T) {
 
 func TestSMSRejectsMalformedHeartbeats(t *testing.T) {
 	for name, message := range map[string]string{
-		"unknown kind":   "AMBAGRID|v=1|kind=PING|site=ng-kaji-01|gw=gateway-01|seq=42|ts=1730000000",
-		"zero sequence":  "AMBAGRID|v=1|kind=HB|site=ng-kaji-01|gw=gateway-01|seq=0|ts=1730000000",
-		"reordered":      "AMBAGRID|v=1|kind=HB|gw=gateway-01|site=ng-kaji-01|seq=42|ts=1730000000",
+		"unknown kind":   "AMBAGRID|v=1|kind=PING|site=ng-kaji-01|gw=gateway-01|seq=42|int=1800|ts=1730000000",
+		"zero sequence":  "AMBAGRID|v=1|kind=HB|site=ng-kaji-01|gw=gateway-01|seq=0|int=1800|ts=1730000000",
+		"reordered":      "AMBAGRID|v=1|kind=HB|gw=gateway-01|site=ng-kaji-01|seq=42|int=1800|ts=1730000000",
+		"no interval":    "AMBAGRID|v=1|kind=HB|site=ng-kaji-01|gw=gateway-01|seq=42|ts=1730000000",
+		"interval short": "AMBAGRID|v=1|kind=HB|site=ng-kaji-01|gw=gateway-01|seq=42|int=59|ts=1730000000",
+		"interval long":  "AMBAGRID|v=1|kind=HB|site=ng-kaji-01|gw=gateway-01|seq=42|int=86401|ts=1730000000",
 		"critical field": "AMBAGRID|v=1|kind=HB|site=ng-kaji-01|gw=gateway-01|seq=42|code=SITE_OUTAGE|ts=1730000000",
-		"bad gateway":    "AMBAGRID|v=1|kind=HB|site=ng-kaji-01|gw=gate.way|seq=42|ts=1730000000",
+		"bad gateway":    "AMBAGRID|v=1|kind=HB|site=ng-kaji-01|gw=gate.way|seq=42|int=1800|ts=1730000000",
 	} {
 		t.Run(name, func(t *testing.T) {
 			values, keys, err := splitSMSMessage(message)

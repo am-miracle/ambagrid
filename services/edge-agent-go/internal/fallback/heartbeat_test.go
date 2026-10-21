@@ -18,10 +18,11 @@ func TestFormatHeartbeatMatchesSharedContract(t *testing.T) {
 	var contract struct {
 		Message   string `json:"message"`
 		Heartbeat struct {
-			SiteID     string `json:"site_id"`
-			GatewayID  string `json:"gateway_id"`
-			Sequence   uint64 `json:"sequence"`
-			SentAtUnix int64  `json:"sent_at_unix"`
+			SiteID          string `json:"site_id"`
+			GatewayID       string `json:"gateway_id"`
+			Sequence        uint64 `json:"sequence"`
+			IntervalSeconds int64  `json:"interval_seconds"`
+			SentAtUnix      int64  `json:"sent_at_unix"`
 		} `json:"heartbeat"`
 	}
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "proto", "fixtures", "sms_heartbeat_v1.json"))
@@ -33,7 +34,8 @@ func TestFormatHeartbeatMatchesSharedContract(t *testing.T) {
 	}
 	got, err := fallback.FormatHeartbeat(fallback.Heartbeat{
 		SiteID: contract.Heartbeat.SiteID, GatewayID: contract.Heartbeat.GatewayID,
-		Sequence: contract.Heartbeat.Sequence, SentAt: time.Unix(contract.Heartbeat.SentAtUnix, 0),
+		Sequence: contract.Heartbeat.Sequence, Interval: time.Duration(contract.Heartbeat.IntervalSeconds) * time.Second,
+		SentAt: time.Unix(contract.Heartbeat.SentAtUnix, 0),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +130,7 @@ func TestCoordinatorSendsHeartbeatsOnlyWhilePacketDataIsDown(t *testing.T) {
 	if got := heartbeatCount(sender); got != 1 {
 		t.Fatalf("heartbeats after going offline = %d, want 1", got)
 	}
-	if !strings.HasSuffix(sender.messages[0], "|seq=1|ts="+strconv.FormatInt(start.Add(2*time.Minute).Unix(), 10)) {
+	if !strings.HasSuffix(sender.messages[0], "|seq=1|int=1800|ts="+strconv.FormatInt(start.Add(2*time.Minute).Unix(), 10)) {
 		t.Fatalf("heartbeat message = %q", sender.messages[0])
 	}
 

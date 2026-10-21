@@ -133,7 +133,7 @@ func parseHeartbeat(values map[string]string, keys []string) (domain.GatewayHear
 	if values["kind"] != "HB" {
 		return domain.GatewayHeartbeat{}, errors.New("unknown SMS message kind")
 	}
-	if strings.Join(keys, ",") != "v,kind,site,gw,seq,ts" {
+	if strings.Join(keys, ",") != "v,kind,site,gw,seq,int,ts" {
 		return domain.GatewayHeartbeat{}, errors.New("SMS fields are missing or out of order")
 	}
 	sequence, err := strconv.ParseUint(values["seq"], 10, 64)
@@ -144,8 +144,14 @@ func parseHeartbeat(values map[string]string, keys []string) (domain.GatewayHear
 	if err != nil || epoch <= 0 {
 		return domain.GatewayHeartbeat{}, errors.New("invalid SMS timestamp")
 	}
+	intervalSeconds, err := strconv.ParseInt(values["int"], 10, 64)
+	interval := time.Duration(intervalSeconds) * time.Second
+	if err != nil || interval < domain.MinHeartbeatInterval || interval > domain.MaxHeartbeatInterval {
+		return domain.GatewayHeartbeat{}, errors.New("invalid SMS heartbeat interval")
+	}
 	heartbeat := domain.GatewayHeartbeat{
-		SiteID: values["site"], GatewayID: values["gw"], Sequence: sequence, SentAt: time.Unix(epoch, 0).UTC(),
+		SiteID: values["site"], GatewayID: values["gw"], Sequence: sequence,
+		Interval: interval, SentAt: time.Unix(epoch, 0).UTC(),
 	}
 	if !validSMSToken(heartbeat.SiteID) || !validSMSToken(heartbeat.GatewayID) {
 		return domain.GatewayHeartbeat{}, errors.New("invalid SMS identity")

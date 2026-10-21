@@ -292,9 +292,9 @@ func FromEnv() (Config, error) {
 	}
 	if cfg.SMS.Enabled && cfg.SMS.HeartbeatEnabled {
 		if _, err := fallback.FormatHeartbeat(fallback.Heartbeat{
-			SiteID: siteID, GatewayID: gatewayID, Sequence: 1, SentAt: time.Unix(1, 0),
+			SiteID: siteID, GatewayID: gatewayID, Sequence: 1, Interval: cfg.SMS.HeartbeatInterval, SentAt: time.Unix(1, 0),
 		}); err != nil {
-			return Config{}, fmt.Errorf("EDGE_SITE_ID and EDGE_GATEWAY_ID cannot be sent in an SMS heartbeat: %w", err)
+			return Config{}, fmt.Errorf("EDGE_SITE_ID, EDGE_GATEWAY_ID, and EDGE_SMS_HEARTBEAT_INTERVAL must fit an SMS heartbeat: %w", err)
 		}
 	}
 	minimumRetryInterval := fallback.MinimumRetryInterval(cfg.SMS.MaxAttempts)

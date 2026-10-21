@@ -3,9 +3,11 @@ CREATE TABLE sms_heartbeats (
     site_id text NOT NULL REFERENCES sites(site_id),
     gateway_id text NOT NULL,
     sequence bigint NOT NULL CHECK (sequence > 0),
+    interval_seconds integer NOT NULL CHECK (interval_seconds BETWEEN 60 AND 86400),
     sent_at timestamptz NOT NULL,
     -- least(sent_at, first received_at): neither clock can overstate liveness.
     contact_at timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL CHECK (expires_at > contact_at),
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (site_id, gateway_id, sequence)
 );

@@ -93,6 +93,8 @@ func TestFromEnvValidatesSMSHeartbeat(t *testing.T) {
 		"gateway ID not SMS-safe":  {"EDGE_GATEWAY_ID": "gateway.01"},
 		"interval below offline":   {"EDGE_SMS_HEARTBEAT_INTERVAL": "1m"},
 		"non-positive daily limit": {"EDGE_SMS_HEARTBEAT_DAILY_LIMIT": "0"},
+		"interval beyond a day":    {"EDGE_SMS_HEARTBEAT_INTERVAL": "25h"},
+		"fractional interval":      {"EDGE_SMS_HEARTBEAT_INTERVAL": "30m500ms"},
 	}
 	for name, overrides := range tests {
 		t.Run(name, func(t *testing.T) {

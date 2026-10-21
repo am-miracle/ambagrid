@@ -50,7 +50,7 @@ func (f *fakeHeartbeatRepository) RunHeartbeatTx(_ context.Context, _ domain.Hea
 
 func testHeartbeat() domain.GatewayHeartbeat {
 	return domain.GatewayHeartbeat{
-		SiteID: "site-01", GatewayID: "gateway-01", Sequence: 42,
+		SiteID: "site-01", GatewayID: "gateway-01", Sequence: 42, Interval: 30 * time.Minute,
 		SentAt: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC),
 	}
 }
@@ -86,7 +86,7 @@ func TestHeartbeatServiceRecordsContactBoundedByBothClocks(t *testing.T) {
 
 func TestHeartbeatServiceDeduplicatesRepeatedHeartbeat(t *testing.T) {
 	heartbeat := testHeartbeat()
-	tx := &fakeHeartbeatTx{stored: &domain.StoredHeartbeat{SentAt: heartbeat.SentAt}, receiptInserted: true}
+	tx := &fakeHeartbeatTx{stored: &domain.StoredHeartbeat{SentAt: heartbeat.SentAt, Interval: heartbeat.Interval}, receiptInserted: true}
 	created, err := newTestHeartbeatService(tx, domain.SMSPricing{}).
 		ReceiveHeartbeat(context.Background(), heartbeat, domain.SMSReceipt{ProviderMessageID: "msg-02", ReceivedAt: heartbeat.SentAt})
 	if err != nil || created {
@@ -100,7 +100,15 @@ func TestHeartbeatServiceDeduplicatesRepeatedHeartbeat(t *testing.T) {
 func TestHeartbeatServiceRejectsConflictingReuse(t *testing.T) {
 	heartbeat := testHeartbeat()
 	t.Run("same key with different send time", func(t *testing.T) {
-		tx := &fakeHeartbeatTx{stored: &domain.StoredHeartbeat{SentAt: heartbeat.SentAt.Add(time.Minute)}}
+		tx := &fakeHeartbeatTx{stored: &domain.StoredHeartbeat{SentAt: heartbeat.SentAt.Add(time.Minute), Interval: heartbeat.Interval}}
+		_, err := newTestHeartbeatService(tx, domain.SMSPricing{}).
+			ReceiveHeartbeat(context.Background(), heartbeat, domain.SMSReceipt{ProviderMessageID: "msg-01"})
+		if !errors.Is(err, domain.ErrConflict) {
+			t.Fatalf("error = %v, want conflict", err)
+		}
+	})
+	t.Run("same key with different declared interval", func(t *testing.T) {
+		tx := &fakeHeartbeatTx{stored: &domain.StoredHeartbeat{SentAt: heartbeat.SentAt, Interval: time.Hour}}
 		_, err := newTestHeartbeatService(tx, domain.SMSPricing{}).
 			ReceiveHeartbeat(context.Background(), heartbeat, domain.SMSReceipt{ProviderMessageID: "msg-01"})
 		if !errors.Is(err, domain.ErrConflict) {

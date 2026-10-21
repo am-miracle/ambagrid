@@ -50,8 +50,8 @@ func TestSiteHealthStatus(t *testing.T) {
 	currentEvent := now.Add(-45 * time.Second)
 	oldContact := now.Add(-3 * time.Minute)
 	staleEvent := now.Add(-3 * time.Minute)
-	recentHeartbeat := now.Add(-40 * time.Minute)
-	staleHeartbeat := now.Add(-80 * time.Minute)
+	heartbeatExpiresLater := now.Add(35 * time.Minute)
+	heartbeatExpired := now.Add(-5 * time.Minute)
 
 	tests := map[string]struct {
 		site domain.Site
@@ -75,19 +75,19 @@ func TestSiteHealthStatus(t *testing.T) {
 		},
 		"never contacted": {want: domain.SiteHealthOffline},
 		"SMS heartbeat only": {
-			site: domain.Site{LastContactAt: &oldContact, LastEventAt: &staleEvent, LastSMSHeartbeatAt: &recentHeartbeat},
+			site: domain.Site{LastContactAt: &oldContact, LastEventAt: &staleEvent, SMSHeartbeatExpiresAt: &heartbeatExpiresLater},
 			want: domain.SiteHealthDelayed,
 		},
 		"SMS heartbeat without any HTTP contact": {
-			site: domain.Site{LastSMSHeartbeatAt: &recentHeartbeat},
+			site: domain.Site{SMSHeartbeatExpiresAt: &heartbeatExpiresLater},
 			want: domain.SiteHealthDelayed,
 		},
 		"SMS heartbeats stopped": {
-			site: domain.Site{LastContactAt: &oldContact, LastEventAt: &staleEvent, LastSMSHeartbeatAt: &staleHeartbeat},
+			site: domain.Site{LastContactAt: &oldContact, LastEventAt: &staleEvent, SMSHeartbeatExpiresAt: &heartbeatExpired},
 			want: domain.SiteHealthOffline,
 		},
 		"HTTP recovery supersedes heartbeat": {
-			site: domain.Site{LastContactAt: &recentContact, LastEventAt: &currentEvent, LastSMSHeartbeatAt: &staleHeartbeat},
+			site: domain.Site{LastContactAt: &recentContact, LastEventAt: &currentEvent, SMSHeartbeatExpiresAt: &heartbeatExpired},
 			want: domain.SiteHealthLive,
 		},
 	}
@@ -95,7 +95,7 @@ func TestSiteHealthStatus(t *testing.T) {
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			if got := siteHealthStatus(test.site, now, SiteHealthThresholds{
-				OfflineAfter: 2 * time.Minute, SMSOfflineAfter: 75 * time.Minute, EventStaleAfter: 2 * time.Minute,
+				OfflineAfter: 2 * time.Minute, EventStaleAfter: 2 * time.Minute,
 			}); got != test.want {
 				t.Fatalf("siteHealthStatus() = %q, want %q", got, test.want)
 			}

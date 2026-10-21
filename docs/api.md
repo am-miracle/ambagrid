@@ -136,10 +136,12 @@ supply a GridOperator.
 `health_status` is derived when the response is built. While HTTP contact
 (`last_contact_at`) is within `API_SITE_OFFLINE_AFTER`, a site is `delayed` when
 the latest measurement is older than `API_SITE_EVENT_STALE_AFTER` or the pending
-queue is growing; otherwise it is `live`. Without recent HTTP contact, a site
-whose gateway sent an SMS heartbeat (`last_sms_heartbeat_at`) within
-`API_SITE_SMS_OFFLINE_AFTER` is `delayed`: the gateway is powered and on the
-cellular network, but no telemetry is flowing. Otherwise it is `offline`.
+queue is growing; otherwise it is `live`. Without recent HTTP contact, a site is
+`delayed` while its latest SMS heartbeat (`last_sms_heartbeat_at`) is younger
+than 2.5 times the interval the gateway declared in that heartbeat: the gateway
+is powered and on the cellular network, but no telemetry is flowing. Otherwise
+it is `offline`. Because the deadline travels in each heartbeat, changing
+`EDGE_SMS_HEARTBEAT_INTERVAL` needs no matching API setting.
 Offline is always inferred from silence; no message ever reports it.
 
 `last_sms_heartbeat_at` is the earlier of the gateway's send time and the
@@ -398,7 +400,6 @@ is unreachable, so the replica leaves the load balancer instead.
 | `API_MAX_PAGE_SIZE` | `200` | page size ceiling |
 | `API_GLOBAL_HISTORY_PAGE_SIZE` | `25` | default and ceiling for unscoped alert history |
 | `API_SITE_OFFLINE_AFTER` | `2m` | time without gateway contact before a site is offline |
-| `API_SITE_SMS_OFFLINE_AFTER` | `75m` | time without an SMS heartbeat before an SMS-only site is offline; must exceed `API_SITE_OFFLINE_AFTER` |
 | `API_SITE_EVENT_STALE_AFTER` | `2m` | measurement lag before a contacted site is delayed |
 | `DB_MAX_CONNS` | `10` | pool ceiling per replica |
 | `DB_MIN_CONNS` | `1` | warm connections |

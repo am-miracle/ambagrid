@@ -16,8 +16,16 @@ type Heartbeat struct {
 	SiteID    string
 	GatewayID string
 	Sequence  uint64
-	SentAt    time.Time
+	// Interval tells the platform when to expect the next heartbeat, so its
+	// offline deadline follows this gateway's schedule instead of a separate setting.
+	Interval time.Duration
+	SentAt   time.Time
 }
+
+const (
+	MinHeartbeatInterval = time.Minute
+	MaxHeartbeatInterval = 24 * time.Hour
+)
 
 func FormatHeartbeat(heartbeat Heartbeat) (string, error) {
 	if invalidToken(heartbeat.SiteID) || invalidToken(heartbeat.GatewayID) {
@@ -26,9 +34,13 @@ func FormatHeartbeat(heartbeat Heartbeat) (string, error) {
 	if heartbeat.Sequence == 0 || heartbeat.SentAt.IsZero() {
 		return "", errors.New("heartbeat sequence and send time are required")
 	}
+	if heartbeat.Interval < MinHeartbeatInterval || heartbeat.Interval > MaxHeartbeatInterval || heartbeat.Interval%time.Second != 0 {
+		return "", fmt.Errorf("heartbeat interval must be whole seconds between %s and %s", MinHeartbeatInterval, MaxHeartbeatInterval)
+	}
 	message := strings.Join([]string{
 		"AMBAGRID", "v=1", "kind=HB", "site=" + heartbeat.SiteID, "gw=" + heartbeat.GatewayID,
 		"seq=" + strconv.FormatUint(heartbeat.Sequence, 10),
+		"int=" + strconv.FormatInt(int64(heartbeat.Interval/time.Second), 10),
 		"ts=" + strconv.FormatInt(heartbeat.SentAt.UTC().Unix(), 10),
 	}, "|")
 	if septets := gsmSeptets(message); septets > 160 {
@@ -77,7 +89,8 @@ func (c *Coordinator) runHeartbeat(ctx context.Context, now time.Time) error {
 		return fmt.Errorf("reserve heartbeat: %w", err)
 	}
 	message, err := FormatHeartbeat(Heartbeat{
-		SiteID: c.heartbeatCfg.SiteID, GatewayID: c.heartbeatCfg.GatewayID, Sequence: sequence, SentAt: now,
+		SiteID: c.heartbeatCfg.SiteID, GatewayID: c.heartbeatCfg.GatewayID, Sequence: sequence,
+		Interval: c.heartbeatCfg.Interval, SentAt: now,
 	})
 	if err != nil {
 		return errors.Join(err, c.heartbeats.RecordHeartbeat(ctx, sequence, err.Error()))

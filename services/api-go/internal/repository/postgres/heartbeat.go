@@ -26,6 +26,8 @@ func (s *HeartbeatStore) RunHeartbeatTx(ctx context.Context, key domain.Heartbea
 	}
 	defer tx.Rollback(ctx)
 
+	// Provider retries can arrive concurrently; lock the durable heartbeat key
+	// so only one transaction creates the heartbeat and links its first receipt.
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, key); err != nil {
 		return false, fmt.Errorf("lock heartbeat: %w", err)
 	}
@@ -46,22 +48,25 @@ type heartbeatTx struct {
 
 func (t heartbeatTx) FindHeartbeat(ctx context.Context, key domain.HeartbeatKey) (*domain.StoredHeartbeat, error) {
 	var stored domain.StoredHeartbeat
+	var intervalSeconds int64
 	err := t.tx.QueryRow(ctx,
-		`SELECT sent_at FROM sms_heartbeats WHERE heartbeat_key = $1`, key).Scan(&stored.SentAt)
+		`SELECT sent_at, interval_seconds FROM sms_heartbeats WHERE heartbeat_key = $1`, key).Scan(&stored.SentAt, &intervalSeconds)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("find heartbeat: %w", err)
 	}
+	stored.Interval = time.Duration(intervalSeconds) * time.Second
 	return &stored, nil
 }
 
 func (t heartbeatTx) InsertHeartbeat(ctx context.Context, heartbeat domain.GatewayHeartbeat, contactAt time.Time) error {
 	_, err := t.tx.Exec(ctx, `
-		INSERT INTO sms_heartbeats(heartbeat_key, site_id, gateway_id, sequence, sent_at, contact_at)
-		VALUES ($1, $2, $3, $4, $5, $6)`,
-		heartbeat.Key(), heartbeat.SiteID, heartbeat.GatewayID, heartbeat.Sequence, heartbeat.SentAt, contactAt)
+		INSERT INTO sms_heartbeats(heartbeat_key, site_id, gateway_id, sequence, interval_seconds, sent_at, contact_at, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		heartbeat.Key(), heartbeat.SiteID, heartbeat.GatewayID, heartbeat.Sequence, int64(heartbeat.Interval/time.Second),
+		heartbeat.SentAt, contactAt, heartbeat.ExpiresAt(contactAt))
 	if err != nil {
 		return fmt.Errorf("insert heartbeat: %w", err)
 	}

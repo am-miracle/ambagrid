@@ -32,7 +32,10 @@ type Site struct {
 	LastFailedSyncReason *string
 	QueueGrowing         bool
 	LastSMSHeartbeatAt   *time.Time
-	OpenAlerts           AlertCounts
+	// SMSHeartbeatExpiresAt is derived from the interval the gateway declared
+	// in its latest heartbeat.
+	SMSHeartbeatExpiresAt *time.Time
+	OpenAlerts            AlertCounts
 }
 
 type AlertCounts struct {

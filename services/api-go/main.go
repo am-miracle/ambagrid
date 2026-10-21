@@ -80,7 +80,7 @@ func main() {
 		Assets: services.NewAssetService(store, limits),
 		Alerts: services.NewAlertService(store, limits, globalHistoryLimits),
 		Sites: services.NewSiteService(store, limits, services.SiteHealthThresholds{
-			OfflineAfter: cfg.SiteOfflineAfter, SMSOfflineAfter: cfg.SiteSMSOfflineAfter, EventStaleAfter: cfg.SiteEventStaleAfter,
+			OfflineAfter: cfg.SiteOfflineAfter, EventStaleAfter: cfg.SiteEventStaleAfter,
 		}),
 		Payments:       services.NewPaymentService(store),
 		Health:         services.NewHealthService(store),

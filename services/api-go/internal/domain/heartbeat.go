@@ -13,7 +13,19 @@ type GatewayHeartbeat struct {
 	SiteID    string
 	GatewayID string
 	Sequence  uint64
+	Interval  time.Duration
 	SentAt    time.Time
+}
+
+const (
+	MinHeartbeatInterval = time.Minute
+	MaxHeartbeatInterval = 24 * time.Hour
+)
+
+// ExpiresAt is when silence after this heartbeat means offline. 2.5 declared
+// intervals tolerates one lost SMS plus delivery jitter without flapping.
+func (h GatewayHeartbeat) ExpiresAt(contactAt time.Time) time.Time {
+	return contactAt.Add(h.Interval * 5 / 2)
 }
 
 func NewHeartbeatKey(siteID, gatewayID string, sequence uint64) HeartbeatKey {
@@ -35,11 +47,12 @@ func (h GatewayHeartbeat) ContactAt(receivedAt time.Time) time.Time {
 }
 
 type StoredHeartbeat struct {
-	SentAt time.Time
+	SentAt   time.Time
+	Interval time.Duration
 }
 
 func (s *StoredHeartbeat) Matches(h GatewayHeartbeat) bool {
-	return s.SentAt.Equal(h.SentAt)
+	return s.SentAt.Equal(h.SentAt) && s.Interval == h.Interval
 }
 
 // InboundSMS carries exactly one of Critical or Heartbeat.

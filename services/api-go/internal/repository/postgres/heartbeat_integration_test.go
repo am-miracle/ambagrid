@@ -43,7 +43,7 @@ func TestHeartbeatTxLifecycleInPostgres(t *testing.T) {
 	})
 
 	sentAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
-	heartbeat := domain.GatewayHeartbeat{SiteID: siteID, GatewayID: "gateway-01", Sequence: 1, SentAt: sentAt}
+	heartbeat := domain.GatewayHeartbeat{SiteID: siteID, GatewayID: "gateway-01", Sequence: 1, Interval: 30 * time.Minute, SentAt: sentAt}
 	receipt := domain.SMSReceipt{
 		ProviderMessageID: "it-hb-msg-" + siteID, Sender: "+2348000000000", Recipient: "1234",
 		ReceivedAt: sentAt.Add(10 * time.Second), GatewayID: "gateway-01",
@@ -105,6 +105,9 @@ func TestHeartbeatTxLifecycleInPostgres(t *testing.T) {
 	site := sites.Items[0]
 	if site.LastSMSHeartbeatAt == nil || !site.LastSMSHeartbeatAt.Equal(sentAt) {
 		t.Fatalf("last SMS heartbeat = %v, want %v", site.LastSMSHeartbeatAt, sentAt)
+	}
+	if want := sentAt.Add(75 * time.Minute); site.SMSHeartbeatExpiresAt == nil || !site.SMSHeartbeatExpiresAt.Equal(want) {
+		t.Fatalf("SMS heartbeat expiry = %v, want %v from the declared interval", site.SMSHeartbeatExpiresAt, want)
 	}
 	if site.LastContactAt != nil {
 		t.Fatalf("SMS heartbeat must not populate HTTP last contact, got %v", site.LastContactAt)

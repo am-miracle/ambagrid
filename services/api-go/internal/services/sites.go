@@ -19,7 +19,6 @@ type SiteService struct {
 
 type SiteHealthThresholds struct {
 	OfflineAfter    time.Duration
-	SMSOfflineAfter time.Duration
 	EventStaleAfter time.Duration
 }
 
@@ -54,13 +53,13 @@ func (s *SiteService) List(ctx context.Context, request ListSitesRequest) (page.
 	return result, nil
 }
 
-// Offline is always inferred from silence on both channels. SMS heartbeats are
-// sparse, so they get their own threshold, and an SMS-only gateway is at best
-// delayed because no telemetry is flowing.
+// Offline is always inferred from silence on both channels. SMS heartbeats
+// carry their own deadline because they are far sparser than HTTP polling, and
+// an SMS-only gateway is at best delayed because no telemetry is flowing.
 func siteHealthStatus(site domain.Site, now time.Time, thresholds SiteHealthThresholds) domain.SiteHealthStatus {
 	httpFresh := site.LastContactAt != nil && !site.LastContactAt.Before(now.Add(-thresholds.OfflineAfter))
 	if !httpFresh {
-		if site.LastSMSHeartbeatAt != nil && !site.LastSMSHeartbeatAt.Before(now.Add(-thresholds.SMSOfflineAfter)) {
+		if site.SMSHeartbeatExpiresAt != nil && site.SMSHeartbeatExpiresAt.After(now) {
 			return domain.SiteHealthDelayed
 		}
 		return domain.SiteHealthOffline
