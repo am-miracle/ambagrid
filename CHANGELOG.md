@@ -50,6 +50,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **edge:** Harden replay and fallback handling
 - **edge:** Complete replay and fallback hardening
 - **edge:** Close durable fallback integrity gaps
+- **edge:** Complete durable sync integration
 
 ### Maintenance
 
