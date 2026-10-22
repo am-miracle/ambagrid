@@ -4,6 +4,82 @@ use crate::domain::{
 };
 
 pub const INTERNAL_TEMPERATURE_ALERT_KIND: &str = "internal_temperature";
+pub const BATTERY_OVERHEAT_ALERT_KIND: &str = "battery_overheat";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CriticalCode {
+    BatteryOverheat,
+    InverterFailure,
+    TamperDetected,
+    SiteOutage,
+}
+
+impl CriticalCode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::BatteryOverheat => "BATTERY_OVERHEAT",
+            Self::InverterFailure => "INVERTER_FAILURE",
+            Self::TamperDetected => "TAMPER_DETECTED",
+            Self::SiteOutage => "SITE_OUTAGE",
+        }
+    }
+}
+
+impl TryFrom<&str> for CriticalCode {
+    type Error = ();
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "BATTERY_OVERHEAT" => Ok(Self::BatteryOverheat),
+            "INVERTER_FAILURE" => Ok(Self::InverterFailure),
+            "TAMPER_DETECTED" => Ok(Self::TamperDetected),
+            "SITE_OUTAGE" => Ok(Self::SiteOutage),
+            _ => Err(()),
+        }
+    }
+}
+
+pub fn critical_fallback_decision(reading: &Reading, code: CriticalCode) -> Option<AlertDecision> {
+    let (asset_id, kind, reason) = match code {
+        CriticalCode::BatteryOverheat => (
+            if reading.asset_type() == AssetType::BatteryBms {
+                reading.asset.asset_id.clone()
+            } else {
+                return None;
+            },
+            BATTERY_OVERHEAT_ALERT_KIND,
+            format!(
+                "battery_overheat:{:.1}C",
+                reading.asset.internal_temperature?
+            ),
+        ),
+        CriticalCode::InverterFailure => {
+            if reading.asset_type() != AssetType::SolarInverter {
+                return None;
+            }
+            (
+                reading.asset.asset_id.clone(),
+                "inverter_failure",
+                "inverter_failure".to_string(),
+            )
+        }
+        CriticalCode::TamperDetected => (
+            reading.asset.asset_id.clone(),
+            "tamper_detected",
+            "tamper_detected".to_string(),
+        ),
+        CriticalCode::SiteOutage => ("site".to_string(), "site_outage", "site_outage".to_string()),
+    };
+    Some(AlertDecision {
+        asset_id,
+        site_id: reading.asset.site_id.clone(),
+        kind: AlertKind::from(kind),
+        severity: Severity::Critical,
+        reason,
+        opened_at: reading.observed_at,
+        source_event_id: reading.source_event_id.clone(),
+    })
+}
 
 // Per-asset-type critical ceilings. These are rough values pulled from public
 // standards/datasheets, not AmbaGrid's actual deployed hardware specs — swap
@@ -35,6 +111,13 @@ impl Default for ThresholdPolicy {
 }
 
 impl ThresholdPolicy {
+    pub fn alert_kind(&self, asset_type: AssetType) -> AlertKind {
+        match asset_type {
+            AssetType::BatteryBms => AlertKind::from(BATTERY_OVERHEAT_ALERT_KIND),
+            _ => AlertKind::from(INTERNAL_TEMPERATURE_ALERT_KIND),
+        }
+    }
+
     fn critical_for(&self, asset_type: AssetType) -> f32 {
         match asset_type {
             AssetType::SmartMeter => self.smart_meter_critical_c,
@@ -53,7 +136,7 @@ impl ThresholdPolicy {
         Some(AlertDecision {
             asset_id: reading.asset.asset_id.clone(),
             site_id: reading.asset.site_id.clone(),
-            kind: AlertKind::from(INTERNAL_TEMPERATURE_ALERT_KIND),
+            kind: self.alert_kind(reading.asset_type()),
             severity: Severity::Critical,
             reason: format!(
                 "internal_temperature_high:{temperature:.1}C>=threshold:{threshold:.1}C"
@@ -90,6 +173,50 @@ mod tests {
     use super::*;
 
     #[test]
+    fn critical_codes_match_shared_contract() {
+        let contract: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../proto/fixtures/critical_fallback_v1.json"
+        )))
+        .unwrap();
+        let codes: Vec<&str> = contract["codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|code| code.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            codes,
+            [
+                "BATTERY_OVERHEAT",
+                "INVERTER_FAILURE",
+                "TAMPER_DETECTED",
+                "SITE_OUTAGE"
+            ]
+        );
+        assert_eq!(contract["event_key_prefix"], "edge:");
+        let rules = contract["rules"].as_array().unwrap();
+        for rule in rules {
+            let code = CriticalCode::try_from(rule["code"].as_str().unwrap()).unwrap();
+            assert_eq!(code.as_str(), rule["code"].as_str().unwrap());
+            let expected_kind = match code {
+                CriticalCode::BatteryOverheat => BATTERY_OVERHEAT_ALERT_KIND,
+                CriticalCode::InverterFailure => "inverter_failure",
+                CriticalCode::TamperDetected => "tamper_detected",
+                CriticalCode::SiteOutage => "site_outage",
+            };
+            assert_eq!(expected_kind, rule["alert_kind"].as_str().unwrap());
+            let expected_asset = match code {
+                CriticalCode::BatteryOverheat => "battery_bms",
+                CriticalCode::InverterFailure => "solar_inverter",
+                CriticalCode::TamperDetected => "*",
+                CriticalCode::SiteOutage => "site",
+            };
+            assert_eq!(expected_asset, rule["asset_type"].as_str().unwrap());
+        }
+    }
+
+    #[test]
     fn opens_critical_alert_when_internal_temperature_crosses_threshold() {
         let reading = Reading {
             asset: Asset {
@@ -101,6 +228,7 @@ mod tests {
             observed_at: Utc::now(),
             source_event_id: None,
             state: AssetState::SmartMeter(SmartMeterState::default()),
+            edge: None,
         };
 
         let decision = ThresholdPolicy::default().evaluate(&reading).unwrap();
@@ -123,6 +251,7 @@ mod tests {
             observed_at: Utc::now(),
             source_event_id: Some("telemetry.ingested:0:42".to_string()),
             state: AssetState::SmartMeter(SmartMeterState::default()),
+            edge: None,
         };
 
         let decision = ThresholdPolicy::default().evaluate(&reading).unwrap();
@@ -145,6 +274,7 @@ mod tests {
             observed_at: Utc::now(),
             source_event_id: None,
             state: AssetState::SmartMeter(SmartMeterState::default()),
+            edge: None,
         };
 
         assert!(ThresholdPolicy::default().evaluate(&reading).is_none());
@@ -162,11 +292,32 @@ mod tests {
             observed_at: Utc::now(),
             source_event_id: None,
             state: AssetState::BatteryBms(BatteryBmsState::default()),
+            edge: None,
         };
 
         // 60C wouldn't trip the smart meter threshold, but it's above the
         // battery pack's lower ceiling.
-        assert!(ThresholdPolicy::default().evaluate(&reading).is_some());
+        let decision = ThresholdPolicy::default().evaluate(&reading).unwrap();
+        assert_eq!(decision.kind.as_str(), BATTERY_OVERHEAT_ALERT_KIND);
+    }
+
+    #[test]
+    fn rejects_asset_specific_fallback_code_for_wrong_asset_type() {
+        let reading = Reading {
+            asset: Asset {
+                asset_id: "met-0101".to_string(),
+                site_id: "ng-kaji-01".to_string(),
+                internal_temperature: Some(68.2),
+                last_seen_at: Utc::now(),
+            },
+            observed_at: Utc::now(),
+            source_event_id: Some("edge:ng-kaji-01:42".to_string()),
+            state: AssetState::SmartMeter(SmartMeterState::default()),
+            edge: None,
+        };
+
+        assert!(critical_fallback_decision(&reading, CriticalCode::BatteryOverheat).is_none());
+        assert!(critical_fallback_decision(&reading, CriticalCode::InverterFailure).is_none());
     }
 
     #[test]
@@ -181,6 +332,7 @@ mod tests {
             observed_at: Utc::now(),
             source_event_id: None,
             state: AssetState::SmartMeter(SmartMeterState::default()),
+            edge: None,
         };
 
         let note = ThresholdPolicy::default().recovered(&reading).unwrap();
@@ -202,6 +354,7 @@ mod tests {
             observed_at: Utc::now(),
             source_event_id: None,
             state: AssetState::SmartMeter(SmartMeterState::default()),
+            edge: None,
         };
 
         assert!(ThresholdPolicy::default().evaluate(&reading).is_none());
@@ -220,6 +373,7 @@ mod tests {
             observed_at: Utc::now(),
             source_event_id: None,
             state: AssetState::SmartMeter(SmartMeterState::default()),
+            edge: None,
         };
 
         assert!(ThresholdPolicy::default().recovered(&reading).is_none());

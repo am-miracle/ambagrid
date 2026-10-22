@@ -118,6 +118,7 @@ Postgres:  database:5432
 - [Roadmap](docs/roadmap.md)
 - [Revenue protection](docs/revenue-protection.md)
 - [Edge reliability](docs/edge-reliability.md)
+- [Critical alert fallback](docs/critical-alert-fallback.md)
 - [Hardware adapters](docs/hardware-adapters.md)
 - [Investor reporting](docs/investor-reporting.md)
 - [Contributing](CONTRIBUTING.md)

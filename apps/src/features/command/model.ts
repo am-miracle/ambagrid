@@ -20,6 +20,14 @@ export const STATUS_COLOR: Record<Status, string> = {
 	offline: "#5A6E82",
 };
 
+export function healthStatusTone(healthStatus: Site["health_status"]): Status {
+	return healthStatus === "live"
+		? "healthy"
+		: healthStatus === "delayed"
+			? "warning"
+			: "offline";
+}
+
 export const ASSET_TYPES: AssetType[] = [
 	"smart_meter",
 	"battery_bms",
@@ -41,6 +49,14 @@ export interface FleetSite {
 	lon: number | null;
 	provisioningStatus: string;
 	lastSeenAt: number | null;
+	healthStatus: Site["health_status"];
+	lastContactAt: number | null;
+	lastSmsHeartbeatAt: number | null;
+	queueDepth: number;
+	oldestPendingAt: number | null;
+	lastSuccessfulSyncAt: number | null;
+	lastFailedSyncReason: string | null;
+	queueGrowing: boolean;
 	assets: AssetTelemetry[];
 	meters: AssetTelemetry[];
 	battery?: AssetTelemetry;
@@ -88,7 +104,17 @@ export function buildSites(
 		const socPct = battery?.batterySocPct ?? null;
 		const irradiance = inverter?.solarIrradiance ?? null;
 		const observed = assets.map((a) => Date.parse(a.observedAt));
-		const rollupSeen = site.last_seen_at ? Date.parse(site.last_seen_at) : null;
+		const rollupSeen = site.last_event_timestamp
+			? Date.parse(site.last_event_timestamp)
+			: site.last_seen_at
+				? Date.parse(site.last_seen_at)
+				: null;
+		const lastSeenAt =
+			rollupSeen === null
+				? observed.length
+					? Math.max(...observed)
+					: null
+				: Math.max(rollupSeen, ...observed);
 		return {
 			id: site.site_id,
 			name: site.name,
@@ -97,7 +123,23 @@ export function buildSites(
 			lat: site.lat,
 			lon: site.lng,
 			provisioningStatus: site.status,
-			lastSeenAt: observed.length ? Math.max(...observed) : rollupSeen,
+			lastSeenAt,
+			healthStatus: site.health_status,
+			lastContactAt: site.last_contact_at
+				? Date.parse(site.last_contact_at)
+				: null,
+			lastSmsHeartbeatAt: site.last_sms_heartbeat_at
+				? Date.parse(site.last_sms_heartbeat_at)
+				: null,
+			queueDepth: site.queue_depth,
+			oldestPendingAt: site.oldest_pending_at
+				? Date.parse(site.oldest_pending_at)
+				: null,
+			lastSuccessfulSyncAt: site.last_successful_sync_at
+				? Date.parse(site.last_successful_sync_at)
+				: null,
+			lastFailedSyncReason: site.last_failed_sync_reason,
+			queueGrowing: site.queue_growing,
 			assets,
 			meters,
 			battery,
@@ -112,19 +154,16 @@ export function buildSites(
 	});
 }
 
-// Historical offline state is inferred from last_seen_at: a site that last
-// reported before t minus the stale window was already dark at t. The API
-// keeps no reporting history, so a site that went dark and recovered inside
-// the window replays as online.
+// Server health is the base state; alerts can raise its severity.
 export function siteStatusAt(
 	site: FleetSite,
 	alerts: Alert[],
 	t: number,
 ): Status {
-	if (site.lastSeenAt === null || site.lastSeenAt < t - STALE_AFTER_MS) {
-		return "offline";
+	let status = healthStatusTone(site.healthStatus);
+	if (status === "offline") {
+		return status;
 	}
-	let status: Status = "healthy";
 	for (const alert of alerts) {
 		if (alert.site_id !== site.id || !isOpenAt(alert, t)) continue;
 		if (alert.severity === "critical") return "critical";
@@ -234,6 +273,10 @@ const clock = new Intl.DateTimeFormat(undefined, {
 });
 
 export const formatClock = (ms: number) => clock.format(new Date(ms));
+
+export function toIso(ts: number | null): string | null {
+	return ts ? new Date(ts).toISOString() : null;
+}
 
 export const timeZoneLabel =
 	new Intl.DateTimeFormat(undefined, { timeZoneName: "short" })

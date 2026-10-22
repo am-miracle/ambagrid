@@ -133,6 +133,23 @@ site. It does not identify a human caller. Sites backfilled by the migration
 may return `null` until ownership is assigned; production provisioning must
 supply a GridOperator.
 
+`health_status` is derived when the response is built. While HTTP contact
+(`last_contact_at`) is within `API_SITE_OFFLINE_AFTER`, a site is `delayed` when
+the latest measurement is older than `API_SITE_EVENT_STALE_AFTER` or the pending
+queue is growing; otherwise it is `live`. Without recent HTTP contact, a site is
+`delayed` while its latest SMS heartbeat (`last_sms_heartbeat_at`) is younger
+than 2.5 times the interval the gateway declared in that heartbeat: the gateway
+is powered and on the cellular network, but no telemetry is flowing. Otherwise
+it is `offline`. Because the deadline travels in each heartbeat, changing
+`EDGE_SMS_HEARTBEAT_INTERVAL` needs no matching API setting.
+Offline is always inferred from silence; no message ever reports it.
+
+`last_sms_heartbeat_at` is the earlier of the gateway's send time and the
+provider's receive time, so neither clock skew nor store-and-forward delay can
+overstate liveness. SMS heartbeats never change `last_contact_at` or the queue
+and sync fields, which always describe the last HTTP upload. Queue age is
+calculated from `oldest_pending_at` on each response.
+
 ```json
 {
   "site_id": "site-01",
@@ -145,6 +162,16 @@ supply a GridOperator.
   "status": "active",
   "asset_count": 3,
   "last_seen_at": "2026-09-03T01:58:31.535397+01:00",
+  "health_status": "live",
+  "last_contact_at": "2026-09-03T01:58:35.535397+01:00",
+  "last_event_timestamp": "2026-09-03T01:58:31.535397+01:00",
+  "queue_depth": 0,
+  "oldest_pending_at": null,
+  "oldest_pending_record_age_seconds": null,
+  "last_successful_sync_at": "2026-09-03T01:58:35.535397+01:00",
+  "last_failed_sync_reason": null,
+  "queue_growing": false,
+  "last_sms_heartbeat_at": null,
   "open_alerts": { "total": 1, "critical": 1, "warning": 0, "info": 0 }
 }
 ```
@@ -372,6 +399,8 @@ is unreachable, so the replica leaves the load balancer instead.
 | `API_DEFAULT_PAGE_SIZE` | `50` | page size when `limit` is absent |
 | `API_MAX_PAGE_SIZE` | `200` | page size ceiling |
 | `API_GLOBAL_HISTORY_PAGE_SIZE` | `25` | default and ceiling for unscoped alert history |
+| `API_SITE_OFFLINE_AFTER` | `2m` | time without gateway contact before a site is offline |
+| `API_SITE_EVENT_STALE_AFTER` | `2m` | measurement lag before a contacted site is delayed |
 | `DB_MAX_CONNS` | `10` | pool ceiling per replica |
 | `DB_MIN_CONNS` | `1` | warm connections |
 | `DB_QUERY_TIMEOUT` | `3s` | bounds waiting for a connection plus executing |

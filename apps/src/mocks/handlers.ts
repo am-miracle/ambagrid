@@ -203,12 +203,31 @@ export const handlers = [
 					const alerts = open.filter((a) => a.site_id === row.site_id);
 					const count = (severity: string) =>
 						alerts.filter((a) => a.severity === severity).length;
+					const lastEvent = seen.length ? Math.max(...seen) : null;
+					const healthStatus =
+						lastEvent === null || lastEvent < now - 90_000 ? "offline" : "live";
 					return {
 						...row,
 						asset_count: assets.length,
-						last_seen_at: seen.length
-							? new Date(Math.max(...seen)).toISOString()
+						last_seen_at: lastEvent ? new Date(lastEvent).toISOString() : null,
+						health_status: healthStatus,
+						last_contact_at:
+							healthStatus === "live"
+								? new Date(now - 5_000).toISOString()
+								: null,
+						last_event_timestamp: lastEvent
+							? new Date(lastEvent).toISOString()
 							: null,
+						queue_depth: 0,
+						oldest_pending_at: null,
+						oldest_pending_record_age_seconds: null,
+						last_successful_sync_at:
+							healthStatus === "live"
+								? new Date(now - 5_000).toISOString()
+								: null,
+						last_failed_sync_reason: null,
+						queue_growing: false,
+						last_sms_heartbeat_at: null,
 						open_alerts: {
 							total: alerts.length,
 							critical: count("critical"),

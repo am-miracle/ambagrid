@@ -80,29 +80,51 @@ Useful indicators:
 
 ## SMS Fallback
 
-SMS should carry critical alerts only. It should not be used for routine telemetry.
+SMS carries a small allowlist of critical alerts when normal data upload is
+unavailable. It is one-way and alert-only; routine telemetry never uses it.
 
 Example shape:
 
 ```text
-AMBAGRID|v=1|site=ng-kaji-01|asset=batt-01|code=BATTERY_OVERHEAT|temp=68.2|ts=1730000000
+AMBAGRID|v=1|site=ng-kaji-01|asset=batt-01|seq=18422|code=BATTERY_OVERHEAT|temp=68.2|ts=1730000000
 ```
 
-Use cases:
+The qualifying codes, send thresholds, idempotency contract, provider shape,
+rate limits, and cost controls are defined in
+[Critical alert fallback design](critical-alert-fallback.md).
 
-- battery overheat
-- inverter offline
-- full-site outage
-- tamper alarm
-- gateway online/offline heartbeat when data service is unavailable
+### SMS Liveness Heartbeats
 
-SMS messages should be:
+While packet data is unavailable, the gateway also sends a compact liveness
+heartbeat by SMS:
 
-- short
-- versioned
-- structured
-- idempotent where possible
-- tied to known site and asset IDs
+```text
+AMBAGRID|v=1|kind=HB|site=ng-kaji-01|gw=gateway-01|seq=42|int=1800|ts=1730000000
+```
+
+A heartbeat only proves the gateway is online. Offline is always inferred when
+expected heartbeats stop, because a powered-off or disconnected gateway cannot
+report it. The first heartbeat after a silent interval marks the site reachable
+again. Once HTTP uploads recover, SMS heartbeats stop and the normal empty-batch
+heartbeat resumes.
+
+Heartbeats are not alerts. They are parsed separately from critical codes,
+authenticated against the same sender-to-site/gateway mapping, and stored in
+`sms_heartbeats` with receipts in `sms_heartbeat_receipts`, deduplicated by
+provider message ID and by `(site, gateway, seq)`. They never touch
+`sms_fallback_events`, alerts, or `site_health`, so the queue and sync fields
+there keep describing the last HTTP upload.
+
+Heartbeats have their own durable sequence and their own daily budget on the
+edge, separate from the critical-alert limits, so they can never use up the SMS
+allowance needed for incidents. If that budget runs out, the site correctly
+falls to offline while critical SMS keeps working. Server-side cost accounting
+counts both message types toward the monthly SMS budget.
+
+Each heartbeat declares its interval in seconds (`int`, 60 to 86400). The API
+treats the site as reachable until 2.5 declared intervals after that heartbeat,
+which tolerates one lost SMS without flapping. The offline deadline therefore
+follows the gateway's own schedule instead of a second setting that could drift.
 
 ## OTA Updates
 
@@ -134,4 +156,62 @@ Network goes down
   -> network returns
   -> edge agent replays events
   -> upstream records show original timestamps and replay status
+```
+
+## Edge Queue Prototype
+
+The first Milestone 3 component lives in `services/edge-agent-go`. It provides:
+
+- a power-loss durable SQLite queue in WAL mode with full commit syncing
+- stable site and gateway identity plus non-reused, increasing sequence numbers
+- per-device ordered reads, acknowledgement, and retry scheduling
+- a hard SQLite page limit, a filesystem free-space reserve, and a reserved
+  capacity band for critical events
+- local `/health` and Prometheus `/metrics` endpoints
+- a simulated smart meter, battery BMS, and solar inverter collector
+- normalized records carrying the site-local sequence, measurement and receive
+  timestamps, device identity, asset type, payload, and lifecycle status
+
+The collector persists each normalized reading before promoting it to
+`pending_upload`. On restart, committed `persisted` rows are recovered into the
+upload queue. Upload remains the next step; it should mark a record `uploaded`
+after publishing and `acknowledged` only after the upstream broker confirms
+delivery. The database is bound to one site identity, making `(site_id,
+sequence)` the stable idempotency key for this deployment model.
+
+Replay provenance is durable queue state rather than an age estimate. An upload
+failure marks the active backlog and enters replay mode, so newly collected
+records are marked too; restart recovery does the same for interrupted records.
+Successful upstream contact updates health immediately, while replay mode stays
+active until the marked backlog is delivered.
+
+### Replay Kafka record
+
+An HTTP replay is published to `telemetry.ingested` with the device ID as its
+key. The value is a binary `MetricPayload`; decoded, it looks like:
+
+```json
+{
+  "deviceId": "batt-01",
+  "deviceType": "DEVICE_TYPE_BATTERY_BMS",
+  "timestampUtc": "1730000000",
+  "siteId": "ng-kaji-01",
+  "internalTemperature": 68.2,
+  "batterySocPct": 42
+}
+```
+
+The replay metadata stays in Kafka headers:
+
+```text
+site_id=ng-kaji-01
+gateway_id=gateway-01
+device_id=batt-01
+sequence=18422
+source_event_id=edge:ng-kaji-01:18422
+event_timestamp=2024-10-27T03:33:20Z
+edge_received_at=2024-10-27T03:33:21Z
+uploaded_at=2024-10-27T03:35:30Z
+replay=true
+source=http
 ```

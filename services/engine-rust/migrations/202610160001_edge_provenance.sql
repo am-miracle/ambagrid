@@ -1,0 +1,17 @@
+ALTER TABLE smart_meter_readings
+    ADD COLUMN IF NOT EXISTS replay BOOLEAN,
+    ADD COLUMN IF NOT EXISTS gateway_id TEXT,
+    ADD COLUMN IF NOT EXISTS edge_received_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS uploaded_at TIMESTAMPTZ;
+
+ALTER TABLE battery_bms_readings
+    ADD COLUMN IF NOT EXISTS replay BOOLEAN,
+    ADD COLUMN IF NOT EXISTS gateway_id TEXT,
+    ADD COLUMN IF NOT EXISTS edge_received_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS uploaded_at TIMESTAMPTZ;
+
+ALTER TABLE solar_inverter_readings
+    ADD COLUMN IF NOT EXISTS replay BOOLEAN,
+    ADD COLUMN IF NOT EXISTS gateway_id TEXT,
+    ADD COLUMN IF NOT EXISTS edge_received_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS uploaded_at TIMESTAMPTZ;

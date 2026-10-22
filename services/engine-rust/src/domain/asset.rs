@@ -31,6 +31,15 @@ pub struct Reading {
     pub observed_at: DateTime<Utc>,
     pub source_event_id: Option<String>,
     pub state: AssetState,
+    pub edge: Option<EdgeProvenance>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EdgeProvenance {
+    pub gateway_id: String,
+    pub replay: bool,
+    pub edge_received_at: DateTime<Utc>,
+    pub uploaded_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -17,6 +17,17 @@ use crate::{
     },
 };
 
+const ALERT_COLUMNS: &str = "a.alert_id, a.asset_id, a.site_id, a.kind, a.severity, \
+    a.status, a.reason, a.opened_at, a.source_event_id, a.resolved_at, \
+    a.resolution_note, a.resolved_by";
+
+type EdgeProvenanceBinds<'a> = (
+    Option<bool>,
+    Option<&'a str>,
+    Option<DateTime<Utc>>,
+    Option<DateTime<Utc>>,
+);
+
 #[derive(Debug, Clone)]
 pub struct PostgresIngestRepository {
     pool: PgPool,
@@ -50,20 +61,37 @@ impl IngestRepository for PostgresIngestRepository {
     ) -> Result<IngestWrite, PortError> {
         let mut tx = self.pool.begin().await.map_err(PortError::storage)?;
 
+        // Claim the stable identity before applying an at-least-once delivery.
+        if let Some(event_id) = &reading.source_event_id
+            && !claim_dedup(&mut tx, event_id).await?
+        {
+            tx.commit().await.map_err(PortError::storage)?;
+            return Ok(IngestWrite::default());
+        }
+
         upsert_asset(&mut tx, reading).await?;
         write_asset_state_and_reading(&mut tx, reading).await?;
 
         let write = match outcome {
             PolicyOutcome::Open(decision) => {
-                let alert_opened =
-                    if find_open_alert(&mut tx, &decision.asset_id, decision.kind.as_str())
-                        .await?
-                        .is_some()
-                    {
-                        None
-                    } else {
-                        Some(open_alert(&mut tx, &decision, &self.alert_opened_topic).await?)
+                let (alert_opened, _) =
+                    find_or_open_alert(&mut tx, &decision, &self.alert_opened_topic).await?;
+                IngestWrite {
+                    alert_opened,
+                    alert_resolved: None,
+                }
+            }
+            PolicyOutcome::OpenCritical { decision, code } => {
+                let event = critical_replay(reading, &decision, &code)?;
+                lock_event(&mut tx, event.event_key.as_str()).await?;
+                let (alert_opened, alert) =
+                    match find_alert_by_fallback_event(&mut tx, &event).await? {
+                        Some(alert) => (None, alert),
+                        None => {
+                            find_or_open_alert(&mut tx, &decision, &self.alert_opened_topic).await?
+                        }
                     };
+                record_critical_replay(&mut tx, &event, alert.alert_id).await?;
                 IngestWrite {
                     alert_opened,
                     alert_resolved: None,
@@ -74,21 +102,27 @@ impl IngestRepository for PostgresIngestRepository {
                 resolution_note,
                 resolved_by,
             } => {
-                let alert_resolved =
-                    match find_open_alert(&mut tx, &reading.asset.asset_id, kind.as_str()).await? {
-                        Some(open) => Some(
-                            resolve_alert(
-                                &mut tx,
-                                open.alert_id,
-                                reading.observed_at,
-                                &resolution_note,
-                                &resolved_by,
-                                &self.alert_resolved_topic,
-                            )
-                            .await?,
-                        ),
-                        None => None,
-                    };
+                let alert_resolved = match find_open_alert(
+                    &mut tx,
+                    &reading.asset.site_id,
+                    &reading.asset.asset_id,
+                    kind.as_str(),
+                )
+                .await?
+                {
+                    Some(open) => Some(
+                        resolve_alert(
+                            &mut tx,
+                            open.alert_id,
+                            reading.observed_at,
+                            &resolution_note,
+                            &resolved_by,
+                            &self.alert_resolved_topic,
+                        )
+                        .await?,
+                    ),
+                    None => None,
+                };
                 IngestWrite {
                     alert_opened: None,
                     alert_resolved,
@@ -101,6 +135,165 @@ impl IngestRepository for PostgresIngestRepository {
 
         Ok(write)
     }
+}
+
+struct CriticalReplay {
+    event_key: EdgeEventKey,
+    asset_id: String,
+    code: String,
+    event_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EdgeEventKey {
+    raw: String,
+    site_id: String,
+    sequence: i64,
+}
+
+impl EdgeEventKey {
+    fn parse(raw: String) -> Result<Self, PortError> {
+        let value = raw
+            .strip_prefix("edge:")
+            .ok_or_else(|| PortError::message("critical replay has invalid source_event_id"))?;
+        let (site_id, sequence) = value
+            .rsplit_once(':')
+            .ok_or_else(|| PortError::message("critical replay has invalid source_event_id"))?;
+        let sequence = sequence
+            .parse::<i64>()
+            .map_err(|_| PortError::message("critical replay has invalid sequence"))?;
+        if site_id.is_empty() || sequence <= 0 {
+            return Err(PortError::message(
+                "critical replay has invalid source_event_id",
+            ));
+        }
+        let site_id = site_id.to_owned();
+        Ok(Self {
+            raw,
+            site_id,
+            sequence,
+        })
+    }
+
+    fn as_str(&self) -> &str {
+        &self.raw
+    }
+}
+
+fn critical_replay(
+    reading: &Reading,
+    decision: &AlertDecision,
+    code: &str,
+) -> Result<CriticalReplay, PortError> {
+    let event_key = EdgeEventKey::parse(
+        decision
+            .source_event_id
+            .clone()
+            .ok_or_else(|| PortError::message("critical replay is missing source_event_id"))?,
+    )?;
+    if event_key.site_id != reading.asset.site_id {
+        return Err(PortError::message(
+            "critical replay source site does not match reading",
+        ));
+    }
+    Ok(CriticalReplay {
+        event_key,
+        asset_id: decision.asset_id.clone(),
+        code: code.to_owned(),
+        event_at: reading.observed_at,
+    })
+}
+
+// The ingest transaction rolls back this claim if a later write fails.
+async fn claim_dedup(
+    tx: &mut Transaction<'_, Postgres>,
+    event_id: &str,
+) -> Result<bool, PortError> {
+    let result =
+        query("INSERT INTO dedup_log (source_event_id) VALUES ($1) ON CONFLICT DO NOTHING")
+            .bind(event_id)
+            .execute(&mut **tx)
+            .await
+            .map_err(PortError::storage)?;
+    Ok(result.rows_affected() == 1)
+}
+
+async fn lock_event(tx: &mut Transaction<'_, Postgres>, event_key: &str) -> Result<(), PortError> {
+    // api-go takes the same transaction-scoped lock when SMS arrives first.
+    // Sharing the key closes the race between replay and webhook alert creation.
+    query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(event_key)
+        .execute(&mut **tx)
+        .await
+        .map_err(PortError::storage)?;
+    Ok(())
+}
+
+async fn record_critical_replay(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &CriticalReplay,
+    alert_id: Uuid,
+) -> Result<(), PortError> {
+    let result = query(
+        r#"
+        INSERT INTO sms_fallback_events (
+            event_key, site_id, sequence, asset_id, code, event_at, alert_id, replay_received_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+        ON CONFLICT (event_key) DO UPDATE SET
+            replay_received_at = COALESCE(sms_fallback_events.replay_received_at, EXCLUDED.replay_received_at)
+        WHERE sms_fallback_events.site_id = EXCLUDED.site_id
+          AND sms_fallback_events.sequence = EXCLUDED.sequence
+          AND sms_fallback_events.asset_id = EXCLUDED.asset_id
+          AND sms_fallback_events.code = EXCLUDED.code
+          AND sms_fallback_events.alert_id = EXCLUDED.alert_id
+        "#,
+    )
+    .bind(event.event_key.as_str())
+    .bind(&event.event_key.site_id)
+    .bind(event.event_key.sequence)
+    .bind(&event.asset_id)
+    .bind(&event.code)
+    .bind(event.event_at)
+    .bind(alert_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(PortError::storage)?;
+    if result.rows_affected() != 1 {
+        return Err(PortError::message(format!(
+            "critical replay {} conflicts with the stored event",
+            event.event_key.as_str()
+        )));
+    }
+    Ok(())
+}
+
+async fn find_alert_by_fallback_event(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &CriticalReplay,
+) -> Result<Option<Alert>, PortError> {
+    let statement = format!(
+        r#"SELECT {ALERT_COLUMNS}
+        FROM sms_fallback_events AS event
+        JOIN alerts AS a ON a.alert_id = event.alert_id
+        WHERE event.event_key = $1
+          AND event.site_id = $2
+          AND event.sequence = $3
+          AND event.asset_id = $4
+          AND event.code = $5
+        "#
+    );
+    let row = query(sqlx::AssertSqlSafe(statement))
+        .bind(event.event_key.as_str())
+        .bind(&event.event_key.site_id)
+        .bind(event.event_key.sequence)
+        .bind(&event.asset_id)
+        .bind(&event.code)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(PortError::storage)?;
+
+    row.map(row_to_alert).transpose()
 }
 
 impl AlertRepository for PostgresIngestRepository {
@@ -218,18 +411,32 @@ async fn upsert_smart_meter_state(
     Ok(())
 }
 
+fn edge_provenance_binds(reading: &Reading) -> EdgeProvenanceBinds<'_> {
+    match &reading.edge {
+        Some(ep) => (
+            Some(ep.replay),
+            Some(ep.gateway_id.as_str()),
+            Some(ep.edge_received_at),
+            Some(ep.uploaded_at),
+        ),
+        None => (None, None, None, None),
+    }
+}
+
 async fn append_smart_meter_reading(
     tx: &mut Transaction<'_, Postgres>,
     reading: &Reading,
     state: &SmartMeterState,
 ) -> Result<(), PortError> {
+    let (replay, gateway_id, edge_received_at, uploaded_at) = edge_provenance_binds(reading);
     query(
         r#"
         INSERT INTO smart_meter_readings (
             time, asset_id, internal_temperature, reported_household_id,
-            relay_closed, voltage, current, active_power, frequency, total_kwh
+            relay_closed, voltage, current, active_power, frequency, total_kwh,
+            replay, gateway_id, edge_received_at, uploaded_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         "#,
     )
     .bind(reading.observed_at)
@@ -242,6 +449,10 @@ async fn append_smart_meter_reading(
     .bind(state.active_power)
     .bind(state.frequency)
     .bind(state.total_kwh)
+    .bind(replay)
+    .bind(gateway_id)
+    .bind(edge_received_at)
+    .bind(uploaded_at)
     .execute(&mut **tx)
     .await
     .map_err(PortError::storage)?;
@@ -276,18 +487,24 @@ async fn append_battery_bms_reading(
     reading: &Reading,
     state: &BatteryBmsState,
 ) -> Result<(), PortError> {
+    let (replay, gateway_id, edge_received_at, uploaded_at) = edge_provenance_binds(reading);
     query(
         r#"
         INSERT INTO battery_bms_readings (
-            time, asset_id, internal_temperature, battery_soc_pct
+            time, asset_id, internal_temperature, battery_soc_pct,
+            replay, gateway_id, edge_received_at, uploaded_at
         )
-        VALUES ($1, $2, $3, $4)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         "#,
     )
     .bind(reading.observed_at)
     .bind(&reading.asset.asset_id)
     .bind(reading.asset.internal_temperature)
     .bind(state.battery_soc_pct)
+    .bind(replay)
+    .bind(gateway_id)
+    .bind(edge_received_at)
+    .bind(uploaded_at)
     .execute(&mut **tx)
     .await
     .map_err(PortError::storage)?;
@@ -322,18 +539,24 @@ async fn append_solar_inverter_reading(
     reading: &Reading,
     state: &SolarInverterState,
 ) -> Result<(), PortError> {
+    let (replay, gateway_id, edge_received_at, uploaded_at) = edge_provenance_binds(reading);
     query(
         r#"
         INSERT INTO solar_inverter_readings (
-            time, asset_id, internal_temperature, solar_irradiance
+            time, asset_id, internal_temperature, solar_irradiance,
+            replay, gateway_id, edge_received_at, uploaded_at
         )
-        VALUES ($1, $2, $3, $4)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         "#,
     )
     .bind(reading.observed_at)
     .bind(&reading.asset.asset_id)
     .bind(reading.asset.internal_temperature)
     .bind(state.solar_irradiance)
+    .bind(replay)
+    .bind(gateway_id)
+    .bind(edge_received_at)
+    .bind(uploaded_at)
     .execute(&mut **tx)
     .await
     .map_err(PortError::storage)?;
@@ -379,29 +602,72 @@ async fn open_alert(
     Ok(alert)
 }
 
-// Scoped by kind, not just asset_id: an asset can have multiple concurrent
-// open alerts for distinct problems (e.g. overheating and low battery), and
-// a recovery reading for one kind must not resolve another.
+async fn find_or_open_alert(
+    tx: &mut Transaction<'_, Postgres>,
+    decision: &AlertDecision,
+    topic: &str,
+) -> Result<(Option<Alert>, Alert), PortError> {
+    if let Some(source_event_id) = decision.source_event_id.as_deref()
+        && let Some(alert) = find_alert_by_source_event_id(tx, source_event_id).await?
+    {
+        return Ok((None, alert));
+    }
+    if let Some(alert) = find_open_alert(
+        tx,
+        &decision.site_id,
+        &decision.asset_id,
+        decision.kind.as_str(),
+    )
+    .await?
+    {
+        return Ok((None, alert));
+    }
+    let alert = open_alert(tx, decision, topic).await?;
+    Ok((Some(alert.clone()), alert))
+}
+
+async fn find_alert_by_source_event_id(
+    tx: &mut Transaction<'_, Postgres>,
+    source_event_id: &str,
+) -> Result<Option<Alert>, PortError> {
+    let statement = format!(
+        r#"SELECT {ALERT_COLUMNS}
+        FROM alerts AS a
+        WHERE a.source_event_id = $1
+        LIMIT 1
+        "#
+    );
+    let row = query(sqlx::AssertSqlSafe(statement))
+        .bind(source_event_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(PortError::storage)?;
+
+    row.map(row_to_alert).transpose()
+}
+
+// Site scope matters for synthetic asset IDs such as the site-wide outage ID.
 async fn find_open_alert(
     tx: &mut Transaction<'_, Postgres>,
+    site_id: &str,
     asset_id: &str,
     kind: &str,
 ) -> Result<Option<Alert>, PortError> {
-    let row = query(
-        r#"
-        SELECT alert_id, asset_id, site_id, kind, severity, status, reason, opened_at, source_event_id,
-            resolved_at, resolution_note, resolved_by
-        FROM alerts
-        WHERE asset_id = $1 AND kind = $2 AND status = 'open'
-        ORDER BY opened_at DESC
+    let statement = format!(
+        r#"SELECT {ALERT_COLUMNS}
+        FROM alerts AS a
+        WHERE a.site_id = $1 AND a.asset_id = $2 AND a.kind = $3 AND a.status = 'open'
+        ORDER BY a.opened_at DESC
         LIMIT 1
-        "#,
-    )
-    .bind(asset_id)
-    .bind(kind)
-    .fetch_optional(&mut **tx)
-    .await
-    .map_err(PortError::storage)?;
+        "#
+    );
+    let row = query(sqlx::AssertSqlSafe(statement))
+        .bind(site_id)
+        .bind(asset_id)
+        .bind(kind)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(PortError::storage)?;
 
     row.map(row_to_alert).transpose()
 }
@@ -699,5 +965,19 @@ mod tests {
         assert_eq!(payload.resolved_at_utc, 1_789_351_500);
         assert_eq!(payload.resolution_note, "temperature recovered");
         assert_eq!(payload.resolved_by, "system");
+    }
+
+    #[test]
+    fn canonical_edge_event_key_preserves_site_and_sequence() {
+        assert_eq!(
+            EdgeEventKey::parse("edge:ng-kaji-01:18422".to_string()).unwrap(),
+            EdgeEventKey {
+                raw: "edge:ng-kaji-01:18422".to_string(),
+                site_id: "ng-kaji-01".to_string(),
+                sequence: 18422,
+            }
+        );
+        assert!(EdgeEventKey::parse("telemetry.ingested:0:42".to_string()).is_err());
+        assert!(EdgeEventKey::parse("edge:ng-kaji-01:0".to_string()).is_err());
     }
 }

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -30,6 +31,12 @@ var envKeys = []string{
 	"KAFKA_SASL_PASSWORD",
 	"KAFKA_SSL_CA_LOCATION",
 	"KAFKA_SSL_CA_PEM",
+	"INGEST_HTTP_ENABLED",
+	"INGEST_HTTP_ADDR",
+	"INGEST_HTTP_API_KEYS",
+	"INGEST_HTTP_MAX_BODY_BYTES",
+	"INGEST_HTTP_SHUTDOWN_TIMEOUT",
+	"DATABASE_URL",
 }
 
 func clearEnv(t *testing.T) {
@@ -88,6 +95,17 @@ func TestFromEnvDefaults(t *testing.T) {
 	}
 	if cfg.KafkaSecurity.Protocol != ProtocolPlaintext || cfg.KafkaSecurity.UsesTLS() || cfg.KafkaSecurity.UsesSASL() {
 		t.Errorf("KafkaSecurity = %+v, want plaintext", cfg.KafkaSecurity)
+	}
+}
+
+func TestFromEnvRejectsMalformedHTTPAPIKey(t *testing.T) {
+	clearEnv(t)
+	const secret = "secret-without-site-separator"
+	t.Setenv("INGEST_HTTP_API_KEYS", secret)
+	if _, err := FromEnv(); err == nil {
+		t.Fatal("FromEnv() accepted a malformed INGEST_HTTP_API_KEYS entry")
+	} else if strings.Contains(err.Error(), secret) {
+		t.Fatalf("configuration error exposed API key: %v", err)
 	}
 }
 

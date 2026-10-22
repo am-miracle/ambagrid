@@ -3,6 +3,7 @@ package services
 
 import (
 	"context"
+	"time"
 
 	"api-go/internal/domain"
 	"api-go/internal/page"
@@ -10,12 +11,19 @@ import (
 
 // SiteService applies site listing rules.
 type SiteService struct {
-	sites  SiteRepository
-	limits PageLimits
+	sites      SiteRepository
+	limits     PageLimits
+	thresholds SiteHealthThresholds
+	now        func() time.Time
 }
 
-func NewSiteService(sites SiteRepository, limits PageLimits) *SiteService {
-	return &SiteService{sites: sites, limits: limits}
+type SiteHealthThresholds struct {
+	OfflineAfter    time.Duration
+	EventStaleAfter time.Duration
+}
+
+func NewSiteService(sites SiteRepository, limits PageLimits, thresholds SiteHealthThresholds) *SiteService {
+	return &SiteService{sites: sites, limits: limits, thresholds: thresholds, now: time.Now}
 }
 
 type ListSitesRequest struct {
@@ -30,8 +38,34 @@ func (s *SiteService) List(ctx context.Context, request ListSitesRequest) (page.
 		return page.Page[domain.Site]{}, err
 	}
 
-	return s.sites.ListSites(ctx, domain.SiteQuery{
+	result, err := s.sites.ListSites(ctx, domain.SiteQuery{
 		Limit:  limit,
 		Cursor: request.Cursor,
 	})
+	if err != nil {
+		return page.Page[domain.Site]{}, err
+	}
+
+	now := s.now().UTC()
+	for i := range result.Items {
+		result.Items[i].HealthStatus = siteHealthStatus(result.Items[i], now, s.thresholds)
+	}
+	return result, nil
+}
+
+// Offline is always inferred from silence on both channels. SMS heartbeats
+// carry their own deadline because they are far sparser than HTTP polling, and
+// an SMS-only gateway is at best delayed because no telemetry is flowing.
+func siteHealthStatus(site domain.Site, now time.Time, thresholds SiteHealthThresholds) domain.SiteHealthStatus {
+	httpFresh := site.LastContactAt != nil && !site.LastContactAt.Before(now.Add(-thresholds.OfflineAfter))
+	if !httpFresh {
+		if site.SMSHeartbeatExpiresAt != nil && site.SMSHeartbeatExpiresAt.After(now) {
+			return domain.SiteHealthDelayed
+		}
+		return domain.SiteHealthOffline
+	}
+	if site.LastEventAt == nil || site.LastEventAt.Before(now.Add(-thresholds.EventStaleAfter)) || site.QueueGrowing {
+		return domain.SiteHealthDelayed
+	}
+	return domain.SiteHealthLive
 }

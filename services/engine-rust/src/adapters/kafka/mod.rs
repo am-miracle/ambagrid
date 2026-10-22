@@ -4,6 +4,7 @@ use crate::config::KafkaSecurity;
 
 pub mod consumer;
 pub mod producer;
+pub mod site_health;
 
 fn client_config(brokers: &[String], security: &KafkaSecurity) -> ClientConfig {
     let mut config = ClientConfig::new();

@@ -44,6 +44,65 @@ func testLimits() PageLimits {
 
 const testGlobalHistorySize = 25
 
+func TestSiteHealthStatus(t *testing.T) {
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	recentContact := now.Add(-30 * time.Second)
+	currentEvent := now.Add(-45 * time.Second)
+	oldContact := now.Add(-3 * time.Minute)
+	staleEvent := now.Add(-3 * time.Minute)
+	heartbeatExpiresLater := now.Add(35 * time.Minute)
+	heartbeatExpired := now.Add(-5 * time.Minute)
+
+	tests := map[string]struct {
+		site domain.Site
+		want domain.SiteHealthStatus
+	}{
+		"live": {
+			site: domain.Site{LastContactAt: &recentContact, LastEventAt: &currentEvent},
+			want: domain.SiteHealthLive,
+		},
+		"delayed event": {
+			site: domain.Site{LastContactAt: &recentContact, LastEventAt: &staleEvent},
+			want: domain.SiteHealthDelayed,
+		},
+		"growing queue": {
+			site: domain.Site{LastContactAt: &recentContact, LastEventAt: &currentEvent, QueueGrowing: true},
+			want: domain.SiteHealthDelayed,
+		},
+		"offline": {
+			site: domain.Site{LastContactAt: &oldContact, LastEventAt: &currentEvent},
+			want: domain.SiteHealthOffline,
+		},
+		"never contacted": {want: domain.SiteHealthOffline},
+		"SMS heartbeat only": {
+			site: domain.Site{LastContactAt: &oldContact, LastEventAt: &staleEvent, SMSHeartbeatExpiresAt: &heartbeatExpiresLater},
+			want: domain.SiteHealthDelayed,
+		},
+		"SMS heartbeat without any HTTP contact": {
+			site: domain.Site{SMSHeartbeatExpiresAt: &heartbeatExpiresLater},
+			want: domain.SiteHealthDelayed,
+		},
+		"SMS heartbeats stopped": {
+			site: domain.Site{LastContactAt: &oldContact, LastEventAt: &staleEvent, SMSHeartbeatExpiresAt: &heartbeatExpired},
+			want: domain.SiteHealthOffline,
+		},
+		"HTTP recovery supersedes heartbeat": {
+			site: domain.Site{LastContactAt: &recentContact, LastEventAt: &currentEvent, SMSHeartbeatExpiresAt: &heartbeatExpired},
+			want: domain.SiteHealthLive,
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := siteHealthStatus(test.site, now, SiteHealthThresholds{
+				OfflineAfter: 2 * time.Minute, EventStaleAfter: 2 * time.Minute,
+			}); got != test.want {
+				t.Fatalf("siteHealthStatus() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func newTestAlertService(repo AlertRepository) *AlertService {
 	return NewAlertService(repo, testLimits(), PageLimits{
 		DefaultSize: testGlobalHistorySize,

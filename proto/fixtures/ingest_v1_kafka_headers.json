@@ -1,0 +1,20 @@
+{
+  "_comment": "Kafka record headers produced for the critical_code record (sequence 1003) from ingest_v1_batch_request.json",
+  "headers": [
+    { "key": "mqtt_topic", "value": "africa-west/site-01/battery/bms-002/telemetry" },
+    { "key": "region", "value": "africa-west" },
+    { "key": "site_id", "value": "site-01" },
+    { "key": "gateway_id", "value": "gw-01" },
+    { "key": "device_type", "value": "battery_bms" },
+    { "key": "device_id", "value": "bms-002" },
+    { "key": "sequence", "value": "1003" },
+    { "key": "source_event_id", "value": "edge:site-01:1003" },
+    { "key": "event_timestamp", "value": "2026-01-01T00:04:58Z" },
+    { "key": "edge_received_at", "value": "2026-01-01T00:04:59Z" },
+    { "key": "uploaded_at", "value": "2026-01-01T00:05:02Z" },
+    { "key": "replay", "value": "true" },
+    { "key": "source", "value": "http" },
+    { "key": "critical_code", "value": "BATTERY_OVERHEAT" },
+    { "key": "critical_value", "value": "68.5" }
+  ]
+}

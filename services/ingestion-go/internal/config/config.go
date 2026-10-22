@@ -32,6 +32,21 @@ type Config struct {
 	ShutdownTimeout        time.Duration
 	AllowAutoTopicCreation bool
 	LogEveryNRecords       int64
+	HTTP                   HTTPConfig
+}
+
+type HTTPConfig struct {
+	Enabled         bool
+	Addr            string
+	APIKeys         []APIKeyEntry
+	MaxBodyBytes    int64
+	ShutdownTimeout time.Duration
+	HealthTopic     string
+}
+
+type APIKeyEntry struct {
+	Key    string
+	SiteID string
 }
 
 // FromEnv builds a Config from environment variables, applying defaults and
@@ -70,6 +85,22 @@ func FromEnv() (Config, error) {
 		return Config{}, err
 	}
 
+	httpEnabled, err := envBool("INGEST_HTTP_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	httpMaxBody, err := envInt64("INGEST_HTTP_MAX_BODY_BYTES", 5<<20)
+	if err != nil {
+		return Config{}, err
+	}
+	httpShutdownTimeout, err := envDuration("INGEST_HTTP_SHUTDOWN_TIMEOUT", 10*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	apiKeys, err := parseAPIKeys(os.Getenv("INGEST_HTTP_API_KEYS"))
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
 		MQTTBroker:             envString("MQTT_BROKER", "tcp://localhost:1883"),
 		MQTTTopicFilter:        envString("MQTT_TOPIC_FILTER", "africa-west/+/+/+/telemetry"),
@@ -87,6 +118,14 @@ func FromEnv() (Config, error) {
 		ShutdownTimeout:        shutdownTimeout,
 		AllowAutoTopicCreation: allowAutoTopic,
 		LogEveryNRecords:       int64(logEveryN),
+		HTTP: HTTPConfig{
+			Enabled:         httpEnabled,
+			Addr:            envString("INGEST_HTTP_ADDR", ":8090"),
+			APIKeys:         apiKeys,
+			MaxBodyBytes:    httpMaxBody,
+			ShutdownTimeout: httpShutdownTimeout,
+			HealthTopic:     envString("INGEST_HEALTH_TOPIC", "site.health"),
+		},
 		KafkaSecurity: KafkaSecurity{
 			Protocol:      strings.ToUpper(envString("KAFKA_SECURITY_PROTOCOL", ProtocolPlaintext)),
 			SASLMechanism: strings.ToUpper(envString("KAFKA_SASL_MECHANISM", "")),
@@ -126,6 +165,9 @@ func FromEnv() (Config, error) {
 	}
 	if cfg.WorkerCount < 1 {
 		return Config{}, fmt.Errorf("INGESTION_WORKERS must be greater than zero")
+	}
+	if cfg.HTTP.Enabled && len(cfg.HTTP.APIKeys) == 0 {
+		return Config{}, fmt.Errorf("INGEST_HTTP_API_KEYS must be set when HTTP ingestion is enabled")
 	}
 
 	return cfg, nil
@@ -249,6 +291,45 @@ func envBool(key string, fallback bool) (bool, error) {
 	value, err := strconv.ParseBool(raw)
 	if err != nil {
 		return false, fmt.Errorf("%s must be a boolean: %w", key, err)
+	}
+	return value, nil
+}
+
+func parseAPIKeys(raw string) ([]APIKeyEntry, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var entries []APIKeyEntry
+	seenKeys := make(map[string]struct{})
+	index := 0
+	for pair := range strings.SplitSeq(raw, ",") {
+		index++
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		siteID, key, ok := strings.Cut(pair, ":")
+		siteID, key = strings.TrimSpace(siteID), strings.TrimSpace(key)
+		if !ok || siteID == "" || key == "" {
+			return nil, fmt.Errorf("INGEST_HTTP_API_KEYS entry %d must use site:key", index)
+		}
+		if _, exists := seenKeys[key]; exists {
+			return nil, fmt.Errorf("INGEST_HTTP_API_KEYS entry %d duplicates an earlier key", index)
+		}
+		seenKeys[key] = struct{}{}
+		entries = append(entries, APIKeyEntry{Key: key, SiteID: siteID})
+	}
+	return entries, nil
+}
+
+func envInt64(key string, fallback int64) (int64, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer: %w", key, err)
 	}
 	return value, nil
 }

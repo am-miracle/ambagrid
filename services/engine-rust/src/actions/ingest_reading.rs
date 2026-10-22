@@ -1,9 +1,9 @@
 use crate::{
     domain::{
         actor::ResolutionActor,
-        alert::{Alert, AlertKind},
+        alert::Alert,
         asset::Reading,
-        rules::{INTERNAL_TEMPERATURE_ALERT_KIND, ThresholdPolicy},
+        rules::{CriticalCode, ThresholdPolicy, critical_fallback_decision},
     },
     ports::{IngestRepository, PolicyOutcome, PortError},
 };
@@ -31,16 +31,30 @@ where
         }
     }
 
-    pub async fn execute(&self, reading: Reading) -> Result<IngestResult, PortError> {
-        let outcome = match self.policy.evaluate(&reading) {
-            Some(decision) => PolicyOutcome::Open(decision),
-            None => match self.policy.recovered(&reading) {
-                Some(resolution_note) => PolicyOutcome::Resolve {
-                    kind: AlertKind::from(INTERNAL_TEMPERATURE_ALERT_KIND),
-                    resolution_note,
-                    resolved_by: ResolutionActor::System,
+    pub async fn execute_with_critical(
+        &self,
+        reading: Reading,
+        critical_code: Option<&str>,
+    ) -> Result<IngestResult, PortError> {
+        let critical = critical_code.and_then(|raw_code| {
+            let code = CriticalCode::try_from(raw_code).ok()?;
+            critical_fallback_decision(&reading, code).map(|decision| (decision, code))
+        });
+        let outcome = match critical {
+            Some((decision, code)) => PolicyOutcome::OpenCritical {
+                decision,
+                code: code.as_str().to_owned(),
+            },
+            None => match self.policy.evaluate(&reading) {
+                Some(decision) => PolicyOutcome::Open(decision),
+                None => match self.policy.recovered(&reading) {
+                    Some(resolution_note) => PolicyOutcome::Resolve {
+                        kind: self.policy.alert_kind(reading.asset_type()),
+                        resolution_note,
+                        resolved_by: ResolutionActor::System,
+                    },
+                    None => PolicyOutcome::Unchanged,
                 },
-                None => PolicyOutcome::Unchanged,
             },
         };
 
@@ -79,6 +93,41 @@ mod tests {
         alerts: Mutex<Vec<Alert>>,
     }
 
+    fn try_open_alert(alerts: &mut Vec<Alert>, decision: AlertDecision) -> IngestWrite {
+        let already_open = alerts.iter().any(|alert| {
+            alert.site_id == decision.site_id
+                && alert.asset_id == decision.asset_id
+                && alert.kind == decision.kind
+                && alert.status == AlertStatus::Open
+        });
+
+        let alert_opened = if already_open {
+            None
+        } else {
+            let alert = Alert {
+                alert_id: Uuid::new_v4(),
+                asset_id: decision.asset_id.clone(),
+                site_id: decision.site_id.clone(),
+                kind: decision.kind.clone(),
+                severity: decision.severity,
+                status: AlertStatus::Open,
+                reason: decision.reason.clone(),
+                opened_at: decision.opened_at,
+                source_event_id: decision.source_event_id.clone(),
+                resolved_at: None,
+                resolution_note: None,
+                resolved_by: None,
+            };
+            alerts.push(alert.clone());
+            Some(alert)
+        };
+
+        IngestWrite {
+            alert_opened,
+            alert_resolved: None,
+        }
+    }
+
     impl IngestRepository for FakeIngestRepository {
         async fn ingest(
             &self,
@@ -95,39 +144,9 @@ mod tests {
                 .push(reading.asset.asset_id.clone());
 
             let write = match outcome {
-                PolicyOutcome::Open(decision) => {
+                PolicyOutcome::Open(decision) | PolicyOutcome::OpenCritical { decision, .. } => {
                     let mut alerts = self.alerts.lock().unwrap();
-                    let already_open = alerts.iter().any(|alert| {
-                        alert.asset_id == decision.asset_id
-                            && alert.kind == decision.kind
-                            && alert.status == AlertStatus::Open
-                    });
-
-                    let alert_opened = if already_open {
-                        None
-                    } else {
-                        let alert = Alert {
-                            alert_id: Uuid::new_v4(),
-                            asset_id: decision.asset_id.clone(),
-                            site_id: decision.site_id.clone(),
-                            kind: decision.kind.clone(),
-                            severity: decision.severity,
-                            status: AlertStatus::Open,
-                            reason: decision.reason.clone(),
-                            opened_at: decision.opened_at,
-                            source_event_id: decision.source_event_id.clone(),
-                            resolved_at: None,
-                            resolution_note: None,
-                            resolved_by: None,
-                        };
-                        alerts.push(alert.clone());
-                        Some(alert)
-                    };
-
-                    IngestWrite {
-                        alert_opened,
-                        alert_resolved: None,
-                    }
+                    try_open_alert(&mut alerts, decision)
                 }
                 PolicyOutcome::Resolve {
                     kind,
@@ -168,17 +187,21 @@ mod tests {
         let observed_at = Utc::now();
 
         let result = action
-            .execute(Reading {
-                asset: Asset {
-                    asset_id: "met-0101".to_string(),
-                    site_id: "ng-kaji-01".to_string(),
-                    internal_temperature: Some(75.0),
-                    last_seen_at: observed_at,
+            .execute_with_critical(
+                Reading {
+                    asset: Asset {
+                        asset_id: "met-0101".to_string(),
+                        site_id: "ng-kaji-01".to_string(),
+                        internal_temperature: Some(75.0),
+                        last_seen_at: observed_at,
+                    },
+                    observed_at,
+                    source_event_id: Some("telemetry.ingested:0:42".to_string()),
+                    state: AssetState::SmartMeter(SmartMeterState::default()),
+                    edge: None,
                 },
-                observed_at,
-                source_event_id: Some("telemetry.ingested:0:42".to_string()),
-                state: AssetState::SmartMeter(SmartMeterState::default()),
-            })
+                None,
+            )
             .await
             .unwrap();
 
@@ -207,22 +230,30 @@ mod tests {
         };
 
         let first = action
-            .execute(Reading {
-                asset: asset.clone(),
-                observed_at: Utc::now(),
-                source_event_id: None,
-                state: AssetState::SmartMeter(SmartMeterState::default()),
-            })
+            .execute_with_critical(
+                Reading {
+                    asset: asset.clone(),
+                    observed_at: Utc::now(),
+                    source_event_id: None,
+                    state: AssetState::SmartMeter(SmartMeterState::default()),
+                    edge: None,
+                },
+                None,
+            )
             .await
             .unwrap();
 
         let second = action
-            .execute(Reading {
-                asset: asset.clone(),
-                observed_at: Utc::now(),
-                source_event_id: None,
-                state: AssetState::SmartMeter(SmartMeterState::default()),
-            })
+            .execute_with_critical(
+                Reading {
+                    asset: asset.clone(),
+                    observed_at: Utc::now(),
+                    source_event_id: None,
+                    state: AssetState::SmartMeter(SmartMeterState::default()),
+                    edge: None,
+                },
+                None,
+            )
             .await
             .unwrap();
 
@@ -257,7 +288,25 @@ mod tests {
             observed_at: Utc::now(),
             source_event_id: None,
             state: AssetState::SmartMeter(SmartMeterState::default()),
+            edge: None,
         }
+    }
+
+    #[tokio::test]
+    async fn opens_header_driven_critical_alert_with_canonical_identity() {
+        let store = FakeIngestRepository::default();
+        let mut reading = sample_reading();
+        reading.asset.internal_temperature = Some(30.0);
+        reading.source_event_id = Some("edge:ng-kaji-01:42".to_string());
+
+        let result = IngestReading::new(&store)
+            .execute_with_critical(reading, Some("TAMPER_DETECTED"))
+            .await
+            .unwrap();
+
+        let alert = result.alert_opened.unwrap();
+        assert_eq!(alert.kind.as_str(), "tamper_detected");
+        assert_eq!(alert.source_event_id.as_deref(), Some("edge:ng-kaji-01:42"));
     }
 
     // Regression test for a bug where duplicate-suppression and resolution
@@ -341,26 +390,34 @@ mod tests {
         };
 
         let opened = action
-            .execute(Reading {
-                asset: asset.clone(),
-                observed_at: Utc::now(),
-                source_event_id: None,
-                state: AssetState::SmartMeter(SmartMeterState::default()),
-            })
+            .execute_with_critical(
+                Reading {
+                    asset: asset.clone(),
+                    observed_at: Utc::now(),
+                    source_event_id: None,
+                    state: AssetState::SmartMeter(SmartMeterState::default()),
+                    edge: None,
+                },
+                None,
+            )
             .await
             .unwrap();
         let alert_id = opened.alert_opened.unwrap().alert_id;
 
         let recovered = action
-            .execute(Reading {
-                asset: Asset {
-                    internal_temperature: Some(38.0),
-                    ..asset
+            .execute_with_critical(
+                Reading {
+                    asset: Asset {
+                        internal_temperature: Some(38.0),
+                        ..asset
+                    },
+                    observed_at: Utc::now(),
+                    source_event_id: None,
+                    state: AssetState::SmartMeter(SmartMeterState::default()),
+                    edge: None,
                 },
-                observed_at: Utc::now(),
-                source_event_id: None,
-                state: AssetState::SmartMeter(SmartMeterState::default()),
-            })
+                None,
+            )
             .await
             .unwrap();
 

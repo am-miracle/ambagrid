@@ -73,6 +73,7 @@ services:
         # Low volume by definition, and a single partition keeps alert events
         # globally ordered for anything reading them back.
         rpk topic create telemetry.ingested.dlq -p 1 --brokers redpanda:29092 || true
+        rpk topic create site.health -p 12 --brokers redpanda:29092 || true
         rpk topic create alert.opened -p 1 --brokers redpanda:29092 || true
         rpk topic create alert.resolved -p 1 --brokers redpanda:29092 || true
         rpk topic create payment.confirmed -p 1 --brokers redpanda:29092 || true
@@ -118,6 +119,12 @@ services:
       # 1-partition topic that caps throughput. redpanda-topics owns creation.
       KAFKA_ALLOW_AUTO_TOPIC: "false"
       INGESTION_LOG_EVERY_N: 25
+      INGEST_HTTP_ENABLED: "true"
+      INGEST_HTTP_ADDR: ":8090"
+      INGEST_HTTP_API_KEYS: lagos-epe:local-edge-key
+      INGEST_HEALTH_TOPIC: site.health
+    ports:
+      - "8090:8090"
     depends_on:
       - mqtt-broker
       - redpanda
@@ -149,7 +156,42 @@ services:
     networks:
       - ambagrid-network
 
-  # 7. Operator API (HTTP view of asset state, alerts, and narrow commands)
+  # 7. Apply the operational schema, then provision local demo sites.
+  database-migrate:
+    build:
+      context: .
+      dockerfile: ./services/engine-rust/Dockerfile
+    restart: "no"
+    command: ["migrate"]
+    environment:
+      DATABASE_URL: postgres://ambagrid_admin:ambagrid_secure_pass@database:5432/ambagrid_operational
+    depends_on:
+      database:
+        condition: service_healthy
+    networks:
+      - ambagrid-network
+
+  database-seed:
+    image: timescale/timescaledb:2.17.2-pg15
+    restart: "no"
+    environment:
+      PGPASSWORD: ambagrid_secure_pass
+    command:
+      - psql
+      - --host=database
+      - --username=ambagrid_admin
+      - --dbname=ambagrid_operational
+      - --set=ON_ERROR_STOP=on
+      - --file=/seed/seed.sql
+    volumes:
+      - ./deploy/staging-worker/seed.sql:/seed/seed.sql:ro
+    depends_on:
+      database-migrate:
+        condition: service_completed_successfully
+    networks:
+      - ambagrid-network
+
+  # 8. Operator API (HTTP view of asset state, alerts, and narrow commands)
   #
   # Stateless, so replicas scale horizontally behind a load balancer.
   # DB_MAX_CONNS is the cap on the load one replica can put on
@@ -174,12 +216,33 @@ services:
     ports:
       - "8081:8081"   # http://localhost:8081/v1/sites
     depends_on:
-      database:
-        condition: service_healthy
+      database-seed:
+        condition: service_completed_successfully
     networks:
       - ambagrid-network
 
-  # 8. Transactional outbox publisher
+  # 9. Telemetry and site-health consumers
+  engine-rust:
+    build:
+      context: .
+      dockerfile: ./services/engine-rust/Dockerfile
+    restart: unless-stopped
+    command: ["serve"]
+    environment:
+      DATABASE_URL: postgres://ambagrid_admin:ambagrid_secure_pass@database:5432/ambagrid_operational
+      KAFKA_BROKERS: redpanda:29092
+      TELEMETRY_TOPIC: telemetry.ingested
+      SITE_HEALTH_TOPIC: site.health
+      LOG_FORMAT: json
+    depends_on:
+      database-seed:
+        condition: service_completed_successfully
+      redpanda-topics:
+        condition: service_completed_successfully
+    networks:
+      - ambagrid-network
+
+  # 10. Transactional outbox publisher
   #
   # Operator commands and engine alert transitions write business events into
   # Postgres inside the same transaction as the state change. This worker
@@ -195,9 +258,39 @@ services:
       KAFKA_BROKERS: redpanda:29092
       LOG_FORMAT: json
     depends_on:
-      database:
-        condition: service_healthy
+      database-seed:
+        condition: service_completed_successfully
       redpanda-topics:
+        condition: service_completed_successfully
+    networks:
+      - ambagrid-network
+
+  # 11. Local edge prototype: simulated devices -> durable SQLite -> HTTP ingest.
+  edge-agent-go:
+    build:
+      context: ./services/edge-agent-go
+    restart: unless-stopped
+    environment:
+      EDGE_SITE_ID: lagos-epe
+      EDGE_GATEWAY_ID: local-gateway-01
+      EDGE_QUEUE_PATH: /var/lib/ambagrid-edge/queue.db
+      EDGE_MIN_FILESYSTEM_FREE_BYTES: "0"
+      EDGE_SIMULATOR_ENABLED: "true"
+      EDGE_SIMULATOR_FAULTS: "true"
+      EDGE_COLLECTOR_INTERVAL: 5s
+      EDGE_UPLOADER_ENABLED: "true"
+      EDGE_UPLOADER_ENDPOINT: http://ingestion-go:8090/v1/ingest
+      EDGE_UPLOADER_API_KEY: local-edge-key
+      EDGE_UPLOADER_POLL_INTERVAL: 2s
+      EDGE_HEALTH_ADDR: ":2112"
+    ports:
+      - "2112:2112"
+    volumes:
+      - edge_queue:/var/lib/ambagrid-edge
+    depends_on:
+      ingestion-go:
+        condition: service_started
+      database-seed:
         condition: service_completed_successfully
     networks:
       - ambagrid-network
@@ -207,6 +300,7 @@ volumes:
   mqtt_data:
   mqtt_log:
   postgres_data:
+  edge_queue:
 
 networks:
   ambagrid-network:

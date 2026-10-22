@@ -7,13 +7,16 @@ use rdkafka::{
     Message,
     consumer::{Consumer, StreamConsumer},
     error::KafkaError,
+    message::Headers,
 };
 
 use super::client_config;
+use chrono::{DateTime, Utc};
+
 use crate::{
     actions::ingest_reading::IngestReading,
     config::KafkaSecurity,
-    domain::asset::Reading,
+    domain::asset::{EdgeProvenance, Reading},
     ports::{DeadLetter, DeadLetterSink, DeadLetterStage, IngestRepository, PortError},
     telemetry::decode::decode_metric_payload,
 };
@@ -112,15 +115,23 @@ where
         let topic = message.topic().to_string();
         let partition = message.partition();
         let offset = message.offset();
+        let canonical_source = header_value(&message, "source_event_id");
+        let critical_code = header_value(&message, "critical_code");
+        let edge_provenance = parse_edge_provenance(&message);
         let handled = match message.payload().map(<[u8]>::to_vec) {
             Some(bytes) => {
                 handle_payload(
                     ingest,
                     dead_letters,
                     &stats,
-                    &topic,
-                    partition,
-                    offset,
+                    MessageMeta {
+                        topic: &topic,
+                        partition,
+                        offset,
+                        canonical_source,
+                        critical_code,
+                        edge_provenance,
+                    },
                     bytes,
                 )
                 .await
@@ -149,13 +160,20 @@ where
     }
 }
 
+struct MessageMeta<'a> {
+    topic: &'a str,
+    partition: i32,
+    offset: i64,
+    canonical_source: Option<String>,
+    critical_code: Option<String>,
+    edge_provenance: Option<EdgeProvenance>,
+}
+
 async fn handle_payload<S, D>(
     ingest: &IngestReading<'_, S>,
     dead_letters: &D,
     stats: &ConsumerStats,
-    topic: &str,
-    partition: i32,
-    offset: i64,
+    meta: MessageMeta<'_>,
     bytes: Vec<u8>,
 ) -> bool
 where
@@ -164,8 +182,13 @@ where
 {
     match decode_metric_payload(&bytes) {
         Ok(mut reading) => {
-            reading.source_event_id = Some(source_event_id(topic, partition, offset));
-            if let Err(err) = ingest_with_retry(ingest, &reading).await {
+            reading.source_event_id = meta
+                .canonical_source
+                .or_else(|| Some(source_event_id(meta.topic, meta.partition, meta.offset)));
+            reading.edge = meta.edge_provenance;
+            if let Err(err) =
+                ingest_with_retry(ingest, &reading, meta.critical_code.as_deref()).await
+            {
                 let ingest_failed = stats.add_ingest_failed();
                 tracing::error!(
                     error = %err,
@@ -186,9 +209,9 @@ where
             );
 
             let entry = build_dead_letter(
-                topic,
-                partition,
-                offset,
+                meta.topic,
+                meta.partition,
+                meta.offset,
                 bytes,
                 DeadLetterStage::Decode,
                 &err,
@@ -196,6 +219,36 @@ where
             park(stats, dead_letters, &entry).await
         }
     }
+}
+
+fn parse_edge_provenance(message: &impl Message) -> Option<EdgeProvenance> {
+    // Provenance is all-or-nothing: partial headers would mix edge timestamps
+    // with broker-derived identity and make replay analytics misleading.
+    let gateway_id = header_value(message, "gateway_id")?;
+    let replay = header_value(message, "replay").is_some_and(|v| v == "true");
+    let edge_received_at =
+        header_value(message, "edge_received_at").and_then(|v| v.parse::<DateTime<Utc>>().ok())?;
+    let uploaded_at =
+        header_value(message, "uploaded_at").and_then(|v| v.parse::<DateTime<Utc>>().ok())?;
+    Some(EdgeProvenance {
+        gateway_id,
+        replay,
+        edge_received_at,
+        uploaded_at,
+    })
+}
+
+fn header_value(message: &impl Message, key: &str) -> Option<String> {
+    message.headers()?.iter().find_map(|header| {
+        (header.key == key)
+            .then(|| {
+                header
+                    .value
+                    .and_then(|value| std::str::from_utf8(value).ok())
+            })
+            .flatten()
+            .map(str::to_owned)
+    })
 }
 
 fn source_event_id(topic: &str, partition: i32, offset: i64) -> String {
@@ -208,13 +261,17 @@ fn source_event_id(topic: &str, partition: i32, offset: i64) -> String {
 async fn ingest_with_retry<S>(
     ingest: &IngestReading<'_, S>,
     reading: &Reading,
+    critical_code: Option<&str>,
 ) -> Result<(), PortError>
 where
     S: IngestRepository,
 {
     let mut attempt = 1;
     loop {
-        match ingest.execute(reading.clone()).await {
+        match ingest
+            .execute_with_critical(reading.clone(), critical_code)
+            .await
+        {
             Ok(_) => return Ok(()),
             Err(err) if err.is_retryable() && attempt < MAX_INGEST_ATTEMPTS => {
                 tracing::warn!(
@@ -301,6 +358,7 @@ mod tests {
             observed_at: Utc::now(),
             source_event_id: None,
             state: AssetState::SmartMeter(SmartMeterState::default()),
+            edge: None,
         }
     }
 
@@ -399,7 +457,7 @@ mod tests {
         };
         let ingest = IngestReading::new(&store);
 
-        let result = ingest_with_retry(&ingest, &sample_reading()).await;
+        let result = ingest_with_retry(&ingest, &sample_reading(), None).await;
 
         assert!(result.is_ok());
         assert_eq!(store.attempts.load(Ordering::Relaxed), 2);
@@ -413,7 +471,7 @@ mod tests {
         };
         let ingest = IngestReading::new(&store);
 
-        let result = ingest_with_retry(&ingest, &sample_reading()).await;
+        let result = ingest_with_retry(&ingest, &sample_reading(), None).await;
 
         assert!(result.is_err());
         assert_eq!(store.attempts.load(Ordering::Relaxed), MAX_INGEST_ATTEMPTS);
@@ -424,7 +482,7 @@ mod tests {
         let store = DataShapeErrorStore::default();
         let ingest = IngestReading::new(&store);
 
-        let result = ingest_with_retry(&ingest, &sample_reading()).await;
+        let result = ingest_with_retry(&ingest, &sample_reading(), None).await;
 
         assert!(result.is_err());
         assert_eq!(store.attempts.load(Ordering::Relaxed), 1);
@@ -466,9 +524,14 @@ mod tests {
             &ingest,
             &sink,
             &stats,
-            "telemetry.ingested",
-            0,
-            7,
+            MessageMeta {
+                topic: "telemetry.ingested",
+                partition: 0,
+                offset: 7,
+                canonical_source: None,
+                critical_code: None,
+                edge_provenance: None,
+            },
             valid_payload_bytes(),
         )
         .await;

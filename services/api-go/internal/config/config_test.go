@@ -2,6 +2,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -33,8 +34,14 @@ func TestFromEnvAppliesDefaults(t *testing.T) {
 	if cfg.DefaultPageSize != 50 || cfg.MaxPageSize != 200 {
 		t.Fatalf("page sizes = %d/%d", cfg.DefaultPageSize, cfg.MaxPageSize)
 	}
+	if cfg.SiteOfflineAfter != 2*time.Minute || cfg.SiteEventStaleAfter != 2*time.Minute {
+		t.Fatalf("site health thresholds = %s/%s", cfg.SiteOfflineAfter, cfg.SiteEventStaleAfter)
+	}
 	if cfg.AlertResolvedTopic != "alert.resolved" {
 		t.Fatalf("AlertResolvedTopic = %q", cfg.AlertResolvedTopic)
+	}
+	if cfg.AlertOpenedTopic != "alert.opened" {
+		t.Fatalf("AlertOpenedTopic = %q", cfg.AlertOpenedTopic)
 	}
 	if cfg.PaymentConfirmedTopic != "payment.confirmed" {
 		t.Fatalf("PaymentConfirmedTopic = %q", cfg.PaymentConfirmedTopic)
@@ -54,6 +61,36 @@ func TestFromEnvAppliesDefaults(t *testing.T) {
 	// Postgres must allow the API time to return its own timeout response.
 	if cfg.DBStatementTimeout <= cfg.DBQueryTimeout {
 		t.Fatalf("DBStatementTimeout %s must exceed DBQueryTimeout %s", cfg.DBStatementTimeout, cfg.DBQueryTimeout)
+	}
+}
+
+func TestFromEnvLoadsSMSFallbackSettings(t *testing.T) {
+	setRequired(t)
+	t.Setenv("API_SMS_ENABLED", "true")
+	t.Setenv("API_SMS_WEBHOOK_SECRET", "secret")
+	t.Setenv("API_SMS_SENDERS", "+2348000000000=site-01:gateway-01")
+	t.Setenv("API_SMS_OUTBOUND_COST_MINOR", "4")
+	t.Setenv("API_SMS_INBOUND_COST_MINOR", "2")
+	t.Setenv("API_SMS_NUMBER_RENTAL_MINOR", "100")
+	t.Setenv("API_SMS_MONTHLY_BUDGET_MINOR", "1000")
+	t.Setenv("API_SMS_CURRENCY", "ngn")
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SMSCurrency != "NGN" || cfg.SMSMonthlyBudgetMinor != 1000 || cfg.SMSSenders["+2348000000000"].GatewayID != "gateway-01" {
+		t.Fatalf("SMS config = %+v", cfg)
+	}
+}
+
+func TestFromEnvRejectsMalformedSMSSender(t *testing.T) {
+	setRequired(t)
+	const sender = "+2348000000000=missing-gateway"
+	t.Setenv("API_SMS_SENDERS", sender)
+	if _, err := FromEnv(); err == nil {
+		t.Fatal("FromEnv() accepted a malformed API_SMS_SENDERS entry")
+	} else if strings.Contains(err.Error(), "+2348000000000") {
+		t.Fatalf("configuration error exposed sender phone number: %v", err)
 	}
 }
 

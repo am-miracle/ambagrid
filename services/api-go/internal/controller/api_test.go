@@ -262,19 +262,27 @@ func TestListSitesReturnsMetadataAndOperationalRollups(t *testing.T) {
 	lat := 8.4917
 	lng := 8.5153
 	lastSeenAt := time.Date(2026, 9, 16, 10, 0, 0, 0, time.UTC)
+	lastContactAt := lastSeenAt.Add(5 * time.Second)
+	oldestPendingAt := lastSeenAt.Add(-time.Minute)
 	api.sites.listResult = page.Page[domain.Site]{
 		Items: []domain.Site{{
-			SiteID:         "nasarawa-duduguru",
-			Name:           "Duduguru Mini-grid",
-			Country:        &country,
-			Region:         &region,
-			GridOperatorID: &gridOperatorID,
-			Lat:            &lat,
-			Lng:            &lng,
-			Status:         "active",
-			AssetCount:     3,
-			LastSeenAt:     &lastSeenAt,
-			OpenAlerts:     domain.AlertCounts{Total: 1, Critical: 1},
+			SiteID:          "nasarawa-duduguru",
+			Name:            "Duduguru Mini-grid",
+			Country:         &country,
+			Region:          &region,
+			GridOperatorID:  &gridOperatorID,
+			Lat:             &lat,
+			Lng:             &lng,
+			Status:          "active",
+			AssetCount:      3,
+			LastSeenAt:      &lastSeenAt,
+			HealthStatus:    domain.SiteHealthDelayed,
+			LastContactAt:   &lastContactAt,
+			LastEventAt:     &lastSeenAt,
+			QueueDepth:      7,
+			OldestPendingAt: &oldestPendingAt,
+			QueueGrowing:    true,
+			OpenAlerts:      domain.AlertCounts{Total: 1, Critical: 1},
 		}},
 		Limit: 50,
 	}
@@ -290,6 +298,12 @@ func TestListSitesReturnsMetadataAndOperationalRollups(t *testing.T) {
 	}
 	if site["asset_count"] != float64(3) || site["open_alerts"].(map[string]any)["critical"] != float64(1) {
 		t.Fatalf("site rollups = %v", site)
+	}
+	if site["health_status"] != "delayed" || site["queue_depth"] != float64(7) || site["queue_growing"] != true {
+		t.Fatalf("site health = %v", site)
+	}
+	if site["last_contact_at"] == nil || site["last_event_timestamp"] == nil || site["oldest_pending_record_age_seconds"] == nil {
+		t.Fatalf("site health timestamps = %v", site)
 	}
 }
 

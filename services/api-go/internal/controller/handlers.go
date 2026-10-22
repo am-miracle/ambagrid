@@ -217,31 +217,78 @@ type applyDevPaymentBody struct {
 
 const maxWebhookBodySize = 64 * 1024
 
+func (a API) readVerifiedWebhookBody(w http.ResponseWriter, r *http.Request, provider SignedWebhookProvider, providerName string) ([]byte, bool) {
+	signature := r.Header.Get(provider.SignatureHeader())
+	if signature == "" {
+		writeErrorBody(w, a.logger(), http.StatusUnauthorized, codeUnauthenticated, "missing webhook signature", RequestIDFrom(r.Context()))
+		return nil, false
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookBodySize))
+	if err != nil {
+		writeError(w, r, a.logger(), errInvalidParameter)
+		return nil, false
+	}
+	if err := provider.VerifySignature(body, signature); err != nil {
+		a.logger().Warn("webhook signature verification failed",
+			"provider", providerName,
+			"error", err,
+			"request_id", RequestIDFrom(r.Context()),
+		)
+		writeErrorBody(w, a.logger(), http.StatusUnauthorized, codeUnauthenticated, "invalid webhook signature", RequestIDFrom(r.Context()))
+		return nil, false
+	}
+	return body, true
+}
+
+func (a API) handleSMSFallback(w http.ResponseWriter, r *http.Request) {
+	body, ok := a.readVerifiedWebhookBody(w, r, a.SMSWebhook, "sms")
+	if !ok {
+		return
+	}
+	inbound, err := a.SMSWebhook.Parse(body)
+	if err != nil {
+		writeErrorBody(w, a.logger(), http.StatusBadRequest, codeInvalidArgument, err.Error(), RequestIDFrom(r.Context()))
+		return
+	}
+	if inbound.Heartbeat != nil {
+		a.receiveSMSHeartbeat(w, r, *inbound.Heartbeat, inbound.Receipt)
+		return
+	}
+	created, err := a.Fallback.ReceiveSMS(r.Context(), *inbound.Critical, inbound.Receipt)
+	if err != nil {
+		writeError(w, r, a.logger(), err)
+		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, a.logger(), status, map[string]any{"event_key": inbound.Critical.EventKey(), "created": created, "request_id": RequestIDFrom(r.Context())})
+}
+
+func (a API) receiveSMSHeartbeat(w http.ResponseWriter, r *http.Request, heartbeat domain.GatewayHeartbeat, receipt domain.SMSReceipt) {
+	if a.Heartbeats == nil {
+		writeErrorBody(w, a.logger(), http.StatusBadRequest, codeInvalidArgument, "SMS heartbeats are not enabled", RequestIDFrom(r.Context()))
+		return
+	}
+	created, err := a.Heartbeats.ReceiveHeartbeat(r.Context(), heartbeat, receipt)
+	if err != nil {
+		writeError(w, r, a.logger(), err)
+		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, a.logger(), status, map[string]any{"heartbeat_key": heartbeat.Key(), "created": created, "request_id": RequestIDFrom(r.Context())})
+}
+
 func (a API) handleWebhookPayment(provider WebhookProvider) http.HandlerFunc {
-	signatureHeader := provider.SignatureHeader()
-
 	return func(w http.ResponseWriter, r *http.Request) {
-		signature := r.Header.Get(signatureHeader)
-		if signature == "" {
-			writeErrorBody(w, a.logger(), http.StatusUnauthorized, codeUnauthenticated, "missing webhook signature", RequestIDFrom(r.Context()))
-			return
-		}
-
 		// Providers sign the exact request bytes, so verify the untouched body
 		// before parsing or normalizing any fields.
-		body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookBodySize))
-		if err != nil {
-			writeError(w, r, a.logger(), errInvalidParameter)
-			return
-		}
-
-		if err := provider.VerifySignature(body, signature); err != nil {
-			a.logger().Warn("webhook signature verification failed",
-				"provider", provider.Name(),
-				"error", err,
-				"request_id", RequestIDFrom(r.Context()),
-			)
-			writeErrorBody(w, a.logger(), http.StatusUnauthorized, codeUnauthenticated, "invalid webhook signature", RequestIDFrom(r.Context()))
+		body, ok := a.readVerifiedWebhookBody(w, r, provider, provider.Name())
+		if !ok {
 			return
 		}
 

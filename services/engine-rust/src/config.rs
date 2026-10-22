@@ -8,6 +8,8 @@ pub struct Config {
     pub telemetry_topic: String,
     pub telemetry_dlq_topic: String,
     pub telemetry_group_id: String,
+    pub site_health_topic: String,
+    pub site_health_group_id: String,
     pub alert_opened_topic: String,
     pub alert_resolved_topic: String,
     pub alert_resolve_actors: Vec<ActorId>,
@@ -29,6 +31,9 @@ impl Config {
             Some("telemetry.ingested.dlq"),
         )?;
         let telemetry_group_id = env_string(&lookup, "TELEMETRY_GROUP_ID", Some("engine-rust"))?;
+        let site_health_topic = env_string(&lookup, "SITE_HEALTH_TOPIC", Some("site.health"))?;
+        let site_health_group_id =
+            env_string(&lookup, "SITE_HEALTH_GROUP_ID", Some("engine-rust-health"))?;
         let alert_opened_topic = env_string(&lookup, "ALERT_OPENED_TOPIC", Some("alert.opened"))?;
         let alert_resolved_topic =
             env_string(&lookup, "ALERT_RESOLVED_TOPIC", Some("alert.resolved"))?;
@@ -77,6 +82,8 @@ impl Config {
             telemetry_topic,
             telemetry_dlq_topic,
             telemetry_group_id,
+            site_health_topic,
+            site_health_group_id,
             alert_opened_topic,
             alert_resolved_topic,
             alert_resolve_actors,
@@ -456,6 +463,8 @@ mod tests {
         assert_eq!(cfg.telemetry_topic, "telemetry.ingested");
         assert_eq!(cfg.telemetry_dlq_topic, "telemetry.ingested.dlq");
         assert_eq!(cfg.telemetry_group_id, "engine-rust");
+        assert_eq!(cfg.site_health_topic, "site.health");
+        assert_eq!(cfg.site_health_group_id, "engine-rust-health");
         assert_eq!(cfg.alert_opened_topic, "alert.opened");
         assert_eq!(cfg.alert_resolved_topic, "alert.resolved");
         assert!(cfg.alert_resolve_actors.is_empty());
