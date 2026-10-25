@@ -22,6 +22,9 @@ var (
 	// ErrOutcomeUnknown means the command reached the device but no reply
 	// confirmed whether it was applied; resending could apply it twice.
 	ErrOutcomeUnknown = errors.New("command outcome is unknown")
+	// ErrSendHookSkipped means an adapter reported success without calling
+	// BeforeSend, breaking the contract the ledger's at-most-once record relies on.
+	ErrSendHookSkipped = errors.New("adapter applied a command without calling BeforeSend")
 )
 
 type TelemetryAdapter interface {

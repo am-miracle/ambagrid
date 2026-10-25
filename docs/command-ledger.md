@@ -39,6 +39,15 @@ meter. The conformance suite checks that every adapter calls the hook exactly
 once, before the device sees anything, and never for a command that did not
 leave the queue.
 
+Transports call the hook too: the MQTT adapter passes it to `Publish`, which
+runs it after its readiness check. The suite only covers adapters and
+transports run through it, so the ledger also guards the contract itself. An
+adapter that reports success without calling the hook has applied a command
+the ledger never recorded; the ledger records it as applied, so a retry finds
+it instead of sending it again, and returns `ErrSendHookSkipped`. A failure
+without the hook is indistinguishable from a command that was never sent and is
+still treated as one.
+
 ### States
 
 ```text

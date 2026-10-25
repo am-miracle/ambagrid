@@ -32,6 +32,7 @@ type fakeMeter struct {
 	reject      bool
 	failBefore  error
 	afterApply  func()
+	skipHook    bool
 }
 
 func newMeter() *fakeMeter { return &fakeMeter{caps: meterCaps} }
@@ -45,8 +46,13 @@ func (m *fakeMeter) Execute(ctx context.Context, cmd adapter.Command) (adapter.C
 	if failBefore != nil {
 		return adapter.CommandResult{}, failBefore
 	}
-	if err := adapter.BeforeSend(ctx); err != nil {
-		return adapter.CommandResult{}, err
+	m.mu.Lock()
+	skipHook := m.skipHook
+	m.mu.Unlock()
+	if !skipHook {
+		if err := adapter.BeforeSend(ctx); err != nil {
+			return adapter.CommandResult{}, err
+		}
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -364,6 +370,26 @@ func TestLedgerLeavesNoEntryWhenNothingWasSent(t *testing.T) {
 	meter.mu.Unlock()
 	if _, err := ledger.Execute(context.Background(), kwhCredit); err != nil {
 		t.Fatalf("retry of an unsent command: %v", err)
+	}
+	if n := meter.appliedCount(kwhCredit.ID); n != 1 {
+		t.Fatalf("credit applied %d times, want once", n)
+	}
+}
+
+func TestLedgerRecordsSuccessReportedWithoutBeforeSend(t *testing.T) {
+	store, meter := tempStore(t), newMeter()
+	meter.skipHook = true
+	ledger := adapter.NewLedger(store, meter)
+
+	if _, err := ledger.Execute(context.Background(), kwhCredit); !errors.Is(err, adapter.ErrSendHookSkipped) {
+		t.Fatalf("error = %v, want ErrSendHookSkipped", err)
+	}
+	if got := state(t, store, kwhCredit.ID); got != adapter.CommandApplied {
+		t.Fatalf("state = %q, want applied so a retry is not resent", got)
+	}
+	result, err := ledger.Execute(context.Background(), kwhCredit)
+	if err != nil || result.CommandID != kwhCredit.ID {
+		t.Fatalf("retry = %+v, %v; want the recorded result", result, err)
 	}
 	if n := meter.appliedCount(kwhCredit.ID); n != 1 {
 		t.Fatalf("credit applied %d times, want once", n)

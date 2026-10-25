@@ -169,9 +169,9 @@ func (l *Ledger) resolveUnknown(ctx context.Context, cmd Command, caps Capabilit
 }
 
 func (l *Ledger) send(ctx context.Context, cmd Command, hash []byte) (CommandResult, error) {
+	entry := LedgerEntry{CommandID: cmd.ID, DeviceID: cmd.DeviceID, Type: cmd.Type, RequestHash: hash, RequestedAt: cmd.RequestedAt}
 	sent := false
 	hooked := WithSendHook(ctx, func() error {
-		entry := LedgerEntry{CommandID: cmd.ID, DeviceID: cmd.DeviceID, Type: cmd.Type, RequestHash: hash, RequestedAt: cmd.RequestedAt}
 		if err := l.store.BeginCommandAttempt(ctx, entry, l.now().UTC()); err != nil {
 			return fmt.Errorf("record command %q before sending: %w", cmd.ID, ContextError(err))
 		}
@@ -179,13 +179,24 @@ func (l *Ledger) send(ctx context.Context, cmd Command, hash []byte) (CommandRes
 		return nil
 	})
 	result, err := l.inner.Execute(hooked, cmd)
-	if !sent {
-		return result, err
-	}
 
 	// The device may have acted, so the outcome is recorded even if the caller gave up.
 	persistCtx := context.WithoutCancel(ctx)
 	now := l.now().UTC()
+	if !sent {
+		if err != nil {
+			return result, err
+		}
+		// The adapter broke its contract, but the device acted: record it as
+		// applied so a retry finds it instead of sending it again.
+		if recordErr := l.store.BeginCommandAttempt(persistCtx, entry, now); recordErr != nil {
+			l.record(cmd.ID, recordErr)
+		} else {
+			l.record(cmd.ID, l.store.CompleteCommand(persistCtx, cmd.ID, CommandApplied, &result, "", now))
+		}
+		return result, fmt.Errorf("%w: command %q", ErrSendHookSkipped, cmd.ID)
+	}
+
 	switch {
 	case err == nil:
 		l.record(cmd.ID, l.store.CompleteCommand(persistCtx, cmd.ID, CommandApplied, &result, "", now))

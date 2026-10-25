@@ -140,6 +140,10 @@ func (r *Runner) handle(ctx context.Context, p Pending) error {
 	switch {
 	case err == nil, errors.Is(err, adapter.ErrDeviceRejected):
 		return nil
+	case errors.Is(err, adapter.ErrSendHookSkipped):
+		// Applied and recorded by the ledger; the adapter is broken, not the command.
+		slog.Error("command adapter skipped BeforeSend", "command_id", cmd.ID, "error", err)
+		return nil
 	case errors.Is(err, adapter.ErrOutcomeUnknown):
 		if found && entry.State == adapter.CommandUnknown {
 			slog.Debug("meter command still unresolved", "command_id", cmd.ID, "error", err)
