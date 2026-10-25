@@ -14,6 +14,8 @@ import (
 	"edge-agent-go/internal/adapter"
 )
 
+var ErrRegisterUnavailable = fmt.Errorf("%w: Victron register unavailable", adapter.ErrUnsupported)
+
 // TCP opens a bounded exchange per register. No connection or transaction state
 // is shared between concurrent reads. Configure Address as host:502.
 type TCP struct {
@@ -69,7 +71,9 @@ func (c *TCP) ReadHolding(ctx context.Context, unit byte, address uint16) (value
 	}
 	if pdu[0] == 0x83 && len(pdu) == 2 {
 		switch pdu[1] {
-		case 1, 2:
+		case 2:
+			return 0, fmt.Errorf("%w: register %d", ErrRegisterUnavailable, address)
+		case 1:
 			return 0, fmt.Errorf("%w: Modbus exception %d", adapter.ErrUnsupported, pdu[1])
 		case 10, 11:
 			return 0, fmt.Errorf("%w: Modbus gateway exception %d", adapter.ErrDeviceRejected, pdu[1])

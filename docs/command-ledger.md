@@ -175,6 +175,9 @@ old from arriving, so the newest surviving entry still decides.
 - `meter` meters keep their own balance. Every payment sends a `credit_meter`
   command for the kWh it granted, linked by `credit_id` to the energy credit
   that funded it; the meter reconnects itself once it holds credit.
+- `sts` meters use only funded STS vending: payments create no automatic credit
+  or reconnect. Delivery mode is immutable on the credit; vending and kWh
+  commands cannot deliver the same funded credit. See [STS vending](sts-vending.md).
 
 `meter_commands.credit_kwh` carries the amount, required exactly for credit
 commands, and one energy credit can be delivered by at most one command. A
@@ -203,6 +206,9 @@ reported time to between the command's request and its own now, so a badly
 wrong gateway cannot record impossible times.
 
 ### Command adapters
+
+[Broker authentication, TLS and topic ACLs](mqtt-command-security.md) are a
+production precondition; the development broker is insufficient.
 
 `EDGE_COMMAND_ADAPTER` selects the simulator or the MQTT adapter
 (`internal/adapter/mqtt`), which speaks the protocol in

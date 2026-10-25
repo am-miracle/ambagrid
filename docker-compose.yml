@@ -4,8 +4,8 @@ services:
     image: eclipse-mosquitto:2.0
     container_name: ambagrid-mqtt
     ports:
-      - "1883:1883"   # Standard unencrypted MQTT port
-      - "9001:9001"   # MQTT over WebSockets (optional for web clients)
+      - "127.0.0.1:1883:1883"   # Standard unencrypted MQTT port
+      - "127.0.0.1:9001:9001"   # MQTT over WebSockets (optional for web clients)
     volumes:
       - mqtt_config:/mosquitto/config
       - mqtt_data:/mosquitto/data

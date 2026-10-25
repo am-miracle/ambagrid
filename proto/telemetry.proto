@@ -36,11 +36,11 @@ message MetricPayload {
 
   // --- Real-Time Hardware Sensor Diagnostics ---
   ElectricalMetrics metrics = 6;
-  float internal_temperature = 7; // Celsius (°C) to trigger fire/overheating rules
+  optional float internal_temperature = 7; // Celsius (°C) to trigger fire/overheating rules
   bool relay_closed = 8;          // True = Power is active, False = Customer is disconnected
 
   // --- Battery/Inverter Specialized States (Populated based on DeviceType) ---
-  float battery_soc_pct = 9;      // State of Charge (0.0 to 100.0%) for BMS nodes
+  optional float battery_soc_pct = 9;      // State of Charge (0.0 to 100.0%) for BMS nodes
   float solar_irradiance = 10;    // W/m² input reading for solar inverter arrays
 
   // Unix epoch seconds when the device itself last answered. Trails

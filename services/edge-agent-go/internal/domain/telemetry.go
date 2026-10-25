@@ -8,20 +8,23 @@ import "time"
 // the device itself last answered, which trails TakenAt when a gateway reports
 // a cached reading for a device it can no longer reach.
 type Reading struct {
-	DeviceID            string
-	AssetType           AssetType
-	TakenAt             time.Time
-	LastSeenAt          time.Time
-	Payload             []byte
-	Metrics             *ElectricalMetrics
-	InternalTemperature float64
-	RelayClosed         bool
-	BatterySOCPct       float64
-	SolarIrradiance     float64
-	InverterFailed      bool
-	InverterHardFault   bool
-	TamperDetected      bool
-	SiteOutage          *bool
+	DeviceID   string
+	AssetType  AssetType
+	TakenAt    time.Time
+	LastSeenAt time.Time
+	Payload    []byte
+	Metrics    *ElectricalMetrics
+	// Missing flags preserve unknown sensor readings without treating them as zero.
+	InternalTemperatureMissing bool
+	BatterySOCMissing          bool
+	InternalTemperature        float64
+	RelayClosed                bool
+	BatterySOCPct              float64
+	SolarIrradiance            float64
+	InverterFailed             bool
+	InverterHardFault          bool
+	TamperDetected             bool
+	SiteOutage                 *bool
 }
 
 type ElectricalMetrics struct {

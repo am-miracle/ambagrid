@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"sync"
 	"time"
@@ -17,10 +18,11 @@ import (
 const qosAtLeastOnce = 1
 
 type PahoConfig struct {
-	Broker   string
-	ClientID string
-	Username string
-	Password string
+	AllowInsecure bool
+	Broker        string
+	ClientID      string
+	Username      string
+	Password      string
 	// CAFile enables TLS with this certificate authority; empty means plain TCP.
 	CAFile         string
 	ConnectTimeout time.Duration
@@ -35,6 +37,13 @@ type PahoTransport struct {
 }
 
 func DialPaho(ctx context.Context, cfg PahoConfig) (*PahoTransport, error) {
+	broker, err := url.Parse(cfg.Broker)
+	if err != nil || broker.Host == "" || broker.User != nil {
+		return nil, fmt.Errorf("invalid MQTT broker URL")
+	}
+	if !cfg.AllowInsecure && (broker.Scheme != "ssl" || cfg.Username == "" || cfg.Password == "" || cfg.CAFile == "") {
+		return nil, fmt.Errorf("command broker requires TLS, credentials and a trusted CA")
+	}
 	if cfg.ConnectTimeout <= 0 {
 		cfg.ConnectTimeout = 10 * time.Second
 	}

@@ -55,6 +55,7 @@ type CommandConfig struct {
 }
 
 type MQTTConfig struct {
+	AllowInsecure    bool
 	Broker           string
 	ClientID         string
 	Username         string
@@ -87,6 +88,7 @@ type SMSConfig struct {
 type VictronConfig struct {
 	Address, DeviceID string
 	UnitID            byte
+	OptionalRegisters []uint16
 }
 
 type CollectorConfig struct {
@@ -165,6 +167,10 @@ func FromEnv() (Config, error) {
 		return Config{}, err
 	}
 	commandPruneInterval, err := envDuration("EDGE_COMMAND_PRUNE_INTERVAL", defaultCommandPruneInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	allowInsecureMQTT, err := envBool("EDGE_MQTT_ALLOW_INSECURE", false)
 	if err != nil {
 		return Config{}, err
 	}
@@ -288,6 +294,21 @@ func FromEnv() (Config, error) {
 		return Config{}, err
 	}
 	victronDevice := envString("EDGE_VICTRON_DEVICE_ID", "")
+	var victronOptional []uint16
+	rawOptional := envString("EDGE_VICTRON_OPTIONAL_REGISTERS", "261,262,266")
+	if rawOptional != "none" {
+		for _, field := range strings.Split(rawOptional, ",") {
+			n, err := strconv.Atoi(strings.TrimSpace(field))
+			if err != nil || (n != 259 && n != 261 && n != 262 && n != 266) {
+				return Config{}, fmt.Errorf("EDGE_VICTRON_OPTIONAL_REGISTERS must list battery registers or none")
+			}
+			victronOptional = append(victronOptional, uint16(n))
+		}
+	}
+	if victronOptional == nil {
+		victronOptional = []uint16{}
+	}
+
 	if victronAddress != "" {
 		if _, _, err := net.SplitHostPort(victronAddress); err != nil {
 			return Config{}, fmt.Errorf("EDGE_VICTRON_ADDRESS must be host:port: %w", err)
@@ -298,7 +319,7 @@ func FromEnv() (Config, error) {
 	}
 
 	cfg := Config{
-		Victron: VictronConfig{Address: victronAddress, DeviceID: victronDevice, UnitID: byte(victronUnit)},
+		Victron: VictronConfig{Address: victronAddress, DeviceID: victronDevice, UnitID: byte(victronUnit), OptionalRegisters: victronOptional},
 		Queue: QueueConfig{
 			Path:                   envString("EDGE_QUEUE_PATH", defaultQueuePath),
 			SiteID:                 siteID,
@@ -343,7 +364,7 @@ func FromEnv() (Config, error) {
 			APIKey:       envString("EDGE_COMMANDS_API_KEY", os.Getenv("EDGE_UPLOADER_API_KEY")),
 			PollInterval: commandPollInterval, Timeout: commandTimeout,
 			Adapter: envString("EDGE_COMMAND_ADAPTER", "simulator"),
-			MQTT: MQTTConfig{
+			MQTT: MQTTConfig{AllowInsecure: allowInsecureMQTT,
 				Broker:           envString("EDGE_MQTT_BROKER", ""),
 				ClientID:         envString("EDGE_MQTT_CLIENT_ID", "ambagrid-edge-"+gatewayID),
 				Username:         envString("EDGE_MQTT_USERNAME", ""),
@@ -374,6 +395,9 @@ func FromEnv() (Config, error) {
 				return Config{}, fmt.Errorf("EDGE_COMMAND_ADAPTER=simulator requires EDGE_SIMULATOR_ENABLED")
 			}
 		case "mqtt":
+			if !cfg.Commands.MQTT.AllowInsecure && (!strings.HasPrefix(cfg.Commands.MQTT.Broker, "ssl://") || cfg.Commands.MQTT.Username == "" || cfg.Commands.MQTT.Password == "" || cfg.Commands.MQTT.CAFile == "") {
+				return Config{}, fmt.Errorf("production command MQTT requires ssl://, credentials and a CA; EDGE_MQTT_ALLOW_INSECURE is for isolated development only")
+			}
 			if cfg.Commands.MQTT.Broker == "" || cfg.Commands.MQTT.CapabilitiesFile == "" {
 				return Config{}, fmt.Errorf("EDGE_COMMAND_ADAPTER=mqtt requires EDGE_MQTT_BROKER and EDGE_MQTT_CAPABILITIES_FILE")
 			}

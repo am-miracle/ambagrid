@@ -179,6 +179,10 @@ func TestFromEnvConfiguresMQTTCommandAdapter(t *testing.T) {
 	}
 	t.Setenv("EDGE_MQTT_BROKER", "tcp://localhost:1883")
 	t.Setenv("EDGE_MQTT_CAPABILITIES_FILE", "/etc/ambagrid/meter.yaml")
+	if _, err := config.FromEnv(); err == nil {
+		t.Fatal("accepted anonymous plaintext command MQTT by default")
+	}
+	t.Setenv("EDGE_MQTT_ALLOW_INSECURE", "true")
 	cfg, err := config.FromEnv()
 	if err != nil {
 		t.Fatal(err)
@@ -210,5 +214,26 @@ func TestVictronRequiresBatteryServiceIdentity(t *testing.T) {
 	}
 	if cfg.Victron.UnitID != 225 || cfg.Victron.DeviceID != "battery-01" {
 		t.Fatalf("config=%+v", cfg.Victron)
+	}
+}
+
+func TestProductionMQTTRequiresTLSAndCredentials(t *testing.T) {
+	t.Setenv("EDGE_SITE_ID", "site-01")
+	t.Setenv("EDGE_GATEWAY_ID", "gateway-01")
+	t.Setenv("EDGE_COMMANDS_ENABLED", "true")
+	t.Setenv("EDGE_COMMANDS_ENDPOINT", "http://api:8081")
+	t.Setenv("EDGE_COMMANDS_API_KEY", "test-key")
+	t.Setenv("EDGE_COMMAND_ADAPTER", "mqtt")
+	t.Setenv("EDGE_MQTT_BROKER", "ssl://broker.example:8883")
+	t.Setenv("EDGE_MQTT_CAPABILITIES_FILE", "/etc/ambagrid/meter.yaml")
+	t.Setenv("EDGE_MQTT_USERNAME", "gateway-site-01")
+	t.Setenv("EDGE_MQTT_PASSWORD", "test-password")
+	t.Setenv("EDGE_MQTT_CA_FILE", "/etc/ambagrid/ca.crt")
+	if _, err := config.FromEnv(); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("EDGE_MQTT_USERNAME", "")
+	if _, err := config.FromEnv(); err == nil {
+		t.Fatal("accepted anonymous production broker")
 	}
 }

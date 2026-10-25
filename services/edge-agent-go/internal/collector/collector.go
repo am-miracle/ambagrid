@@ -198,7 +198,7 @@ func (c *Collector) criticalEvents(ctx context.Context, reading domain.Reading, 
 		events, err = c.openOnce(ctx, events, event, now, debounce)
 		result = errors.Join(result, err)
 	}
-	if reading.AssetType == domain.AssetBatteryBMS && reading.InternalTemperature >= c.cfg.BatteryOverheatC {
+	if reading.AssetType == domain.AssetBatteryBMS && !reading.InternalTemperatureMissing && reading.InternalTemperature >= c.cfg.BatteryOverheatC {
 		event := base
 		event.Code = fallback.BatteryOverheat
 		temperature := reading.InternalTemperature
@@ -255,7 +255,7 @@ func (c *Collector) markOpened(event fallback.Event) {
 
 func (c *Collector) resolveRecovered(ctx context.Context, reading domain.Reading, now time.Time) error {
 	var result error
-	if reading.AssetType == domain.AssetBatteryBMS && reading.InternalTemperature < c.cfg.BatteryOverheatC {
+	if reading.AssetType == domain.AssetBatteryBMS && !reading.InternalTemperatureMissing && reading.InternalTemperature < c.cfg.BatteryOverheatC {
 		result = errors.Join(result, c.resolve(ctx, reading.DeviceID, fallback.BatteryOverheat, now))
 	}
 	if reading.AssetType == domain.AssetSolarInverter && !reading.InverterFailed && !reading.InverterHardFault {

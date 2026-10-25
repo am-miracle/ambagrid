@@ -10,8 +10,12 @@ import (
 // STSVendStore reserves a reference durably before the first provider call.
 // Existing unresolved reservations must never be retried automatically.
 type STSVendStore interface {
-	Reserve(context.Context, domain.STSVendRequest) (saved *domain.STSVend, fresh bool, err error)
+	Open(context.Context, string) (STSVendSession, error)
+}
+type STSVendSession interface {
+	Reserve(context.Context, domain.STSVendRequest) (*domain.STSVend, bool, error)
 	Complete(context.Context, string, domain.STSVend) error
+	Close()
 }
 type STSVendor interface {
 	Vend(context.Context, domain.STSVendRequest) (domain.STSVend, error)
@@ -25,10 +29,15 @@ func NewSTSVendingService(store STSVendStore, vendor STSVendor) *STSVendingServi
 	return &STSVendingService{store: store, vendor: vendor}
 }
 func (s *STSVendingService) Vend(ctx context.Context, request domain.STSVendRequest) (domain.STSVend, error) {
-	if err := request.Validate(); err != nil {
+	if err := request.ValidateFunding(); err != nil {
 		return domain.STSVend{}, err
 	}
-	saved, fresh, err := s.store.Reserve(ctx, request)
+	session, err := s.store.Open(ctx, request.Reference)
+	if err != nil {
+		return domain.STSVend{}, err
+	}
+	defer session.Close()
+	saved, fresh, err := session.Reserve(ctx, request)
 	if err != nil {
 		return domain.STSVend{}, err
 	}
@@ -45,8 +54,22 @@ func (s *STSVendingService) Vend(ctx context.Context, request domain.STSVendRequ
 	// Persist a successful reply even if the caller's deadline just elapsed.
 	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	if err := s.store.Complete(saveCtx, request.Reference, result); err != nil {
+	if err := session.Complete(saveCtx, request.Reference, result); err != nil {
 		return domain.STSVend{}, fmt.Errorf("%w: persist vending result: %w", domain.ErrVendUncertain, err)
 	}
 	return result, nil
+}
+
+// Reconciliation is an operator action backed by provider evidence, never an
+// automatic retry or an inferred result from a duplicate HTTP error.
+type STSReconciliationStore interface {
+	ListUnresolved(context.Context) ([]domain.STSVendRecord, error)
+	Reconcile(context.Context, domain.STSReconciliation) error
+}
+
+func ReconcileSTSVend(ctx context.Context, store STSReconciliationStore, r domain.STSReconciliation) error {
+	if err := r.Validate(); err != nil {
+		return err
+	}
+	return store.Reconcile(ctx, r)
 }

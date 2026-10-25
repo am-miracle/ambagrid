@@ -290,3 +290,17 @@ func headersByKey(headers []kgo.RecordHeader) map[string]string {
 	}
 	return got
 }
+
+func TestOmittedBatterySensorsPreserveAbsence(t *testing.T) {
+	record, err := BuildRecord("telemetry.ingested", "africa-west/site-01/battery/battery-01/telemetry", []byte(`{"device_id":"battery-01","device_type":"DEVICE_TYPE_BATTERY_BMS","site_id":"site-01","timestamp_utc":1792924800,"metrics":{"voltage":52.34}}`), MessageMetadata{}, TopicConstraints{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload telemetrypb.MetricPayload
+	if err := proto.Unmarshal(record.Value, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.InternalTemperature != nil || payload.BatterySocPct != nil {
+		t.Fatal("missing battery sensors converted to zero")
+	}
+}

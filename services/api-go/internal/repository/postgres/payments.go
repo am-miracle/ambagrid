@@ -58,7 +58,8 @@ LEFT JOIN smart_meter_state sms ON sms.asset_id = sm.asset_id
 WHERE ma.customer_id = $1
   AND ma.ended_at IS NULL
 ORDER BY ma.started_at DESC
-LIMIT 1`
+LIMIT 1
+FOR SHARE OF ma, sm`
 
 const findActiveTariffSQL = `
 SELECT tariff_plan_id, price_per_kwh, currency, minor_units_per_major

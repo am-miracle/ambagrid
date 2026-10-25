@@ -15,7 +15,7 @@ Victron's [server register definitions](https://github.com/victronenergy/dbus_mo
 | 262 | Battery temperature | int16 | 10 | °C |
 | 266 | State of charge | uint16 | 10 | % |
 
-Implementation decision: start with configurable individual FC3 reads of these fields, normalize into existing domain readings, and timestamp successful acquisition locally. Implement the telemetry interface only; no command adapter is exposed. Use finite exchange deadlines and context cancellation. Validate framing and transaction/unit/function identifiers before accepting data. Report unavailable registers explicitly rather than manufacturing zero readings.
+Implementation decision: start with configurable individual FC3 reads of these fields, normalize into existing domain readings, and timestamp successful acquisition locally. Implement the telemetry interface only; no command adapter is exposed. Use finite exchange deadlines and context cancellation. Validate framing and transaction/unit/function identifiers before accepting data. Treat configured optional registers as absent rather than manufacturing zero readings; transport failures still fail the poll.
 
 ## PrismVend STS
 
@@ -29,3 +29,14 @@ The [official API, PR-D2-1112 revision 5.22.2](https://stsweb.prismcrypto.co.za/
 - The API provides no authentication and requires secured-network/localhost deployment. Vending requires the appropriate Security Module, keys and configured tariffs.
 
 Implementation decision: keep STS vending on the platform side, separate from device command execution. Vend the payment's currency amount, not a kWh quantity. Persist the request identity before transmission and the complete token sequence after success. On ambiguous outcomes, retain that identity for reconciliation; never create a new one automatically. Require deployment configuration and test with local protocol fixtures; live provisioning and physical token acceptance remain commissioning work.
+
+## Broker authorization
+
+The [Mosquitto configuration reference](https://mosquitto.org/man/mosquitto-conf-5.html)
+defines username-specific topic ACLs, password authentication and TLS listeners.
+The pinned Mosquitto 2.0 deployment uses these controls with anonymous access
+disabled and explicit gateway/device permissions; see [production policy](mqtt-command-security.md).
+
+The [GX manual](https://www.victronenergy.com/live/ccgx:modbustcp_faq) explicitly
+warns that devices may omit registers. The driver now supports optional fields
+and preserves sensor absence through the domain, collector and protobuf path.

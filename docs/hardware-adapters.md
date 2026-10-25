@@ -139,6 +139,8 @@ Unknown keys are rejected when the declaration is loaded, so a misspelled capabi
 
 ## MQTT Command Protocol
 
+Production use requires [broker access control](mqtt-command-security.md).
+
 The MQTT command adapter (`EDGE_COMMAND_ADAPTER=mqtt`) talks to any device or bridge that speaks this protocol, version 1. Messages are JSON at QoS 1, not retained.
 
 A prepaid-credit MQTT device must declare `idempotent_refs: true` and durably
@@ -219,7 +221,13 @@ find the battery service Unit ID. Set `EDGE_VICTRON_ADDRESS=192.0.2.1:502`,
 Collection runs at `EDGE_COLLECTOR_INTERVAL`; simulator collection may remain disabled.
 
 The driver individually reads registers 259 (V /100), 261 (signed A /10),
-262 (signed °C /10), and 266 (SoC % /10). It supports telemetry only. It does
+262 (signed °C /10), and 266 (SoC % /10). By default voltage is required;
+current, temperature and SoC may be absent. `EDGE_VICTRON_OPTIONAL_REGISTERS`
+accepts a comma-separated subset of 259,261,262,266, or `none` to require all.
+Only missing registers/unavailable values are omitted; timeouts and transport
+failures still fail the poll. A poll with no measurements fails.
+Unknown temperature/SoC remain absent through protobuf and cannot clear an
+existing overheat incident. The driver supports telemetry only. It does
 not control GX relays, vend credit, or equate inverter shutdown with meter disconnect.
 Timestamps describe successful GX acquisition; GX may hold cached battery data,
 so they do not prove the underlying battery's last physical communication time.

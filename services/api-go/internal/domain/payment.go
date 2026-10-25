@@ -32,6 +32,7 @@ const (
 	CreditModePlatform CreditMode = "platform"
 	// CreditModeMeter meters keep their own balance and receive each credit as a command.
 	CreditModeMeter CreditMode = "meter"
+	CreditModeSTS   CreditMode = "sts"
 )
 
 type MeterCommandStatus string

@@ -85,7 +85,7 @@ func run() (runErr error) {
 		sources = append(sources, meter)
 	}
 	if cfg.Victron.Address != "" {
-		battery, err := victron.New(victron.Config{SiteID: cfg.Queue.SiteID, DeviceID: cfg.Victron.DeviceID, UnitID: cfg.Victron.UnitID}, &victron.TCP{Address: cfg.Victron.Address})
+		battery, err := victron.New(victron.Config{SiteID: cfg.Queue.SiteID, DeviceID: cfg.Victron.DeviceID, UnitID: cfg.Victron.UnitID, OptionalRegisters: cfg.Victron.OptionalRegisters}, &victron.TCP{Address: cfg.Victron.Address})
 		if err != nil {
 			return err
 		}
@@ -281,7 +281,7 @@ func newCommandAdapter(ctx context.Context, cfg config.Config, meter *simulator.
 	dialCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	transport, err := mqtt.DialPaho(dialCtx, mqtt.PahoConfig{
-		Broker: m.Broker, ClientID: m.ClientID, Username: m.Username, Password: m.Password, CAFile: m.CAFile,
+		AllowInsecure: m.AllowInsecure, Broker: m.Broker, ClientID: m.ClientID, Username: m.Username, Password: m.Password, CAFile: m.CAFile,
 	})
 	if err != nil {
 		return nil, nil, err

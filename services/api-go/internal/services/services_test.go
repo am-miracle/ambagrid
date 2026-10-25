@@ -867,3 +867,17 @@ func TestPaymentServiceStillReconnectsPlatformModeMeters(t *testing.T) {
 		t.Fatalf("commands = %+v, want a reconnect without credit", fakeTx.newCommands)
 	}
 }
+
+func TestSTSPaymentDoesNotSendCreditOrReconnect(t *testing.T) {
+	tx := newPaymentTestFixture()
+	tx.assignment.CreditMode = domain.CreditModeSTS
+	tx.assignment.RelayClosed = false
+	tx.priorBalance = 0
+	service := NewPaymentService(&fakePaymentRepository{fakeTx: tx})
+	if _, err := service.ApplyDevPayment(context.Background(), ApplyDevPaymentRequest{CustomerID: "cust-01", AmountMinorUnits: 500000, Currency: "NGN"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(tx.newCommands) != 0 {
+		t.Fatalf("STS payment issued automatic command: %+v", tx.newCommands)
+	}
+}

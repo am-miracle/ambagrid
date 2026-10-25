@@ -146,6 +146,8 @@ func (s *PaymentService) applyPayment(ctx context.Context, command domain.ApplyP
 		var meterCommand *domain.MeterCommand
 		var newCommand *domain.NewMeterCommand
 		switch {
+		case assignment.CreditMode == domain.CreditModeSTS:
+		// A funded STS vend is the only physical delivery path for this payment.
 		case assignment.CreditMode == domain.CreditModeMeter:
 			// The meter keeps its own balance, so every credit must reach it; the
 			// meter reconnects itself once it holds credit.

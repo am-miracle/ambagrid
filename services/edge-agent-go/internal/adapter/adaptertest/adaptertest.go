@@ -132,19 +132,21 @@ func RunCommand(t *testing.T, factory CommandFactory) {
 }
 
 type normalizedReading struct {
-	DeviceID            string                    `json:"device_id"`
-	AssetType           domain.AssetType          `json:"asset_type"`
-	TakenAt             time.Time                 `json:"taken_at"`
-	LastSeenAt          time.Time                 `json:"last_seen_at"`
-	Metrics             *domain.ElectricalMetrics `json:"metrics,omitempty"`
-	InternalTemperature float64                   `json:"internal_temperature_c"`
-	RelayClosed         bool                      `json:"relay_closed"`
-	BatterySOCPct       float64                   `json:"battery_soc_pct"`
-	SolarIrradiance     float64                   `json:"solar_irradiance_wm2"`
-	InverterFailed      bool                      `json:"inverter_failed"`
-	InverterHardFault   bool                      `json:"inverter_hard_fault"`
-	TamperDetected      bool                      `json:"tamper_detected"`
-	SiteOutage          *bool                     `json:"site_outage,omitempty"`
+	InternalTemperatureMissing bool                      `json:"internal_temperature_missing,omitempty"`
+	BatterySOCMissing          bool                      `json:"battery_soc_missing,omitempty"`
+	DeviceID                   string                    `json:"device_id"`
+	AssetType                  domain.AssetType          `json:"asset_type"`
+	TakenAt                    time.Time                 `json:"taken_at"`
+	LastSeenAt                 time.Time                 `json:"last_seen_at"`
+	Metrics                    *domain.ElectricalMetrics `json:"metrics,omitempty"`
+	InternalTemperature        float64                   `json:"internal_temperature_c"`
+	RelayClosed                bool                      `json:"relay_closed"`
+	BatterySOCPct              float64                   `json:"battery_soc_pct"`
+	SolarIrradiance            float64                   `json:"solar_irradiance_wm2"`
+	InverterFailed             bool                      `json:"inverter_failed"`
+	InverterHardFault          bool                      `json:"inverter_hard_fault"`
+	TamperDetected             bool                      `json:"tamper_detected"`
+	SiteOutage                 *bool                     `json:"site_outage,omitempty"`
 }
 
 func testNormalizesFixture(t *testing.T, h TelemetryHarness) {
@@ -158,7 +160,7 @@ func testNormalizesFixture(t *testing.T, h TelemetryHarness) {
 	}
 	for i, r := range readings {
 		checkReading(t, r)
-		got := normalizedReading{
+		got := normalizedReading{InternalTemperatureMissing: r.InternalTemperatureMissing, BatterySOCMissing: r.BatterySOCMissing,
 			DeviceID: r.DeviceID, AssetType: r.AssetType, TakenAt: r.TakenAt, LastSeenAt: r.LastSeenAt, Metrics: r.Metrics,
 			InternalTemperature: r.InternalTemperature, RelayClosed: r.RelayClosed,
 			BatterySOCPct: r.BatterySOCPct, SolarIrradiance: r.SolarIrradiance,
@@ -229,8 +231,12 @@ func checkReading(t *testing.T, r domain.Reading) {
 			t.Errorf("%s %s = %v, want within [%v, %v]", id, name, v, lo, hi)
 		}
 	}
-	inRange("internal temperature °C", r.InternalTemperature, -40, 125)
-	inRange("battery SoC %", r.BatterySOCPct, 0, 100)
+	if !r.InternalTemperatureMissing {
+		inRange("internal temperature °C", r.InternalTemperature, -40, 125)
+	}
+	if !r.BatterySOCMissing {
+		inRange("battery SoC %", r.BatterySOCPct, 0, 100)
+	}
 	inRange("solar irradiance W/m²", r.SolarIrradiance, 0, 1500)
 	if m := r.Metrics; m != nil {
 		optional := func(name string, v *float64, lo, hi float64) {

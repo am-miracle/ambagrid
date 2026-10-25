@@ -1,0 +1,20 @@
+# Deny by default. Provision exact authenticated users and topic prefixes.
+# Username matching is independent of MQTT client ID. Do not use global patterns:
+# they would grant their permissions to every user, including telemetry writers.
+user gateway-ng-kaji-01
+topic write ambagrid/ng-kaji-01/+/command
+topic read ambagrid/ng-kaji-01/+/command/reply
+
+user device-ng-kaji-01-meter-01
+topic read ambagrid/ng-kaji-01/meter-01/command
+topic write ambagrid/ng-kaji-01/meter-01/command/reply
+
+# A second tenant makes cross-site denial testable. Replace all examples with
+# commissioned identities; give each physical device its own credentials.
+user gateway-other-site
+topic write ambagrid/other-site/+/command
+topic read ambagrid/other-site/+/command/reply
+
+user device-other-site-meter-01
+topic read ambagrid/other-site/meter-01/command
+topic write ambagrid/other-site/meter-01/command/reply

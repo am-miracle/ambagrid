@@ -10,7 +10,7 @@ and the Victron telemetry / PrismVend manual vending additions.
 - API PostgreSQL integration tests passed, including concurrent STS reservations,
   replay after service restart, request/installation conflicts and uncertain vends.
 - Rust: `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`,
-  and `cargo test -- --include-ignored --test-threads=1` passed: 94 tests, none ignored.
+  and `cargo test -- --include-ignored --test-threads=1` passed: 95 tests, none ignored.
 - Go formatting, `git diff --check`, and `docker compose config --quiet` passed.
 - Regenerated telemetry Go bindings with the installed protoc/protoc-gen-go.
 
@@ -54,3 +54,27 @@ the STS command implements a separate durable manual vending workflow.
 Paho/broker publications already in flight cannot be recalled by context
 cancellation. Devices requiring hard receipt-time expiry must enforce it locally;
 the present MQTT protocol has no broker-side message expiry.
+
+## Follow-up: production prerequisites and STS funding
+
+- Added a dedicated TLS/password/ACL command-broker deployment. A disposable
+  broker using the actual policy passed authorized traffic, rejected anonymous
+  access, cross-site reads/writes, and forged gateway/sibling-device replies.
+- Command MQTT now requires TLS, credentials and a CA by default; insecure
+  development requires an explicit opt-in. The anonymous dev broker binds to
+  loopback and is not a production command broker.
+- STS vends require one confirmed, STS-routed payment, with the payment UUID as
+  provider reference. PostgreSQL snapshots delivery mode, enforces unique funding,
+  checks amount/currency/meter/installation, and blocks duplicate kWh delivery.
+- Added audited unresolved listing, token recovery and terminal non-issuance
+  tooling. Reconciliation cannot overwrite a resolved result or race an active
+  vending owner. It never automatically retries a provider call.
+- Missing optional Victron sensors stay absent in protobuf/engine readings.
+  Voltage-only fixtures pass the shared suite, and a missing temperature cannot
+  resolve an existing overheat incident.
+
+The follow-up API, ingestion and edge Go race suites and full Rust suite passed.
+PostgreSQL tests cover concurrent reservation, mode changes, recovery audit and
+active-vend/reconciliation ownership. Review found and fixed two races (active
+reconciliation and an inconsistent mode snapshot); follow-up review was clear.
+Standards: 0 remaining findings. Spec: 0 remaining findings.

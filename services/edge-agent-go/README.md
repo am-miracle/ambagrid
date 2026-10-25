@@ -98,12 +98,13 @@ gateways default to a 256 MiB filesystem reserve.
 | `EDGE_COMMAND_PRUNE_INTERVAL` | `1h` | Interval between ledger pruning passes. Unresolved commands are never pruned. |
 | `EDGE_COMMANDS_ENABLED` | `false` | Fetch meter commands from api-go and run them through the command ledger. |
 | `EDGE_COMMAND_ADAPTER` | `simulator` | `simulator` (requires `EDGE_SIMULATOR_ENABLED`) or `mqtt`. |
-| `EDGE_MQTT_BROKER` | required for `mqtt` | Broker URL, e.g. `tcp://localhost:1883` or `ssl://broker:8883`. |
+| `EDGE_MQTT_BROKER` | required for `mqtt` | TLS broker URL, e.g. `ssl://broker:8883`. |
 | `EDGE_MQTT_CAPABILITIES_FILE` | required for `mqtt` | YAML capability declaration of the meters behind the broker. |
 | `EDGE_MQTT_TOPIC_PREFIX` | `ambagrid/{site_id}` | Commands go to `{prefix}/{device_id}/command`. |
 | `EDGE_MQTT_CLIENT_ID` | `ambagrid-edge-{gateway_id}` | Must be unique on the broker. |
-| `EDGE_MQTT_USERNAME`, `EDGE_MQTT_PASSWORD` | empty | Broker credentials. |
-| `EDGE_MQTT_CA_FILE` | empty | Certificate authority for TLS. |
+| `EDGE_MQTT_USERNAME`, `EDGE_MQTT_PASSWORD` | empty | Required broker credentials unless insecure development is explicitly enabled. |
+| `EDGE_MQTT_ALLOW_INSECURE` | `false` | Allow plaintext or anonymous command transport for isolated development. |
+| `EDGE_MQTT_CA_FILE` | empty | Required certificate authority for TLS. |
 | `EDGE_COMMANDS_ENDPOINT` | required | Base URL of api-go, e.g. `http://api:8081`. |
 | `EDGE_COMMANDS_API_KEY` | `EDGE_UPLOADER_API_KEY` | Site key for api-go's `API_EDGE_API_KEYS`. |
 | `EDGE_COMMANDS_POLL_INTERVAL` | `15s` | Interval between command polls and report deliveries. |
@@ -205,13 +206,10 @@ stored as durable incidents. After three failed uploads or two minutes without
 a successful upload, the edge agent sends a single-segment versioned SMS. A
 successful normal replay removes the incident from the fallback candidate set.
 
-The MQTT adapter's conformance suite also runs against a real broker when
-`EDGE_MQTT_TEST_BROKER` is set:
-
-```bash
-docker run --rm -p 1883:1883 eclipse-mosquitto:2.0 mosquitto -c /mosquitto-no-auth.conf
-EDGE_MQTT_TEST_BROKER=tcp://127.0.0.1:1883 go test ./internal/adapter/mqtt/
-```
+Production command MQTT requires [TLS and broker topic ACLs](../../docs/mqtt-command-security.md).
+Run `deploy/mqtt/test-acl.sh` from the repository root to exercise a disposable
+TLS broker with the production policy. The anonymous development broker is not
+suitable for hardware commands in production.
 
 ## Victron hardware telemetry
 

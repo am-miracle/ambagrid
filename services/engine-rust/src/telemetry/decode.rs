@@ -49,7 +49,8 @@ pub fn reading_from_payload(payload: MetricPayload) -> Result<Reading, DecodeErr
     let observed_at = DateTime::<Utc>::from_timestamp(timestamp_utc, 0)
         .ok_or(DecodeError::InvalidTimestamp(timestamp_utc))?;
     let last_seen_at = last_seen_at(payload.last_seen_utc, timestamp_utc, observed_at)?;
-    let internal_temperature = finite_f32("internal_temperature", payload.internal_temperature)?;
+    let internal_temperature =
+        finite_optional_f32("internal_temperature", payload.internal_temperature)?;
 
     let state = match asset_type {
         AssetType::SmartMeter => {
@@ -65,7 +66,7 @@ pub fn reading_from_payload(payload: MetricPayload) -> Result<Reading, DecodeErr
             })
         }
         AssetType::BatteryBms => AssetState::BatteryBms(BatteryBmsState {
-            battery_soc_pct: finite_f32("battery_soc_pct", payload.battery_soc_pct)?,
+            battery_soc_pct: finite_optional_f32("battery_soc_pct", payload.battery_soc_pct)?,
         }),
         AssetType::SolarInverter => AssetState::SolarInverter(SolarInverterState {
             solar_irradiance: finite_f32("solar_irradiance", payload.solar_irradiance)?,
@@ -187,9 +188,9 @@ mod tests {
                 frequency: Some(50.0),
                 total_kwh: Some(103.5),
             }),
-            internal_temperature: 42.5,
+            internal_temperature: Some(42.5),
             relay_closed: true,
-            battery_soc_pct: 0.0,
+            battery_soc_pct: Some(0.0),
             solar_irradiance: 0.0,
             last_seen_utc: None,
         };
@@ -341,5 +342,26 @@ mod tests {
         let err = reading_from_payload(meter_payload(Some(0))).unwrap_err();
 
         assert_eq!(err, DecodeError::InvalidLastSeen(0));
+    }
+}
+
+#[cfg(test)]
+mod optional_battery_tests {
+    use super::*;
+    #[test]
+    fn omitted_battery_sensors_remain_unknown() {
+        let reading = reading_from_payload(MetricPayload {
+            device_id: "battery-01".into(),
+            site_id: "site-01".into(),
+            device_type: DeviceType::BatteryBms as i32,
+            timestamp_utc: Some(1_792_924_800),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(reading.asset.internal_temperature, None);
+        let AssetState::BatteryBms(state) = reading.state else {
+            panic!("wrong state")
+        };
+        assert_eq!(state.battery_soc_pct, None);
     }
 }

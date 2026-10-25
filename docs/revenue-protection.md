@@ -262,7 +262,6 @@ Fake payment event
 ```
 
 The first implemented vending integration is a durable operator command for
-PrismVend's VendCredit2 API. It takes an explicit currency purchase and saves
-all returned tokens in order; see [STS vending](sts-vending.md). It is separate
-from automatic kWh credit issuance and must not be used to credit the same
-purchase twice. Payment-to-token dispatch remains future work.
+PrismVend's VendCredit2 API. It requires a confirmed STS-routed payment and saves
+all returned tokens in order; see [STS vending](sts-vending.md). The database enforces a single physical delivery path per payment,
+preventing that payment from also issuing an automatic kWh credit command. Payment-to-token dispatch remains future work.
