@@ -399,28 +399,71 @@ func TestNonIssuancePreservesOtherPaymentsAndNetSummary(t *testing.T) {
 		t.Fatal("customer summary missing")
 	}
 }
-func TestInsufficientBalanceLeavesNonIssuanceUnresolved(t *testing.T) {
+func TestInsufficientBalanceReversesWhatRemainsAndRecordsShortfall(t *testing.T) {
 	f, request, result := fundedSTSRequest(t, "sts")
 	ctx := context.Background()
 	store := NewSTSVendStore(f.pool, "test-installation")
 	services.NewSTSVendingService(store, &vendingProvider{fail: true}).Vend(ctx, request)
-	if _, err := f.pool.Exec(ctx, "UPDATE credit_balances SET remaining_kwh=0 WHERE assignment_id=$1", result.Credit.AssignmentID); err != nil {
+	// 5001 minor units at 250 NGN/kWh credited 0.200040 kWh; only 0.1 remains.
+	if _, err := f.pool.Exec(ctx, "UPDATE credit_balances SET remaining_kwh=0.1 WHERE assignment_id=$1", result.Credit.AssignmentID); err != nil {
 		t.Fatal(err)
 	}
-	err := services.ReconcileSTSVend(ctx, store, domain.STSReconciliation{Reference: request.Reference, MeterID: request.MeterID, Actor: "operator:test", Evidence: "provider definitive non-issuance", NotIssued: true})
-	if !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("incomplete reversal accepted: %v", err)
+	if err := services.ReconcileSTSVend(ctx, store, domain.STSReconciliation{Reference: request.Reference, MeterID: request.MeterID, Actor: "operator:test", Evidence: "provider definitive non-issuance", NotIssued: true}); err != nil {
+		t.Fatalf("non-issuance blocked by a short balance: %v", err)
 	}
+
 	var closed bool
-	var count int
-	if err := f.pool.QueryRow(ctx, "SELECT not_issued_at IS NOT NULL FROM sts_vends WHERE reference=$1", request.Reference).Scan(&closed); err != nil {
+	if err := f.pool.QueryRow(ctx, "SELECT not_issued_at IS NOT NULL FROM sts_vends WHERE reference=$1", request.Reference).Scan(&closed); err != nil || !closed {
+		t.Fatalf("non-issuance recorded = %v, %v", closed, err)
+	}
+	var balanceKWh string
+	var balanceMoney int64
+	if err := f.pool.QueryRow(ctx, "SELECT remaining_kwh::text,remaining_money_value_minor_units FROM credit_balances WHERE assignment_id=$1", result.Credit.AssignmentID).Scan(&balanceKWh, &balanceMoney); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.pool.QueryRow(ctx, "SELECT count(*) FROM sts_credit_reversals WHERE reference=$1", request.Reference).Scan(&count); err != nil {
+	if balanceKWh != "0.000000" || balanceMoney != 0 {
+		t.Fatalf("balance = %s kWh, %d minor; want exactly zero", balanceKWh, balanceMoney)
+	}
+	var reversedKWh, shortfallKWh string
+	var reversedMoney, shortfallMoney int64
+	if err := f.pool.QueryRow(ctx, "SELECT kwh::text,shortfall_kwh::text,money_minor,shortfall_money_minor FROM sts_credit_reversals WHERE reference=$1", request.Reference).Scan(&reversedKWh, &shortfallKWh, &reversedMoney, &shortfallMoney); err != nil {
 		t.Fatal(err)
 	}
-	if closed || count != 0 {
-		t.Fatal("partial reversal escaped transaction")
+	if reversedKWh != "0.100000" || shortfallKWh != "0.100040" || reversedMoney != 5001 || shortfallMoney != 0 {
+		t.Fatalf("reversal = %s kWh (shortfall %s), %d minor (shortfall %d)", reversedKWh, shortfallKWh, reversedMoney, shortfallMoney)
+	}
+
+	shortfalls, err := store.ListReversalShortfalls(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shortfalls) != 1 || shortfalls[0].Reference != request.Reference || shortfalls[0].ShortfallKWh != "0.100040" || shortfalls[0].ShortfallMoneyMinor != 0 {
+		t.Fatalf("shortfalls = %+v, want this reversal listed for review", shortfalls)
+	}
+}
+
+func TestMissingBalanceRowRecordsWholeCreditAsShortfall(t *testing.T) {
+	f, request, result := fundedSTSRequest(t, "sts")
+	ctx := context.Background()
+	store := NewSTSVendStore(f.pool, "test-installation")
+	services.NewSTSVendingService(store, &vendingProvider{fail: true}).Vend(ctx, request)
+	// A settled balance may be deleted; the provider's non-issuance must still be recordable.
+	if _, err := f.pool.Exec(ctx, "UPDATE credit_balances SET remaining_kwh=0,remaining_money_value_minor_units=0 WHERE assignment_id=$1", result.Credit.AssignmentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, "DELETE FROM credit_balances WHERE assignment_id=$1", result.Credit.AssignmentID); err != nil {
+		t.Fatal(err)
+	}
+	if err := services.ReconcileSTSVend(ctx, store, domain.STSReconciliation{Reference: request.Reference, MeterID: request.MeterID, Actor: "operator:test", Evidence: "provider definitive non-issuance", NotIssued: true}); err != nil {
+		t.Fatalf("non-issuance blocked by a missing balance: %v", err)
+	}
+	var reversedKWh, shortfallKWh string
+	var reversedMoney, shortfallMoney int64
+	if err := f.pool.QueryRow(ctx, "SELECT kwh::text,shortfall_kwh::text,money_minor,shortfall_money_minor FROM sts_credit_reversals WHERE reference=$1", request.Reference).Scan(&reversedKWh, &shortfallKWh, &reversedMoney, &shortfallMoney); err != nil {
+		t.Fatal(err)
+	}
+	if reversedKWh != "0.000000" || shortfallKWh != "0.200040" || reversedMoney != 0 || shortfallMoney != 5001 {
+		t.Fatalf("reversal = %s kWh (shortfall %s), %d minor (shortfall %d); want all of it as shortfall", reversedKWh, shortfallKWh, reversedMoney, shortfallMoney)
 	}
 }
 

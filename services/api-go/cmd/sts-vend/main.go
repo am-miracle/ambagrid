@@ -28,11 +28,12 @@ func main() {
 }
 func run() error {
 	var request domain.STSVendRequest
-	var unresolved, notIssued bool
+	var unresolved, shortfalls, notIssued bool
 	var recoverFile, actor, evidence string
 	flag.StringVar(&request.Reference, "reference", "", "reservation reference for reconciliation")
 	flag.StringVar(&request.PaymentID, "payment", "", "confirmed STS-routed payment ID")
 	flag.BoolVar(&unresolved, "list-unresolved", false, "list unresolved reservations without contacting provider")
+	flag.BoolVar(&shortfalls, "list-shortfalls", false, "list non-issuance reversals the balance could not fully cover")
 	flag.StringVar(&recoverFile, "recover", "", "JSON result recovered from provider records")
 	flag.BoolVar(&notIssued, "not-issued", false, "record provider non-issuance and reverse its funded credit; never retries")
 	flag.StringVar(&actor, "actor", "", "operator identity for reconciliation audit")
@@ -40,7 +41,7 @@ func run() error {
 	flag.StringVar(&request.MeterID, "meter", "", "registered DRN/PAN or blind IDRecord")
 	flag.Int64Var(&request.AmountMinor, "amount-minor", 0, "net-of-fees amount in the vending installation's currency hundredths")
 	flag.Parse()
-	if !unresolved && recoverFile == "" && !notIssued {
+	if !unresolved && !shortfalls && recoverFile == "" && !notIssued {
 		request.Reference = request.PaymentID
 		if err := request.ValidateFunding(); err != nil {
 			return err
@@ -60,10 +61,23 @@ func run() error {
 	}
 	defer pool.Close()
 	store := postgres.NewSTSVendStore(pool, installation)
-	if unresolved {
-		if recoverFile != "" || notIssued {
-			return fmt.Errorf("choose one operation")
+	modes := 0
+	for _, selected := range []bool{unresolved, shortfalls, recoverFile != "" || notIssued} {
+		if selected {
+			modes++
 		}
+	}
+	if modes > 1 {
+		return fmt.Errorf("choose one operation")
+	}
+	if shortfalls {
+		records, err := store.ListReversalShortfalls(ctx)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(records)
+	}
+	if unresolved {
 		records, err := store.ListUnresolved(ctx)
 		if err != nil {
 			return err

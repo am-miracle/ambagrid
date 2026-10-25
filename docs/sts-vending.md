@@ -116,11 +116,20 @@ entry, subtracting only that payment's kWh and money from its assignment balance
 The customer summary excludes reversed energy. Original payment/credit history
 is retained. It does not resend tokens or perform a cash refund; arrange any
 refund through the payment provider's procedure. Repeating the vend returns
-`ErrVendNotIssued`. An insufficient balance rejects the entire reconciliation:
-no negative/clipped balance, partial reversal, or terminal result is committed.
-Investigate the account before retrying reconciliation. A resolved provider
-outcome cannot be overwritten. Reconciliation and vending use an exclusive cross-process owner, so
-an operator cannot close a live request before its provider exchange finishes.
+`ErrVendNotIssued`. If the balance no longer holds the whole credit, the
+non-issuance is still recorded: the reversal subtracts what the balance holds,
+never taking it below zero, and records the exact remainder as a shortfall on
+the reversal row. For an STS meter a shortfall means the platform recorded more
+consumption than was ever delivered, so it is a discrepancy to investigate, not
+customer debt. List them without contacting PrismVend:
+
+```sh
+go run ./cmd/sts-vend -list-shortfalls
+```
+
+A resolved provider outcome cannot be overwritten. Reconciliation and vending
+use an exclusive cross-process owner, so an operator cannot close a live
+request before its provider exchange finishes.
 Legacy unlinked reservations can also be resolved by their original reference.
 Never delete a reservation or invent a new reference to retry uncertainty.
 

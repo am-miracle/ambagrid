@@ -98,6 +98,26 @@ func (s *stsVendSession) Complete(ctx context.Context, reference string, result 
 	return nil
 }
 
+func (s *STSVendStore) ListReversalShortfalls(ctx context.Context) ([]domain.STSReversalShortfall, error) {
+	rows, err := s.pool.Query(ctx, `SELECT scr.reference,scr.credit_id::text,scr.shortfall_kwh::text,scr.shortfall_money_minor,scr.reversed_at
+ FROM sts_credit_reversals scr JOIN sts_vends sv USING(reference)
+ WHERE sv.installation=$1 AND (scr.shortfall_kwh>0 OR scr.shortfall_money_minor>0)
+ ORDER BY scr.reversed_at,scr.reference LIMIT 200`, s.installation)
+	if err != nil {
+		return nil, fmt.Errorf("list STS reversal shortfalls: %w", err)
+	}
+	defer rows.Close()
+	shortfalls := []domain.STSReversalShortfall{}
+	for rows.Next() {
+		var r domain.STSReversalShortfall
+		if err := rows.Scan(&r.Reference, &r.CreditID, &r.ShortfallKWh, &r.ShortfallMoneyMinor, &r.ReversedAt); err != nil {
+			return nil, fmt.Errorf("scan STS reversal shortfall: %w", err)
+		}
+		shortfalls = append(shortfalls, r)
+	}
+	return shortfalls, rows.Err()
+}
+
 func (s *STSVendStore) ListUnresolved(ctx context.Context) ([]domain.STSVendRecord, error) {
 	rows, err := s.pool.Query(ctx, `SELECT reference,payment_id::text,meter_id,amount_minor,requested_at,not_issued_at IS NOT NULL
  FROM sts_vends sv WHERE installation=$1 AND result IS NULL AND (
@@ -167,23 +187,7 @@ func (s *STSVendStore) Reconcile(ctx context.Context, r domain.STSReconciliation
 		}
 	} else {
 		if paymentID != nil {
-			// Exact SQL numeric arithmetic avoids float conversion and never clips an
-			// insufficient balance. Failure rolls back the resolution and audit too.
-			tag, err := tx.Exec(ctx, `UPDATE credit_balances cb
-    SET remaining_kwh=cb.remaining_kwh-ec.kwh_granted,
-        remaining_money_value_minor_units=cb.remaining_money_value_minor_units-COALESCE(ec.money_value_minor_units,0)
-    FROM energy_credits ec JOIN sts_vends sv ON sv.payment_id=ec.payment_id
-    WHERE sv.reference=$1 AND ec.delivery_mode='sts' AND cb.assignment_id=ec.assignment_id
-      AND cb.remaining_kwh>=ec.kwh_granted AND cb.remaining_money_value_minor_units>=COALESCE(ec.money_value_minor_units,0)`, r.Reference)
-			if err != nil {
-				return err
-			}
-			if tag.RowsAffected() != 1 {
-				return fmt.Errorf("%w: insufficient or missing STS credit balance for reversal", domain.ErrConflict)
-			}
-			if _, err := tx.Exec(ctx, `INSERT INTO sts_credit_reversals(reference,credit_id,kwh,money_minor,actor,evidence)
-    SELECT sv.reference,ec.credit_id,ec.kwh_granted,COALESCE(ec.money_value_minor_units,0),$2,$3
-    FROM sts_vends sv JOIN energy_credits ec USING(payment_id) WHERE sv.reference=$1`, r.Reference, r.Actor, r.Evidence); err != nil {
+			if err := reverseSTSCredit(ctx, tx, r); err != nil {
 				return err
 			}
 		}
@@ -245,6 +249,61 @@ func (s *stsVendSession) RecordUnsent(ctx context.Context, reference, cause stri
 	}
 	if tag.RowsAffected() != 1 {
 		return fmt.Errorf("unsent reservation missing or resolved")
+	}
+	return nil
+}
+
+type stsCreditReversal struct {
+	creditID, assignmentID     string
+	kwh, shortfallKWh          string
+	moneyMinor, shortfallMinor int64
+	hasBalance                 bool
+}
+
+// reverseSTSCredit subtracts what the balance holds, in exact numeric arithmetic;
+// the rest, all of it when a settled balance was deleted, is the shortfall.
+func reverseSTSCredit(ctx context.Context, tx pgx.Tx, r domain.STSReconciliation) error {
+	rows, err := tx.Query(ctx, `SELECT ec.credit_id::text,ec.assignment_id::text,ec.kwh_granted::text,COALESCE(ec.money_value_minor_units,0)
+    FROM sts_vends sv JOIN energy_credits ec USING(payment_id)
+    WHERE sv.reference=$1 AND ec.delivery_mode='sts'`, r.Reference)
+	if err != nil {
+		return fmt.Errorf("read STS credit for reversal: %w", err)
+	}
+	var reversals []stsCreditReversal
+	for rows.Next() {
+		var v stsCreditReversal
+		if err := rows.Scan(&v.creditID, &v.assignmentID, &v.shortfallKWh, &v.shortfallMinor); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan STS credit for reversal: %w", err)
+		}
+		reversals = append(reversals, v)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read STS credit for reversal: %w", err)
+	}
+	if len(reversals) != 1 {
+		return fmt.Errorf("%w: payment for %s has %d STS credits, want 1", domain.ErrConflict, r.Reference, len(reversals))
+	}
+	// Until the balance is read, the whole credit counts as shortfall.
+	v := reversals[0]
+	v.kwh = "0"
+	err = tx.QueryRow(ctx, `SELECT LEAST(remaining_kwh,$2::numeric)::text,($2::numeric-LEAST(remaining_kwh,$2::numeric))::text,
+    LEAST(remaining_money_value_minor_units,$3),$3-LEAST(remaining_money_value_minor_units,$3)
+    FROM credit_balances WHERE assignment_id=$1::uuid FOR UPDATE`, v.assignmentID, v.shortfallKWh, v.shortfallMinor).Scan(&v.kwh, &v.shortfallKWh, &v.moneyMinor, &v.shortfallMinor)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+	case err != nil:
+		return fmt.Errorf("lock STS credit balance: %w", err)
+	default:
+		v.hasBalance = true
+	}
+	if v.hasBalance {
+		if _, err := tx.Exec(ctx, `UPDATE credit_balances SET remaining_kwh=remaining_kwh-$2::numeric,remaining_money_value_minor_units=remaining_money_value_minor_units-$3 WHERE assignment_id=$1::uuid`, v.assignmentID, v.kwh, v.moneyMinor); err != nil {
+			return fmt.Errorf("reverse STS credit balance: %w", err)
+		}
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO sts_credit_reversals(reference,credit_id,kwh,money_minor,shortfall_kwh,shortfall_money_minor,actor,evidence) VALUES($1,$2::uuid,$3::numeric,$4,$5::numeric,$6,$7,$8)`, r.Reference, v.creditID, v.kwh, v.moneyMinor, v.shortfallKWh, v.shortfallMinor, r.Actor, r.Evidence); err != nil {
+		return fmt.Errorf("record STS credit reversal: %w", err)
 	}
 	return nil
 }

@@ -98,3 +98,12 @@ func (r STSReconciliation) Validate() error {
 	}
 	return nil
 }
+
+// STSReversalShortfall is a discrepancy to investigate, not customer debt.
+type STSReversalShortfall struct {
+	Reference           string    `json:"reference"`
+	CreditID            string    `json:"credit_id"`
+	ShortfallKWh        string    `json:"shortfall_kwh"`
+	ShortfallMoneyMinor int64     `json:"shortfall_money_minor"`
+	ReversedAt          time.Time `json:"reversed_at"`
+}
