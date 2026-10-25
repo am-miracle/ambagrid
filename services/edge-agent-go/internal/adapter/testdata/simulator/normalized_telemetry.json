@@ -1,0 +1,43 @@
+[
+  {
+    "device_id": "meter-01",
+    "asset_type": "smart_meter",
+    "taken_at": "2026-10-01T14:30:00.25Z",
+    "last_seen_at": "2026-10-01T14:29:00.25Z",
+    "metrics": {"voltage": 230.1, "current": 6.125, "active_power": 1.409, "frequency": 49.98, "total_kwh": 1500.482},
+    "internal_temperature_c": 36.4,
+    "relay_closed": false,
+    "battery_soc_pct": 0,
+    "solar_irradiance_wm2": 0,
+    "inverter_failed": false,
+    "inverter_hard_fault": false,
+    "tamper_detected": true
+  },
+  {
+    "device_id": "battery-01",
+    "asset_type": "battery_bms",
+    "taken_at": "2026-10-01T14:30:00.25Z",
+    "last_seen_at": "2026-10-01T14:30:00.25Z",
+    "internal_temperature_c": 68.2,
+    "relay_closed": true,
+    "battery_soc_pct": 74.5,
+    "solar_irradiance_wm2": 0,
+    "inverter_failed": false,
+    "inverter_hard_fault": false,
+    "tamper_detected": false,
+    "site_outage": true
+  },
+  {
+    "device_id": "inverter-01",
+    "asset_type": "solar_inverter",
+    "taken_at": "2026-10-01T14:30:00.25Z",
+    "last_seen_at": "2026-10-01T14:30:00.25Z",
+    "internal_temperature_c": -5.5,
+    "relay_closed": true,
+    "battery_soc_pct": 0,
+    "solar_irradiance_wm2": 712,
+    "inverter_failed": false,
+    "inverter_hard_fault": true,
+    "tamper_detected": false
+  }
+]

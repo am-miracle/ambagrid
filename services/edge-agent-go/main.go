@@ -18,8 +18,12 @@ import (
 	"syscall"
 	"time"
 
+	"edge-agent-go/internal/adapter"
+	"edge-agent-go/internal/adapter/mqtt"
 	"edge-agent-go/internal/adapter/simulator"
+	"edge-agent-go/internal/adapter/victron"
 	"edge-agent-go/internal/collector"
+	"edge-agent-go/internal/commands"
 	"edge-agent-go/internal/config"
 	"edge-agent-go/internal/domain"
 	"edge-agent-go/internal/fallback"
@@ -69,18 +73,32 @@ func run() (runErr error) {
 		workerWG.Wait()
 	}()
 
+	var meter *simulator.Adapter
+	var sources []collector.Source
 	if cfg.Collector.Enabled {
 		simulatorOptions := []simulator.Option{}
 		if cfg.Collector.Faults {
 			simulatorOptions = append(simulatorOptions, simulator.WithCriticalFaults())
 		}
+		// One instance serves telemetry and commands, so relay changes show up in readings.
+		meter = simulator.New(cfg.Queue.SiteID, simulatorOptions...)
+		sources = append(sources, meter)
+	}
+	if cfg.Victron.Address != "" {
+		battery, err := victron.New(victron.Config{SiteID: cfg.Queue.SiteID, DeviceID: cfg.Victron.DeviceID, UnitID: cfg.Victron.UnitID}, &victron.TCP{Address: cfg.Victron.Address})
+		if err != nil {
+			return err
+		}
+		sources = append(sources, battery)
+	}
+	if len(sources) > 0 {
 		telemetryCollector, err := collector.New(collector.Config{
 			SiteID:           cfg.Queue.SiteID,
 			Region:           cfg.Collector.Region,
 			Interval:         cfg.Collector.Interval,
 			BatteryOverheatC: cfg.SMS.BatteryOverheatC,
 			FallbackDebounce: cfg.SMS.Debounce,
-		}, durableQueue, simulator.New(cfg.Queue.SiteID, simulatorOptions...))
+		}, durableQueue, sources...)
 		if err != nil {
 			return fmt.Errorf("configure telemetry collector: %w", err)
 		}
@@ -88,6 +106,26 @@ func run() (runErr error) {
 		go func() {
 			defer workerWG.Done()
 			telemetryCollector.Run(workerCtx)
+		}()
+
+	}
+
+	if cfg.Commands.Enabled {
+		commandAdapter, closeAdapter, err := newCommandAdapter(ctx, cfg, meter)
+		if err != nil {
+			return fmt.Errorf("configure meter command adapter: %w", err)
+		}
+		defer closeAdapter()
+		runner := commands.New(
+			commands.Config{PollInterval: cfg.Commands.PollInterval, CommandTimeout: cfg.Commands.Timeout},
+			commands.NewHTTPClient(cfg.Commands.Endpoint, cfg.Commands.APIKey, cfg.Commands.Timeout),
+			adapter.NewLedger(durableQueue, commandAdapter), durableQueue,
+		)
+		workerWG.Add(1)
+		go func() {
+			defer workerWG.Done()
+			slog.Info("meter command delivery started", "endpoint", cfg.Commands.Endpoint, "adapter", cfg.Commands.Adapter)
+			runner.Run(workerCtx)
 		}()
 	}
 
@@ -116,6 +154,11 @@ func run() (runErr error) {
 	go func() {
 		defer workerWG.Done()
 		runPurge(workerCtx, durableQueue, cfg.Queue.PurgeRetention, cfg.Queue.PurgeInterval)
+	}()
+	workerWG.Add(1)
+	go func() {
+		defer workerWG.Done()
+		runCommandPrune(workerCtx, durableQueue, cfg.Commands.Retention, cfg.Commands.PruneInterval)
 	}()
 
 	if cfg.Uploader.Enabled {
@@ -186,4 +229,67 @@ func runPurge(ctx context.Context, queue domain.Queue, retention, interval time.
 			}
 		}
 	}
+}
+
+const commandPruneBatch = 500
+
+type commandPruner interface {
+	PruneCommands(ctx context.Context, cutoff time.Time, limit int) (int64, error)
+}
+
+// runCommandPrune deletes resolved commands in batches so a large backlog never
+// holds the queue's single SQLite connection for long.
+func runCommandPrune(ctx context.Context, store commandPruner, retention, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cutoff := time.Now().Add(-retention)
+			var total int64
+			for ctx.Err() == nil {
+				deleted, err := store.PruneCommands(ctx, cutoff, commandPruneBatch)
+				if err != nil {
+					slog.Error("prune resolved commands", "error", err)
+					break
+				}
+				total += deleted
+				if deleted < commandPruneBatch {
+					break
+				}
+			}
+			if total > 0 {
+				slog.Info("pruned resolved commands", "deleted", total)
+			}
+		}
+	}
+}
+
+// newCommandAdapter returns the configured adapter and a function releasing
+// its connection; config validation guarantees meter is set for the simulator.
+func newCommandAdapter(ctx context.Context, cfg config.Config, meter *simulator.Adapter) (adapter.CommandAdapter, func(), error) {
+	if cfg.Commands.Adapter == "simulator" {
+		return meter, func() {}, nil
+	}
+	m := cfg.Commands.MQTT
+	caps, err := adapter.LoadCapabilities(m.CapabilitiesFile)
+	if err != nil {
+		return nil, nil, err
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	transport, err := mqtt.DialPaho(dialCtx, mqtt.PahoConfig{
+		Broker: m.Broker, ClientID: m.ClientID, Username: m.Username, Password: m.Password, CAFile: m.CAFile,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	commandAdapter, err := mqtt.New(dialCtx, mqtt.Config{TopicPrefix: m.TopicPrefix, Capabilities: caps}, transport)
+	if err != nil {
+		transport.Close()
+		return nil, nil, err
+	}
+	return commandAdapter, transport.Close, nil
 }

@@ -40,7 +40,7 @@ func main() {
 		PaymentConfirmed:      cfg.PaymentConfirmedTopic,
 		CreditIssued:          cfg.CreditIssuedTopic,
 		MeterCommandRequested: cfg.MeterCommandRequestedTopic,
-	})
+	}).WithMeterCommandTTL(cfg.MeterCommandTTL)
 	limits := services.PageLimits{
 		DefaultSize: cfg.DefaultPageSize,
 		MaxSize:     cfg.MaxPageSize,
@@ -76,6 +76,14 @@ func main() {
 		logger.Info("SMS fallback webhook enabled", "path", "/v1/sms/inbound")
 	}
 
+	var edgeCommands controller.EdgeCommandService
+	if len(cfg.EdgeAPIKeys) > 0 {
+		edgeCommands = services.NewEdgeCommandService(postgres.NewEdgeCommandStore(pool, cfg.DBQueryTimeout), services.OutcomeTopics{
+			Acknowledged: cfg.CommandAcknowledgedTopic, Failed: cfg.CommandFailedTopic,
+		})
+		logger.Info("edge command delivery enabled", "path", "/v1/edge/commands", "sites", len(cfg.EdgeAPIKeys))
+	}
+
 	api := controller.API{
 		Assets: services.NewAssetService(store, limits),
 		Alerts: services.NewAlertService(store, limits, globalHistoryLimits),
@@ -92,6 +100,8 @@ func main() {
 		Fallback:       fallbackService,
 		Heartbeats:     heartbeatService,
 		SMSWebhook:     smsWebhook,
+		EdgeCommands:   edgeCommands,
+		EdgeAuth:       controller.NewSiteKeys(cfg.EdgeAPIKeys),
 	}
 
 	err = controller.Serve(ctx, controller.ServerOptions{

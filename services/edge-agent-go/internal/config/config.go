@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"math"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -23,14 +24,44 @@ const (
 	defaultCollectorEnabled       = false
 	defaultCollectorInterval      = 5 * time.Second
 	defaultRegion                 = "africa-west"
+	// Must outlast the longest time upstream may retry one command ID, or a
+	// late retry would find no record and apply the command again.
+	defaultCommandRetention     = 30 * 24 * time.Hour
+	defaultCommandPruneInterval = time.Hour
 )
 
 type Config struct {
 	Queue      QueueConfig
 	Collector  CollectorConfig
+	Victron    VictronConfig
 	Uploader   UploaderConfig
 	SMS        SMSConfig
+	Commands   CommandConfig
 	HealthAddr string
+}
+
+type CommandConfig struct {
+	Retention     time.Duration
+	PruneInterval time.Duration
+
+	Enabled      bool
+	Endpoint     string
+	APIKey       string
+	PollInterval time.Duration
+	Timeout      time.Duration
+	// Adapter is "simulator" or "mqtt".
+	Adapter string
+	MQTT    MQTTConfig
+}
+
+type MQTTConfig struct {
+	Broker           string
+	ClientID         string
+	Username         string
+	Password         string
+	CAFile           string
+	TopicPrefix      string
+	CapabilitiesFile string
 }
 
 type SMSConfig struct {
@@ -51,6 +82,11 @@ type SMSConfig struct {
 	HeartbeatEnabled    bool
 	HeartbeatInterval   time.Duration
 	HeartbeatDailyLimit int
+}
+
+type VictronConfig struct {
+	Address, DeviceID string
+	UnitID            byte
 }
 
 type CollectorConfig struct {
@@ -121,6 +157,26 @@ func FromEnv() (Config, error) {
 		return Config{}, err
 	}
 	purgeInterval, err := envDuration("EDGE_QUEUE_PURGE_INTERVAL", 5*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	commandRetention, err := envDuration("EDGE_COMMAND_RETENTION", defaultCommandRetention)
+	if err != nil {
+		return Config{}, err
+	}
+	commandPruneInterval, err := envDuration("EDGE_COMMAND_PRUNE_INTERVAL", defaultCommandPruneInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	commandsEnabled, err := envBool("EDGE_COMMANDS_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	commandPollInterval, err := envDuration("EDGE_COMMANDS_POLL_INTERVAL", 15*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	commandTimeout, err := envDuration("EDGE_COMMANDS_TIMEOUT", 30*time.Second)
 	if err != nil {
 		return Config{}, err
 	}
@@ -226,7 +282,23 @@ func FromEnv() (Config, error) {
 		return Config{}, err
 	}
 
+	victronAddress := envString("EDGE_VICTRON_ADDRESS", "")
+	victronUnit, err := envInt("EDGE_VICTRON_UNIT_ID", -1)
+	if err != nil {
+		return Config{}, err
+	}
+	victronDevice := envString("EDGE_VICTRON_DEVICE_ID", "")
+	if victronAddress != "" {
+		if _, _, err := net.SplitHostPort(victronAddress); err != nil {
+			return Config{}, fmt.Errorf("EDGE_VICTRON_ADDRESS must be host:port: %w", err)
+		}
+		if victronUnit < 0 || victronUnit > 255 || victronDevice == "" {
+			return Config{}, fmt.Errorf("Victron requires EDGE_VICTRON_UNIT_ID (0..255) and EDGE_VICTRON_DEVICE_ID")
+		}
+	}
+
 	cfg := Config{
+		Victron: VictronConfig{Address: victronAddress, DeviceID: victronDevice, UnitID: byte(victronUnit)},
 		Queue: QueueConfig{
 			Path:                   envString("EDGE_QUEUE_PATH", defaultQueuePath),
 			SiteID:                 siteID,
@@ -264,6 +336,23 @@ func FromEnv() (Config, error) {
 			RetryInterval: smsRetryInterval, SendTimeout: smsSendTimeout, BatteryOverheatC: batteryOverheatC, Debounce: smsDebounce,
 			HeartbeatEnabled: heartbeatEnabled, HeartbeatInterval: heartbeatInterval, HeartbeatDailyLimit: heartbeatDailyLimit,
 		},
+		Commands: CommandConfig{
+			Retention: commandRetention, PruneInterval: commandPruneInterval,
+			Enabled: commandsEnabled, Endpoint: envString("EDGE_COMMANDS_ENDPOINT", ""),
+			// One site key authenticates both telemetry upload and command delivery.
+			APIKey:       envString("EDGE_COMMANDS_API_KEY", os.Getenv("EDGE_UPLOADER_API_KEY")),
+			PollInterval: commandPollInterval, Timeout: commandTimeout,
+			Adapter: envString("EDGE_COMMAND_ADAPTER", "simulator"),
+			MQTT: MQTTConfig{
+				Broker:           envString("EDGE_MQTT_BROKER", ""),
+				ClientID:         envString("EDGE_MQTT_CLIENT_ID", "ambagrid-edge-"+gatewayID),
+				Username:         envString("EDGE_MQTT_USERNAME", ""),
+				Password:         os.Getenv("EDGE_MQTT_PASSWORD"),
+				CAFile:           envString("EDGE_MQTT_CA_FILE", ""),
+				TopicPrefix:      envString("EDGE_MQTT_TOPIC_PREFIX", "ambagrid/"+siteID),
+				CapabilitiesFile: envString("EDGE_MQTT_CAPABILITIES_FILE", ""),
+			},
+		},
 		HealthAddr: envString("EDGE_HEALTH_ADDR", defaultHealthAddr),
 	}
 
@@ -273,6 +362,23 @@ func FromEnv() (Config, error) {
 		}
 		if cfg.Uploader.APIKey == "" {
 			return Config{}, fmt.Errorf("EDGE_UPLOADER_API_KEY must be set when uploader is enabled")
+		}
+	}
+	if cfg.Commands.Enabled {
+		if cfg.Commands.Endpoint == "" || cfg.Commands.APIKey == "" {
+			return Config{}, fmt.Errorf("EDGE_COMMANDS_ENDPOINT and EDGE_COMMANDS_API_KEY must be set when command delivery is enabled")
+		}
+		switch cfg.Commands.Adapter {
+		case "simulator":
+			if !cfg.Collector.Enabled {
+				return Config{}, fmt.Errorf("EDGE_COMMAND_ADAPTER=simulator requires EDGE_SIMULATOR_ENABLED")
+			}
+		case "mqtt":
+			if cfg.Commands.MQTT.Broker == "" || cfg.Commands.MQTT.CapabilitiesFile == "" {
+				return Config{}, fmt.Errorf("EDGE_COMMAND_ADAPTER=mqtt requires EDGE_MQTT_BROKER and EDGE_MQTT_CAPABILITIES_FILE")
+			}
+		default:
+			return Config{}, fmt.Errorf("EDGE_COMMAND_ADAPTER must be simulator or mqtt, got %q", cfg.Commands.Adapter)
 		}
 	}
 	if cfg.SMS.Enabled && cfg.SMS.Destination == "" {

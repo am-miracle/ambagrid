@@ -170,8 +170,12 @@ type MetricPayload struct {
 	// --- Battery/Inverter Specialized States (Populated based on DeviceType) ---
 	BatterySocPct   float32 `protobuf:"fixed32,9,opt,name=battery_soc_pct,json=batterySocPct,proto3" json:"battery_soc_pct,omitempty"`      // State of Charge (0.0 to 100.0%) for BMS nodes
 	SolarIrradiance float32 `protobuf:"fixed32,10,opt,name=solar_irradiance,json=solarIrradiance,proto3" json:"solar_irradiance,omitempty"` // W/m² input reading for solar inverter arrays
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Unix epoch seconds when the device itself last answered. Trails
+	// timestamp_utc when a gateway re-reports a cached reading for a device it
+	// can no longer reach; when unset, timestamp_utc is the last-seen time.
+	LastSeenUtc   *int64 `protobuf:"varint,11,opt,name=last_seen_utc,json=lastSeenUtc,proto3,oneof" json:"last_seen_utc,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *MetricPayload) Reset() {
@@ -274,6 +278,13 @@ func (x *MetricPayload) GetSolarIrradiance() float32 {
 	return 0
 }
 
+func (x *MetricPayload) GetLastSeenUtc() int64 {
+	if x != nil && x.LastSeenUtc != nil {
+		return *x.LastSeenUtc
+	}
+	return 0
+}
+
 var File_telemetry_proto protoreflect.FileDescriptor
 
 const file_telemetry_proto_rawDesc = "" +
@@ -293,7 +304,7 @@ const file_telemetry_proto_rawDesc = "" +
 	"\n" +
 	"_frequencyB\f\n" +
 	"\n" +
-	"_total_kwh\"\xcf\x03\n" +
+	"_total_kwh\"\x8a\x04\n" +
 	"\rMetricPayload\x12\x1b\n" +
 	"\tdevice_id\x18\x01 \x01(\tR\bdeviceId\x12?\n" +
 	"\vdevice_type\x18\x02 \x01(\x0e2\x1e.ambagrid.telemetry.DeviceTypeR\n" +
@@ -306,8 +317,10 @@ const file_telemetry_proto_rawDesc = "" +
 	"\frelay_closed\x18\b \x01(\bR\vrelayClosed\x12&\n" +
 	"\x0fbattery_soc_pct\x18\t \x01(\x02R\rbatterySocPct\x12)\n" +
 	"\x10solar_irradiance\x18\n" +
-	" \x01(\x02R\x0fsolarIrradianceB\x10\n" +
-	"\x0e_timestamp_utc*\x83\x01\n" +
+	" \x01(\x02R\x0fsolarIrradiance\x12'\n" +
+	"\rlast_seen_utc\x18\v \x01(\x03H\x01R\vlastSeenUtc\x88\x01\x01B\x10\n" +
+	"\x0e_timestamp_utcB\x10\n" +
+	"\x0e_last_seen_utc*\x83\x01\n" +
 	"\n" +
 	"DeviceType\x12\x1b\n" +
 	"\x17DEVICE_TYPE_UNSPECIFIED\x10\x00\x12\x1b\n" +

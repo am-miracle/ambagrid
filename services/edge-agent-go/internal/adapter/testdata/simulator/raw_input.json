@@ -1,0 +1,5 @@
+[
+  {"device": "meter-01", "kind": "meter", "ts_ms": 1790865000250, "seen_ms": 1790864940250, "v_dv": 2301, "i_ma": 6125, "p_w": 1409, "f_chz": 4998, "e_wh": 1500482, "temp_dc": 364, "relay": 0, "tamper": 1},
+  {"device": "battery-01", "kind": "bms", "ts_ms": 1790865000250, "temp_dc": 682, "relay": 1, "soc_pm": 745, "outage": 1},
+  {"device": "inverter-01", "kind": "inverter", "ts_ms": 1790865000250, "temp_dc": -55, "relay": 1, "irr_wm2": 712, "fault": 2}
+]

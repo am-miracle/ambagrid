@@ -16,3 +16,8 @@ type StatsSource interface {
 type FallbackStatsSource interface {
 	FallbackRateLimitStats(context.Context, time.Time, domain.FallbackRateLimitPolicy) (domain.FallbackRateLimitStats, error)
 }
+
+// CommandStatsSource reports commands whose device outcome is still unknown.
+type CommandStatsSource interface {
+	CommandLedgerStats(context.Context, time.Time) (domain.CommandLedgerStats, error)
+}

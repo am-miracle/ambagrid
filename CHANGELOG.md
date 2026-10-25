@@ -22,41 +22,19 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - Add authenticated staging telemetry worker (#17)
 - Add prepaid payment processing (#18)
 - Add revenue operations dashboard (#19)
-- **edge:** Add durable telemetry collection
-- **ingestion:** Add HTTP ingestion endpoint for edge agents
-- **edge:** Add ordered uploader with retry and dedup
-- **telemetry:** Add replay metadata to ingestion pipeline
-- **site-health:** Track gateway dashboard states
-- **alerts:** Add critical SMS fallback
-- **edge:** Persist dedup state and surface fleet health
-- **edge:** Harden durable telemetry sync
-- **edge:** Add SMS liveness heartbeats
-- **ui:** Show SMS heartbeat age on site card
-
-### Changed
-
-- **alerts:** Move SMS fallback request rules out of the repository
-- **edge:** Drop unused upload retryable flag
+- **edge:** Add durable telemetry and critical fallback (#21)
+- **adapters:** Deliver durable commands and add Victron and STS integrations
 
 ### Documentation
 
 - Add open source project foundations
 - Add ontology and roadmap docs
 - Regenerate changelog
-- Explain edge durability and fallback locking invariants
 
 ### Fixed
 
 - **outbox:** Publish alert events durably (#12)
 - **engine:** Make outbox dependencies explicit (#14)
-- **ingestion:** Make dedup and Kafka publish atomic, drop Postgres dependency
-- **edge:** Harden fallback and replay idempotency
-- **edge:** Harden replay and fallback handling
-- **edge:** Complete replay and fallback hardening
-- **edge:** Close durable fallback integrity gaps
-- **edge:** Complete durable sync integration
-- **edge:** Derive SMS heartbeat deadline from declared interval
-- **engine:** Log site health offset store failures
 
 ### Maintenance
 

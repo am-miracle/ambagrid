@@ -55,10 +55,17 @@ Core fields:
 - `relay_closed`
 - `battery_soc_pct`
 - `solar_irradiance`
+- `last_seen_utc`
 
 `timestamp_utc` is required even though protobuf uses `optional` to preserve
 field presence; missing or default epoch timestamps are rejected instead of
 being persisted as `1970-01-01`.
+
+`last_seen_utc` is when the device itself last answered, and sets the asset's
+`last_seen_at`. A gateway that re-reports a cached reading for an unreachable
+meter sends a `last_seen_utc` older than `timestamp_utc`, so the meter stops
+looking live. When omitted it defaults to `timestamp_utc`; a value of zero or
+one later than `timestamp_utc` is rejected.
 
 The simulator always emits `internal_temperature`, `relay_closed`,
 `battery_soc_pct`, and `solar_irradiance` in JSON, even when their value is

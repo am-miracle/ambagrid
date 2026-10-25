@@ -40,7 +40,7 @@ type PaymentTx interface {
 	InsertEnergyCredit(ctx context.Context, siteID, assignmentID, paymentID, tariffPlanID string, kwhGranted float64, moneyMinorUnits int64) (domain.EnergyCredit, error)
 	GetPriorBalance(ctx context.Context, assignmentID string) (float64, error)
 	UpsertCreditBalance(ctx context.Context, assignmentID string, kwhGranted float64, moneyMinorUnits int64) (domain.CreditBalance, error)
-	InsertMeterCommand(ctx context.Context, meterID string, commandType domain.MeterCommandType, requestedBy, reason string) (domain.MeterCommand, error)
+	InsertMeterCommand(ctx context.Context, cmd domain.NewMeterCommand) (domain.MeterCommand, error)
 	InsertPaymentConfirmedEvent(ctx context.Context, payment domain.Payment) error
 	InsertCreditIssuedEvent(ctx context.Context, credit domain.EnergyCredit) error
 	InsertMeterCommandEvent(ctx context.Context, cmd domain.MeterCommand, siteID, assignmentID string) error

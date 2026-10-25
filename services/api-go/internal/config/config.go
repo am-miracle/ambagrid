@@ -34,6 +34,8 @@ type Config struct {
 	CreditIssuedTopic          string
 	MeterCommandRequestedTopic string
 	AlertOpenedTopic           string
+	CommandAcknowledgedTopic   string
+	CommandFailedTopic         string
 
 	PaystackSecretKey     string
 	SMSEnabled            bool
@@ -44,6 +46,10 @@ type Config struct {
 	SMSNumberRentalMinor  int64
 	SMSMonthlyBudgetMinor int64
 	SMSCurrency           string
+
+	// EdgeAPIKeys maps each site's edge agent bearer key to its site ID.
+	EdgeAPIKeys     map[string]string
+	MeterCommandTTL time.Duration
 
 	DevMode bool
 }
@@ -130,6 +136,16 @@ func FromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	edgeAPIKeys, err := parseEdgeAPIKeys(os.Getenv("API_EDGE_API_KEYS"))
+	if err != nil {
+		return Config{}, err
+	}
+	// Must stay below the edge's EDGE_COMMAND_RETENTION, or a late retry
+	// could find its ledger record already pruned.
+	meterCommandTTL, err := envDuration("API_METER_COMMAND_TTL", 24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
 
 	cfg := Config{
 		HTTPAddr:                   envString("API_HTTP_ADDR", ":8081"),
@@ -153,6 +169,8 @@ func FromEnv() (Config, error) {
 		CreditIssuedTopic:          envConfiguredString("CREDIT_ISSUED_TOPIC", "credit.issued"),
 		MeterCommandRequestedTopic: envConfiguredString("METER_COMMAND_REQUESTED_TOPIC", "meter.command.requested"),
 		AlertOpenedTopic:           envConfiguredString("ALERT_OPENED_TOPIC", "alert.opened"),
+		CommandAcknowledgedTopic:   envConfiguredString("METER_COMMAND_ACKNOWLEDGED_TOPIC", "meter.command.acknowledged"),
+		CommandFailedTopic:         envConfiguredString("METER_COMMAND_FAILED_TOPIC", "meter.command.failed"),
 		PaystackSecretKey:          envString("PAYSTACK_SECRET_KEY", ""),
 		SMSEnabled:                 envBool("API_SMS_ENABLED"),
 		SMSWebhookSecret:           envString("API_SMS_WEBHOOK_SECRET", ""),
@@ -162,6 +180,8 @@ func FromEnv() (Config, error) {
 		SMSNumberRentalMinor:       smsNumberRental,
 		SMSMonthlyBudgetMinor:      smsMonthlyBudget,
 		SMSCurrency:                strings.ToUpper(envString("API_SMS_CURRENCY", "")),
+		EdgeAPIKeys:                edgeAPIKeys,
+		MeterCommandTTL:            meterCommandTTL,
 		DevMode:                    envBool("API_DEV_MODE"),
 	}
 
@@ -207,6 +227,9 @@ func FromEnv() (Config, error) {
 	if cfg.AlertOpenedTopic == "" {
 		return Config{}, fmt.Errorf("ALERT_OPENED_TOPIC must not be empty")
 	}
+	if cfg.CommandAcknowledgedTopic == "" || cfg.CommandFailedTopic == "" {
+		return Config{}, fmt.Errorf("METER_COMMAND_ACKNOWLEDGED_TOPIC and METER_COMMAND_FAILED_TOPIC must not be empty")
+	}
 	if cfg.SMSEnabled && (cfg.SMSWebhookSecret == "" || len(cfg.SMSSenders) == 0) {
 		return Config{}, fmt.Errorf("API_SMS_WEBHOOK_SECRET and API_SMS_SENDERS must be set when SMS fallback is enabled")
 	}
@@ -237,6 +260,30 @@ func parseSMSSenders(raw string) (map[string]SMSSender, error) {
 			return nil, fmt.Errorf("API_SMS_SENDERS entry %d duplicates an earlier sender", index)
 		}
 		result[number] = SMSSender{SiteID: siteID, GatewayID: gatewayID}
+	}
+	return result, nil
+}
+
+// parseEdgeAPIKeys reads site:key pairs, the format ingestion uses for
+// INGEST_HTTP_API_KEYS, so one key can serve both upload and command delivery.
+func parseEdgeAPIKeys(raw string) (map[string]string, error) {
+	result := make(map[string]string)
+	index := 0
+	for entry := range strings.SplitSeq(raw, ",") {
+		index++
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		siteID, key, ok := strings.Cut(entry, ":")
+		siteID, key = strings.TrimSpace(siteID), strings.TrimSpace(key)
+		if !ok || siteID == "" || key == "" {
+			return nil, fmt.Errorf("API_EDGE_API_KEYS entry %d must use site:key", index)
+		}
+		if _, exists := result[key]; exists {
+			return nil, fmt.Errorf("API_EDGE_API_KEYS entry %d duplicates an earlier key", index)
+		}
+		result[key] = siteID
 	}
 	return result, nil
 }

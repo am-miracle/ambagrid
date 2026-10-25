@@ -314,6 +314,7 @@ type fakePaymentTx struct {
 	priorBalanceErr   error
 	insertCommandErr  error
 
+	newCommands      []domain.NewMeterCommand
 	insertedCommands []domain.MeterCommand
 	auditCalls       int
 	outboxCalls      int
@@ -351,7 +352,8 @@ func (f *fakePaymentTx) UpsertCreditBalance(context.Context, string, float64, in
 	return f.balance, nil
 }
 
-func (f *fakePaymentTx) InsertMeterCommand(_ context.Context, _ string, _ domain.MeterCommandType, _, _ string) (domain.MeterCommand, error) {
+func (f *fakePaymentTx) InsertMeterCommand(_ context.Context, cmd domain.NewMeterCommand) (domain.MeterCommand, error) {
+	f.newCommands = append(f.newCommands, cmd)
 	f.insertedCommands = append(f.insertedCommands, f.meterCommand)
 	return f.meterCommand, f.insertCommandErr
 }
@@ -817,5 +819,51 @@ func TestAssetServiceReadingsRejectsMetricOutsideTheAssetSchema(t *testing.T) {
 	}
 	if repo.calls != 1 || repo.readingCalls != 0 {
 		t.Fatalf("repository calls = asset:%d readings:%d, want 1/0", repo.calls, repo.readingCalls)
+	}
+}
+
+func TestPaymentServiceCreditsMeterModeMetersOnEveryPayment(t *testing.T) {
+	for name, c := range map[string]struct {
+		relayClosed  bool
+		priorBalance float64
+	}{
+		"relay open from empty": {relayClosed: false, priorBalance: 0},
+		"top-up":                {relayClosed: true, priorBalance: 5},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fakeTx := newPaymentTestFixture()
+			fakeTx.assignment.CreditMode = domain.CreditModeMeter
+			fakeTx.assignment.RelayClosed = c.relayClosed
+			fakeTx.priorBalance = c.priorBalance
+			fakeTx.credit.KWhGranted = 20
+			repo := &fakePaymentRepository{fakeTx: fakeTx}
+
+			if _, err := NewPaymentService(repo).ApplyDevPayment(context.Background(), ApplyDevPaymentRequest{
+				CustomerID: "cust-01", AmountMinorUnits: 500000, Currency: "NGN",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if len(fakeTx.newCommands) != 1 {
+				t.Fatalf("commands = %+v, want one credit command", fakeTx.newCommands)
+			}
+			cmd := fakeTx.newCommands[0]
+			if cmd.Type != domain.CommandCreditMeter || cmd.CreditKWh == nil || *cmd.CreditKWh != 20 || cmd.CreditID == nil || *cmd.CreditID != "credit-001" {
+				t.Fatalf("command = %+v, want a 20 kWh credit linked to credit-001", cmd)
+			}
+		})
+	}
+}
+
+func TestPaymentServiceStillReconnectsPlatformModeMeters(t *testing.T) {
+	fakeTx := newPaymentTestFixture()
+	fakeTx.assignment.CreditMode = domain.CreditModePlatform
+	repo := &fakePaymentRepository{fakeTx: fakeTx}
+	if _, err := NewPaymentService(repo).ApplyDevPayment(context.Background(), ApplyDevPaymentRequest{
+		CustomerID: "cust-01", AmountMinorUnits: 500000, Currency: "NGN",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fakeTx.newCommands) != 1 || fakeTx.newCommands[0].Type != domain.CommandReconnectMeter || fakeTx.newCommands[0].CreditKWh != nil {
+		t.Fatalf("commands = %+v, want a reconnect without credit", fakeTx.newCommands)
 	}
 }

@@ -14,4 +14,22 @@ message MeterCommandRequested {
   string requested_by = 7;
   string reason = 8;
   int64 requested_at_utc = 9; // Unix epoch timestamp in seconds.
+  int64 expires_at_utc = 10; // Unix epoch seconds; 0 for commands recorded before expiry existed.
+  optional double credit_kwh = 11; // Set only for credit_meter commands.
+  string credit_id = 12; // Energy credit delivered by a credit_meter command; empty otherwise.
+}
+
+// Published as meter.command.acknowledged with status "acknowledged", and as
+// meter.command.failed with status "failed" or "expired". A command whose
+// outcome is unknown stays "sent" and publishes nothing until it is settled.
+message MeterCommandOutcome {
+  string command_id = 1;
+  string meter_id = 2;
+  string site_id = 3;
+  string command_type = 4;
+  string status = 5;
+  string reported_by = 6; // "edge:<site_id>", or "system:command-expiry" for platform expiry.
+  string failure_reason = 7; // Empty unless status is "failed".
+  int64 occurred_at_utc = 8; // Unix epoch timestamp in seconds.
+  optional double credit_kwh = 9; // Set only for credit_meter commands.
 }

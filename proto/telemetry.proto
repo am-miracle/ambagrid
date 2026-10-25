@@ -42,4 +42,9 @@ message MetricPayload {
   // --- Battery/Inverter Specialized States (Populated based on DeviceType) ---
   float battery_soc_pct = 9;      // State of Charge (0.0 to 100.0%) for BMS nodes
   float solar_irradiance = 10;    // W/m² input reading for solar inverter arrays
+
+  // Unix epoch seconds when the device itself last answered. Trails
+  // timestamp_utc when a gateway re-reports a cached reading for a device it
+  // can no longer reach; when unset, timestamp_utc is the last-seen time.
+  optional int64 last_seen_utc = 11;
 }

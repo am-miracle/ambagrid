@@ -134,6 +134,7 @@ func TestBuildRecord(t *testing.T) {
 		"device_id": "met-0101",
 		"device_type": "DEVICE_TYPE_SMART_METER",
 		"timestamp_utc": 1745500000,
+		"last_seen_utc": 1745499940,
 		"site_id": "ng-kaji-01",
 		"metrics": {"voltage": 231.0}
 	}`)
@@ -170,6 +171,9 @@ func TestBuildRecord(t *testing.T) {
 	}
 	if decoded.GetTimestampUtc() != 1745500000 {
 		t.Fatalf("decoded TimestampUtc = %v, want %v", decoded.GetTimestampUtc(), int64(1745500000))
+	}
+	if decoded.LastSeenUtc == nil || decoded.GetLastSeenUtc() != 1745499940 {
+		t.Fatalf("decoded LastSeenUtc = %v, want %v", decoded.LastSeenUtc, int64(1745499940))
 	}
 	if decoded.GetSiteId() != "ng-kaji-01" {
 		t.Fatalf("decoded SiteId = %q, want %q", decoded.GetSiteId(), "ng-kaji-01")

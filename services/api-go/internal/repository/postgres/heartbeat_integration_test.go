@@ -4,11 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"os"
 	"testing"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"api-go/internal/domain"
 	"api-go/internal/page"
@@ -16,17 +13,8 @@ import (
 )
 
 func TestHeartbeatTxLifecycleInPostgres(t *testing.T) {
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("requires DATABASE_URL and engine migrations")
-	}
-
+	pool := integrationPool(t)
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, databaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
 
 	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {
@@ -36,10 +24,11 @@ func TestHeartbeatTxLifecycleInPostgres(t *testing.T) {
 	if _, err := pool.Exec(ctx, "INSERT INTO sites (site_id, name) VALUES ($1, 'Heartbeat integration test')", siteID); err != nil {
 		t.Fatalf("seed database: %v", err)
 	}
+	clean := cleaner(t, pool)
 	t.Cleanup(func() {
-		_, _ = pool.Exec(ctx, "DELETE FROM sms_heartbeat_receipts WHERE heartbeat_key IN (SELECT heartbeat_key FROM sms_heartbeats WHERE site_id = $1)", siteID)
-		_, _ = pool.Exec(ctx, "DELETE FROM sms_heartbeats WHERE site_id = $1", siteID)
-		_, _ = pool.Exec(ctx, "DELETE FROM sites WHERE site_id = $1", siteID)
+		clean("DELETE FROM sms_heartbeat_receipts WHERE heartbeat_key IN (SELECT heartbeat_key FROM sms_heartbeats WHERE site_id = $1)", siteID)
+		clean("DELETE FROM sms_heartbeats WHERE site_id = $1", siteID)
+		clean("DELETE FROM sites WHERE site_id = $1", siteID)
 	})
 
 	sentAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
@@ -67,7 +56,7 @@ func TestHeartbeatTxLifecycleInPostgres(t *testing.T) {
 		t.Fatalf("first insert = %v, %v", inserted, err)
 	}
 
-	_, err = store.RunHeartbeatTx(ctx, heartbeat.Key(), func(tx repository.HeartbeatTx) (bool, error) {
+	_, err := store.RunHeartbeatTx(ctx, heartbeat.Key(), func(tx repository.HeartbeatTx) (bool, error) {
 		stored, err := tx.FindHeartbeat(ctx, heartbeat.Key())
 		if err != nil {
 			return false, err

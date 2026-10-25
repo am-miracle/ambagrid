@@ -12,11 +12,28 @@ The service follows the same domain-and-adapter boundaries as the other AmbaGrid
 services:
 
 - `internal/config` owns environment configuration.
-- `internal/adapter/simulator` simulates meter, battery, and inverter hardware.
+- `internal/adapter` defines the vendor-neutral telemetry and command contract,
+  capability declaration, and typed errors every hardware adapter returns. Its
+  `Ledger` gives any command adapter at-most-once delivery per command ID; see
+  [the command ledger](../../docs/command-ledger.md).
+- `internal/adapter/adaptertest` is the conformance suite each adapter runs via
+  `adaptertest.RunTelemetry` and `adaptertest.RunCommand`, against fixtures in
+  `internal/adapter/testdata/<adapter>/`.
+- `internal/adapter/devicetest` gives test devices the stall, hold and recording
+  controls the suite drives, without linking `testing` into the binary.
+- `internal/adapter/mqtt` carries meter commands over MQTT using the protocol
+  in `docs/hardware-adapters.md`, with a paho transport for production.
+- `internal/adapter/simulator` is the simulated meter adapter over simulated
+  meter, battery, and inverter hardware. Its device keeps relay, balance and
+  tamper state, and can take the meter offline to exercise stale last-seen
+  times and command timeouts.
+- `internal/commands` polls api-go for the site's meter commands, runs them in
+  request order through the ledger, refuses expired and superseded relay
+  commands, and delivers queued outcome reports.
 - `internal/collector` validates, envelopes, and persists adapter readings without reshaping their payloads.
 - `internal/domain` owns queue events, records, state, statistics, and errors.
 - `internal/repository/sqlite` owns the durable adapter, with schema setup,
-  queries, mutations, and capacity policy in separate files.
+  queries, mutations, capacity policy, and the command ledger in separate files.
 - `internal/uploader` drains the queue in sequence order and POSTs batches to
   the ingestion service; retries with exponential backoff on failure.
 - `internal/health` owns the HTTP health endpoint and Prometheus collector.
@@ -77,6 +94,20 @@ gateways default to a 256 MiB filesystem reserve.
 | `EDGE_COLLECTOR_INTERVAL` | `5s` | Interval between simulated collection cycles. |
 | `EDGE_REGION` | `africa-west` | Region used in normalized MQTT topic envelopes. |
 | `EDGE_HEALTH_ADDR` | `:2112` | Local health HTTP listen address. |
+| `EDGE_COMMAND_RETENTION` | `720h` | How long resolved meter commands stay in the ledger. Must outlast the longest upstream retry of one command ID. |
+| `EDGE_COMMAND_PRUNE_INTERVAL` | `1h` | Interval between ledger pruning passes. Unresolved commands are never pruned. |
+| `EDGE_COMMANDS_ENABLED` | `false` | Fetch meter commands from api-go and run them through the command ledger. |
+| `EDGE_COMMAND_ADAPTER` | `simulator` | `simulator` (requires `EDGE_SIMULATOR_ENABLED`) or `mqtt`. |
+| `EDGE_MQTT_BROKER` | required for `mqtt` | Broker URL, e.g. `tcp://localhost:1883` or `ssl://broker:8883`. |
+| `EDGE_MQTT_CAPABILITIES_FILE` | required for `mqtt` | YAML capability declaration of the meters behind the broker. |
+| `EDGE_MQTT_TOPIC_PREFIX` | `ambagrid/{site_id}` | Commands go to `{prefix}/{device_id}/command`. |
+| `EDGE_MQTT_CLIENT_ID` | `ambagrid-edge-{gateway_id}` | Must be unique on the broker. |
+| `EDGE_MQTT_USERNAME`, `EDGE_MQTT_PASSWORD` | empty | Broker credentials. |
+| `EDGE_MQTT_CA_FILE` | empty | Certificate authority for TLS. |
+| `EDGE_COMMANDS_ENDPOINT` | required | Base URL of api-go, e.g. `http://api:8081`. |
+| `EDGE_COMMANDS_API_KEY` | `EDGE_UPLOADER_API_KEY` | Site key for api-go's `API_EDGE_API_KEYS`. |
+| `EDGE_COMMANDS_POLL_INTERVAL` | `15s` | Interval between command polls and report deliveries. |
+| `EDGE_COMMANDS_TIMEOUT` | `30s` | Bound on each api-go request and each command's device exchange. |
 | `EDGE_UPLOADER_ENABLED` | `false` | Start the uploader that drains the queue to the ingestion service. |
 | `EDGE_UPLOADER_ENDPOINT` | required | Full URL of the ingestion HTTP endpoint, e.g. `http://ingest:8090/v1/ingest`. |
 | `EDGE_UPLOADER_API_KEY` | required | Bearer token the ingestion service uses to identify this site. |
@@ -173,3 +204,20 @@ Critical battery overheat, inverter failure, tamper, and site outage events are
 stored as durable incidents. After three failed uploads or two minutes without
 a successful upload, the edge agent sends a single-segment versioned SMS. A
 successful normal replay removes the incident from the fallback candidate set.
+
+The MQTT adapter's conformance suite also runs against a real broker when
+`EDGE_MQTT_TEST_BROKER` is set:
+
+```bash
+docker run --rm -p 1883:1883 eclipse-mosquitto:2.0 mosquitto -c /mosquitto-no-auth.conf
+EDGE_MQTT_TEST_BROKER=tcp://127.0.0.1:1883 go test ./internal/adapter/mqtt/
+```
+
+## Victron hardware telemetry
+
+A Cerbo GX battery service can feed the collector without the simulator. Set
+`EDGE_VICTRON_ADDRESS` to `host:502`, `EDGE_VICTRON_UNIT_ID` to the battery
+service Unit ID from the GX Available services screen, and
+`EDGE_VICTRON_DEVICE_ID` to its platform battery asset ID. The shared
+`EDGE_COLLECTOR_INTERVAL` controls polling. See the
+[driver setup and limitations](../../docs/hardware-adapters.md#victron-cerbo-gx-battery-telemetry).

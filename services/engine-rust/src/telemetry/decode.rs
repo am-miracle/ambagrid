@@ -24,6 +24,10 @@ pub enum DecodeError {
     MissingMetrics,
     #[error("invalid telemetry timestamp_utc: {0}")]
     InvalidTimestamp(i64),
+    #[error("invalid telemetry last_seen_utc: {0}")]
+    InvalidLastSeen(i64),
+    #[error("telemetry last_seen_utc {last_seen} is after timestamp_utc {timestamp}")]
+    LastSeenAfterTimestamp { last_seen: i64, timestamp: i64 },
     #[error("telemetry metric {0} must be finite")]
     InvalidMetric(&'static str),
 }
@@ -44,6 +48,7 @@ pub fn reading_from_payload(payload: MetricPayload) -> Result<Reading, DecodeErr
     }
     let observed_at = DateTime::<Utc>::from_timestamp(timestamp_utc, 0)
         .ok_or(DecodeError::InvalidTimestamp(timestamp_utc))?;
+    let last_seen_at = last_seen_at(payload.last_seen_utc, timestamp_utc, observed_at)?;
     let internal_temperature = finite_f32("internal_temperature", payload.internal_temperature)?;
 
     let state = match asset_type {
@@ -72,13 +77,33 @@ pub fn reading_from_payload(payload: MetricPayload) -> Result<Reading, DecodeErr
             asset_id,
             site_id,
             internal_temperature,
-            last_seen_at: observed_at,
+            last_seen_at,
         },
         observed_at,
         source_event_id: None,
         state,
         edge: None,
     })
+}
+
+fn last_seen_at(
+    last_seen_utc: Option<i64>,
+    timestamp_utc: i64,
+    observed_at: DateTime<Utc>,
+) -> Result<DateTime<Utc>, DecodeError> {
+    let Some(last_seen) = last_seen_utc else {
+        return Ok(observed_at);
+    };
+    if last_seen > timestamp_utc {
+        return Err(DecodeError::LastSeenAfterTimestamp {
+            last_seen,
+            timestamp: timestamp_utc,
+        });
+    }
+    if last_seen == 0 {
+        return Err(DecodeError::InvalidLastSeen(last_seen));
+    }
+    DateTime::<Utc>::from_timestamp(last_seen, 0).ok_or(DecodeError::InvalidLastSeen(last_seen))
 }
 
 fn asset_type(value: i32) -> Result<AssetType, DecodeError> {
@@ -166,6 +191,7 @@ mod tests {
             relay_closed: true,
             battery_soc_pct: 0.0,
             solar_irradiance: 0.0,
+            last_seen_utc: None,
         };
         let mut bytes = Vec::new();
         payload.encode(&mut bytes).unwrap();
@@ -262,5 +288,58 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err, DecodeError::MissingTimestamp);
+    }
+
+    fn meter_payload(last_seen_utc: Option<i64>) -> MetricPayload {
+        MetricPayload {
+            device_id: "met-0101".to_string(),
+            device_type: DeviceType::SmartMeter as i32,
+            timestamp_utc: Some(1_787_990_400),
+            last_seen_utc,
+            site_id: "ng-kaji-01".to_string(),
+            metrics: Some(ElectricalMetrics::default()),
+            ..MetricPayload::default()
+        }
+    }
+
+    #[test]
+    fn last_seen_defaults_to_observation_time() {
+        let reading = reading_from_payload(meter_payload(None)).unwrap();
+
+        assert_eq!(reading.asset.last_seen_at, reading.observed_at);
+    }
+
+    #[test]
+    fn cached_reading_keeps_the_earlier_last_seen_time() {
+        let reading = reading_from_payload(meter_payload(Some(1_787_986_800))).unwrap();
+
+        assert_eq!(
+            reading.asset.last_seen_at,
+            DateTime::<Utc>::from_timestamp(1_787_986_800, 0).unwrap()
+        );
+        assert_eq!(
+            reading.observed_at,
+            DateTime::<Utc>::from_timestamp(1_787_990_400, 0).unwrap()
+        );
+    }
+
+    #[test]
+    fn rejects_last_seen_after_observation() {
+        let err = reading_from_payload(meter_payload(Some(1_787_990_401))).unwrap_err();
+
+        assert_eq!(
+            err,
+            DecodeError::LastSeenAfterTimestamp {
+                last_seen: 1_787_990_401,
+                timestamp: 1_787_990_400
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_default_epoch_last_seen() {
+        let err = reading_from_payload(meter_payload(Some(0))).unwrap_err();
+
+        assert_eq!(err, DecodeError::InvalidLastSeen(0));
     }
 }

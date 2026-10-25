@@ -84,7 +84,7 @@ func TestOpenMigratesVersionEightQueueWithHeartbeats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `DROP TABLE heartbeat_attempts; PRAGMA user_version = 8;`); err != nil {
+	if _, err := db.ExecContext(ctx, `DROP TABLE command_reports; DROP TABLE command_ledger; DROP TABLE heartbeat_attempts; PRAGMA user_version = 8;`); err != nil {
 		t.Fatalf("downgrade to version eight: %v", err)
 	}
 	if err := db.Close(); err != nil {

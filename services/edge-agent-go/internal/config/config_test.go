@@ -111,3 +111,104 @@ func TestFromEnvValidatesSMSHeartbeat(t *testing.T) {
 		})
 	}
 }
+
+func TestFromEnvConfiguresCommandLedgerRetention(t *testing.T) {
+	t.Setenv("EDGE_SITE_ID", "ng-kaji-01")
+	t.Setenv("EDGE_GATEWAY_ID", "gateway-01")
+	cfg, err := config.FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Commands.Retention != 30*24*time.Hour || cfg.Commands.PruneInterval != time.Hour {
+		t.Fatalf("default command config = %+v", cfg.Commands)
+	}
+
+	t.Setenv("EDGE_COMMAND_RETENTION", "168h")
+	t.Setenv("EDGE_COMMAND_PRUNE_INTERVAL", "10m")
+	if cfg, err = config.FromEnv(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Commands.Retention != 168*time.Hour || cfg.Commands.PruneInterval != 10*time.Minute {
+		t.Fatalf("configured command config = %+v", cfg.Commands)
+	}
+
+	t.Setenv("EDGE_COMMAND_RETENTION", "0s")
+	if _, err := config.FromEnv(); err == nil {
+		t.Fatal("accepted a zero command retention")
+	}
+}
+
+func TestFromEnvConfiguresCommandDelivery(t *testing.T) {
+	t.Setenv("EDGE_SITE_ID", "ng-kaji-01")
+	t.Setenv("EDGE_GATEWAY_ID", "gateway-01")
+	t.Setenv("EDGE_COMMANDS_ENABLED", "true")
+	if _, err := config.FromEnv(); err == nil {
+		t.Fatal("enabled command delivery without an endpoint")
+	}
+
+	t.Setenv("EDGE_COMMANDS_ENDPOINT", "http://api:8081")
+	t.Setenv("EDGE_UPLOADER_API_KEY", "key-kaji")
+	if _, err := config.FromEnv(); err == nil {
+		t.Fatal("chose the simulator command adapter without the simulator running")
+	}
+
+	t.Setenv("EDGE_SIMULATOR_ENABLED", "true")
+	cfg, err := config.FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := cfg.Commands
+	if !c.Enabled || c.Endpoint != "http://api:8081" || c.APIKey != "key-kaji" || c.PollInterval != 15*time.Second || c.Timeout != 30*time.Second {
+		t.Fatalf("command delivery config = %+v", c)
+	}
+	t.Setenv("EDGE_COMMANDS_API_KEY", "key-commands")
+	if cfg, err = config.FromEnv(); err != nil || cfg.Commands.APIKey != "key-commands" {
+		t.Fatalf("command key = %q, %v", cfg.Commands.APIKey, err)
+	}
+}
+
+func TestFromEnvConfiguresMQTTCommandAdapter(t *testing.T) {
+	t.Setenv("EDGE_SITE_ID", "ng-kaji-01")
+	t.Setenv("EDGE_GATEWAY_ID", "gateway-01")
+	t.Setenv("EDGE_COMMANDS_ENABLED", "true")
+	t.Setenv("EDGE_COMMANDS_ENDPOINT", "http://api:8081")
+	t.Setenv("EDGE_COMMANDS_API_KEY", "key-kaji")
+	t.Setenv("EDGE_COMMAND_ADAPTER", "mqtt")
+	if _, err := config.FromEnv(); err == nil {
+		t.Fatal("accepted the mqtt adapter without a broker")
+	}
+	t.Setenv("EDGE_MQTT_BROKER", "tcp://localhost:1883")
+	t.Setenv("EDGE_MQTT_CAPABILITIES_FILE", "/etc/ambagrid/meter.yaml")
+	cfg, err := config.FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := cfg.Commands.MQTT
+	if cfg.Commands.Adapter != "mqtt" || m.Broker != "tcp://localhost:1883" || m.ClientID != "ambagrid-edge-gateway-01" || m.TopicPrefix != "ambagrid/ng-kaji-01" {
+		t.Fatalf("mqtt config = %+v", cfg.Commands)
+	}
+	t.Setenv("EDGE_COMMAND_ADAPTER", "modbus")
+	if _, err := config.FromEnv(); err == nil {
+		t.Fatal("accepted an unknown command adapter")
+	}
+}
+
+func TestVictronRequiresBatteryServiceIdentity(t *testing.T) {
+	t.Setenv("EDGE_SITE_ID", "test-site")
+	t.Setenv("EDGE_GATEWAY_ID", "test-gateway")
+	t.Setenv("EDGE_VICTRON_ADDRESS", "192.0.2.1:502")
+	t.Setenv("EDGE_VICTRON_UNIT_ID", "")
+	t.Setenv("EDGE_VICTRON_DEVICE_ID", "")
+	if _, err := config.FromEnv(); err == nil {
+		t.Fatal("expected missing Victron unit/device error")
+	}
+	t.Setenv("EDGE_VICTRON_UNIT_ID", "225")
+	t.Setenv("EDGE_VICTRON_DEVICE_ID", "battery-01")
+	cfg, err := config.FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Victron.UnitID != 225 || cfg.Victron.DeviceID != "battery-01" {
+		t.Fatalf("config=%+v", cfg.Victron)
+	}
+}

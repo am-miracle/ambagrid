@@ -172,6 +172,11 @@ The one hard guard is on destroying value: a `credit_balances` row holding kWh o
 
 Revenue protection eventually becomes a field action.
 
+Each smart meter has a `credit_mode`. A `platform` meter is switched by relay
+against the balance AmbaGrid holds; a `meter` meter keeps its own balance and
+receives every payment as a `credit_meter` command for the kWh it bought. See
+[the command ledger](command-ledger.md#credit) for delivery.
+
 Common command types:
 
 - `CreditMeter`
@@ -255,3 +260,9 @@ Fake payment event
   -> ReconnectMeter or DisconnectMeter command event
   -> audit trail
 ```
+
+The first implemented vending integration is a durable operator command for
+PrismVend's VendCredit2 API. It takes an explicit currency purchase and saves
+all returned tokens in order; see [STS vending](sts-vending.md). It is separate
+from automatic kWh credit issuance and must not be used to credit the same
+purchase twice. Payment-to-token dispatch remains future work.

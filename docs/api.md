@@ -378,6 +378,64 @@ normalizes the provider payload, then calls the idempotent `ApplyPayment`
 action. Repeated provider references return the existing result without
 issuing credit twice.
 
+### `POST /v1/edge/commands/poll`
+
+Edge agents fetch their site's meter commands here. Enabled when
+`API_EDGE_API_KEYS` is set; each request carries `Authorization: Bearer <site
+key>`, and the key decides the site. One transaction:
+
+1. marks the site's `requested` and `queued` commands past `expires_at` as
+   `expired`, with a `system:command-expiry` audit event;
+2. returns up to `limit` (default 50, at most 200) commands in `requested`,
+   `queued`, or `sent` whose `expires_at` has not passed, oldest first;
+3. marks the returned `requested` commands `queued`.
+
+`device_id` is the meter's `asset_id`, the identity the gateway uses.
+`expires_in_ms` is the time left on the platform clock, so the edge can enforce
+expiry without trusting its own clock; `credit_kwh` is present on
+`credit_meter` commands. A `sent`
+command past its expiry is neither returned nor expired: the device may have
+applied it, so it waits for reconciliation.
+
+```json
+{
+  "data": [
+    {
+      "command_id": "3f2b8c1e-5d4a-4e6b-9c7d-1a2b3c4d5e6f",
+      "meter_id": "met-0101",
+      "device_id": "meter-01",
+      "command_type": "reconnect_meter",
+      "status": "queued",
+      "requested_at": "2026-10-01T14:30:00Z",
+      "expires_at": "2026-10-02T14:30:00Z",
+      "expires_in_ms": 86340000
+    }
+  ],
+  "request_id": "..."
+}
+```
+
+### `POST /v1/edge/commands/{command_id}/report`
+
+Records what happened to one command, with a `meter_command.<status>` audit
+event from actor `edge:<site_id>`.
+
+```json
+{ "status": "failed", "occurred_at": "2026-10-01T14:31:00Z", "failure_reason": "superseded by newer relay command ..." }
+```
+
+`status` is `sent`, `acknowledged`, `failed` (requires `failure_reason`), or
+`expired`. Reports are idempotent: a repeat, or a `sent` arriving after the
+outcome, returns `200` with `"changed": false`. A report contradicting a
+definite outcome, such as `failed` after `acknowledged`, returns `409`. A
+command belonging to another site returns `404`. A device outcome overrides
+server-side expiry, because the gateway may have sent the command before the
+platform's deadline passed. `occurred_at` is clamped to between the command's
+`requested_at` and the platform's current time, so a wrong gateway clock cannot
+record impossible times. Settled outcomes (`acknowledged`, `failed`, `expired`)
+publish `meter.command.acknowledged` or `meter.command.failed` through the
+outbox in the same transaction.
+
 ### `GET /healthz` and `GET /readyz`
 
 `/healthz` is liveness and never touches the database — restarting a replica
@@ -411,6 +469,10 @@ is unreachable, so the replica leaves the load balancer instead.
 | `PAYMENT_CONFIRMED_TOPIC` | `payment.confirmed` | confirmed-payment outbox topic |
 | `CREDIT_ISSUED_TOPIC` | `credit.issued` | issued-credit outbox topic |
 | `METER_COMMAND_REQUESTED_TOPIC` | `meter.command.requested` | requested-command outbox topic |
+| `API_EDGE_API_KEYS` | disabled | `site:key` pairs, comma-separated, enabling the edge command endpoints; the same format as `INGEST_HTTP_API_KEYS` |
+| `METER_COMMAND_ACKNOWLEDGED_TOPIC` | `meter.command.acknowledged` | acknowledged-command outbox topic |
+| `METER_COMMAND_FAILED_TOPIC` | `meter.command.failed` | failed- and expired-command outbox topic |
+| `API_METER_COMMAND_TTL` | `24h` | how long a new meter command stays deliverable; keep it below the edge's `EDGE_COMMAND_RETENTION` |
 
 `DB_STATEMENT_TIMEOUT` must be at least `1ms`, and `DB_QUERY_TIMEOUT` must be
 lower than `DB_STATEMENT_TIMEOUT`. The client-side timeout should fire first;
@@ -446,7 +508,8 @@ and pins the connection that cancelling it was meant to free.
 
 ## Not Here Yet
 
-- **Built-in authentication.** There is none. Run it behind a gateway that
+- **Built-in authentication.** There is none apart from the site keys on the
+  edge command endpoints. Run it behind a gateway that
   terminates TLS, authenticates callers, and injects `X-Actor-Id` for
   operator commands; do not expose it to the internet as is.
 - **Customer, balance, and command read APIs.** These ontology objects have

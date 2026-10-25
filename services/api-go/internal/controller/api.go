@@ -21,6 +21,8 @@ type API struct {
 	Fallback       FallbackService
 	Heartbeats     HeartbeatService
 	SMSWebhook     SMSWebhookProvider
+	EdgeCommands   EdgeCommandService
+	EdgeAuth       SiteKeys
 }
 
 type WebhookRoute struct {
@@ -53,6 +55,10 @@ func (a API) Handler() http.Handler {
 	for _, wh := range a.Webhooks {
 		provider := wh.Provider
 		a.handleRoute(mux, http.MethodPost, wh.Pattern, a.handleWebhookPayment(provider))
+	}
+	if a.EdgeCommands != nil {
+		a.handleRoute(mux, http.MethodPost, "/v1/edge/commands/poll", a.handlePollEdgeCommands)
+		a.handleRoute(mux, http.MethodPost, "/v1/edge/commands/{command_id}/report", a.handleReportEdgeCommand)
 	}
 	if a.Fallback != nil && a.SMSWebhook != nil {
 		a.handleRoute(mux, http.MethodPost, "/v1/sms/inbound", a.handleSMSFallback)

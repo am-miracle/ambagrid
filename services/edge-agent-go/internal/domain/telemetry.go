@@ -4,11 +4,14 @@ import "time"
 
 // Reading is a vendor-neutral sample produced by a hardware adapter.
 // Payload holds the canonical AmbaGrid JSON that the adapter produced;
-// the collector preserves it unchanged in the queued event.
+// the collector preserves it unchanged in the queued event. LastSeenAt is when
+// the device itself last answered, which trails TakenAt when a gateway reports
+// a cached reading for a device it can no longer reach.
 type Reading struct {
 	DeviceID            string
 	AssetType           AssetType
 	TakenAt             time.Time
+	LastSeenAt          time.Time
 	Payload             []byte
 	Metrics             *ElectricalMetrics
 	InternalTemperature float64

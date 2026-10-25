@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"edge-agent-go/internal/adapter"
 	"edge-agent-go/internal/domain"
 	"edge-agent-go/internal/health"
 	queuesqlite "edge-agent-go/internal/repository/sqlite"
@@ -41,6 +42,10 @@ func TestHealthAndMetricsExposeDurableQueueState(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("enqueue event: %v", err)
 	}
+	unresolved := adapter.LedgerEntry{CommandID: "cmd-1", DeviceID: "met-0101", Type: adapter.CommandCredit, RequestHash: make([]byte, 32)}
+	if err := q.BeginCommandAttempt(ctx, unresolved, time.Now().Add(-time.Minute)); err != nil {
+		t.Fatalf("record unresolved command: %v", err)
+	}
 
 	handler := health.NewHandler(q, domain.FallbackRateLimitPolicy{MaxAttempts: 3, HourlyLimit: 6, DailyLimit: 20})
 	health := httptest.NewRecorder()
@@ -49,14 +54,18 @@ func TestHealthAndMetricsExposeDurableQueueState(t *testing.T) {
 		t.Fatalf("health status = %d, want 200; body: %s", health.Code, health.Body.String())
 	}
 	var body struct {
-		State string `json:"state"`
-		Depth int64  `json:"queue_depth"`
+		State              string `json:"state"`
+		Depth              int64  `json:"queue_depth"`
+		UnresolvedCommands *int64 `json:"unresolved_commands"`
 	}
 	if err := json.Unmarshal(health.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode health response: %v", err)
 	}
 	if body.State != string(domain.QueueHealthy) || body.Depth != 1 {
 		t.Fatalf("health response = state %q depth %d", body.State, body.Depth)
+	}
+	if body.UnresolvedCommands == nil || *body.UnresolvedCommands != 1 {
+		t.Fatalf("health unresolved commands = %v, want 1", body.UnresolvedCommands)
 	}
 
 	metrics := httptest.NewRecorder()
@@ -72,6 +81,10 @@ func TestHealthAndMetricsExposeDurableQueueState(t *testing.T) {
 		`ambagrid_edge_fallback_rate_limited_incidents{reason="incident_attempt_limit"} 0`,
 		`ambagrid_edge_fallback_rate_limited_incidents{reason="site_hourly_limit"} 0`,
 		`ambagrid_edge_fallback_rate_limited_incidents{reason="site_daily_limit"} 0`,
+		"ambagrid_edge_command_stats_available 1",
+		"ambagrid_edge_commands_unresolved 1",
+		"ambagrid_edge_command_reports_pending 1",
+		"ambagrid_edge_command_reports_abandoned 0",
 	} {
 		if !strings.Contains(metrics.Body.String(), want) {
 			t.Errorf("metrics body does not contain %q\n%s", want, metrics.Body.String())

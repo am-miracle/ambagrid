@@ -1,0 +1,6 @@
+{
+  "command_id": "cmd-0101",
+  "command_type": "credit_meter",
+  "device_id": "meter-01",
+  "credit_kwh": 12.5
+}

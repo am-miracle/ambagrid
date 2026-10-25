@@ -224,9 +224,11 @@ type meterCommandDTO struct {
 	RequestedBy    string     `json:"requested_by"`
 	Reason         string     `json:"reason"`
 	RequestedAt    time.Time  `json:"requested_at"`
+	ExpiresAt      time.Time  `json:"expires_at"`
 	SentAt         *time.Time `json:"sent_at"`
 	AcknowledgedAt *time.Time `json:"acknowledged_at"`
 	FailureReason  *string    `json:"failure_reason"`
+	CreditKWh      *float64   `json:"credit_kwh,omitempty"`
 }
 
 type applyPaymentResultDTO struct {
@@ -270,18 +272,8 @@ func toApplyPaymentResultDTO(result domain.ApplyPaymentResult) applyPaymentResul
 	}
 
 	if cmd := result.MeterCommand; cmd != nil {
-		dto.MeterCommand = &meterCommandDTO{
-			CommandID:      cmd.CommandID,
-			MeterID:        cmd.MeterID,
-			CommandType:    string(cmd.CommandType),
-			Status:         string(cmd.Status),
-			RequestedBy:    cmd.RequestedBy,
-			Reason:         cmd.Reason,
-			RequestedAt:    cmd.RequestedAt,
-			SentAt:         cmd.SentAt,
-			AcknowledgedAt: cmd.AcknowledgedAt,
-			FailureReason:  cmd.FailureReason,
-		}
+		command := toMeterCommandDTO(*cmd)
+		dto.MeterCommand = &command
 	}
 
 	return dto
@@ -351,9 +343,11 @@ func toMeterCommandDTO(cmd domain.MeterCommand) meterCommandDTO {
 		RequestedBy:    cmd.RequestedBy,
 		Reason:         cmd.Reason,
 		RequestedAt:    cmd.RequestedAt,
+		ExpiresAt:      cmd.ExpiresAt,
 		SentAt:         cmd.SentAt,
 		AcknowledgedAt: cmd.AcknowledgedAt,
 		FailureReason:  cmd.FailureReason,
+		CreditKWh:      cmd.CreditKWh,
 	}
 }
 

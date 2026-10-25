@@ -7,7 +7,7 @@ import (
 	"edge-agent-go/internal/domain"
 )
 
-const schemaVersion = 9
+const schemaVersion = 10
 
 const schema = `
 CREATE TABLE IF NOT EXISTS edge_identity (
@@ -96,6 +96,49 @@ CREATE TABLE IF NOT EXISTS heartbeat_attempts (
     succeeded       INTEGER CHECK (succeeded IN (0, 1)),
     failure_reason  TEXT
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS command_ledger (
+    command_id      TEXT PRIMARY KEY,
+    device_id       TEXT NOT NULL CHECK (device_id <> ''),
+    command_type    TEXT NOT NULL CHECK (command_type <> ''),
+    request_hash    BLOB NOT NULL CHECK (length(request_hash) = 32),
+    requested_at_ms INTEGER,
+    state           TEXT NOT NULL CHECK (state IN ('in_flight', 'applied', 'rejected', 'unknown')),
+    attempt_count   INTEGER NOT NULL DEFAULT 1 CHECK (attempt_count >= 1),
+    accepted_at_ms  INTEGER NOT NULL,
+    updated_at_ms   INTEGER NOT NULL,
+    completed_at_ms INTEGER,
+    result          BLOB,
+    last_error      TEXT,
+    CHECK ((state IN ('applied', 'rejected')) = (completed_at_ms IS NOT NULL)),
+    CHECK ((state = 'applied') = (result IS NOT NULL))
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS command_ledger_prunable
+    ON command_ledger(completed_at_ms) WHERE state IN ('applied', 'rejected');
+
+CREATE INDEX IF NOT EXISTS command_ledger_unresolved
+    ON command_ledger(accepted_at_ms) WHERE state IN ('in_flight', 'unknown');
+
+CREATE INDEX IF NOT EXISTS command_ledger_relay_order
+    ON command_ledger(device_id, requested_at_ms, command_id)
+    WHERE command_type IN ('disconnect_meter', 'reconnect_meter') AND state <> 'rejected';
+
+CREATE TABLE IF NOT EXISTS command_reports (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    command_id         TEXT NOT NULL,
+    status             TEXT NOT NULL CHECK (status IN ('sent', 'acknowledged', 'failed', 'expired')),
+    occurred_at_ms     INTEGER NOT NULL,
+    failure_reason     TEXT,
+    attempt_count      INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+    next_attempt_at_ms INTEGER NOT NULL,
+    last_error         TEXT,
+    abandoned_at_ms    INTEGER,
+    CHECK ((status = 'failed') = (failure_reason IS NOT NULL))
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS command_reports_due
+    ON command_reports(next_attempt_at_ms, id) WHERE abandoned_at_ms IS NULL;
 `
 
 // Incremental migrations are historical upgrade programs, not fragments of
@@ -225,6 +268,49 @@ CREATE TABLE heartbeat_attempts (
 ) STRICT;
 `
 
+const migrateV9ToV10 = `
+CREATE TABLE command_ledger (
+    command_id      TEXT PRIMARY KEY,
+    device_id       TEXT NOT NULL CHECK (device_id <> ''),
+    command_type    TEXT NOT NULL CHECK (command_type <> ''),
+    request_hash    BLOB NOT NULL CHECK (length(request_hash) = 32),
+    requested_at_ms INTEGER,
+    state           TEXT NOT NULL CHECK (state IN ('in_flight', 'applied', 'rejected', 'unknown')),
+    attempt_count   INTEGER NOT NULL DEFAULT 1 CHECK (attempt_count >= 1),
+    accepted_at_ms  INTEGER NOT NULL,
+    updated_at_ms   INTEGER NOT NULL,
+    completed_at_ms INTEGER,
+    result          BLOB,
+    last_error      TEXT,
+    CHECK ((state IN ('applied', 'rejected')) = (completed_at_ms IS NOT NULL)),
+    CHECK ((state = 'applied') = (result IS NOT NULL))
+) STRICT;
+CREATE INDEX command_ledger_prunable
+    ON command_ledger(completed_at_ms) WHERE state IN ('applied', 'rejected');
+CREATE INDEX command_ledger_unresolved
+    ON command_ledger(accepted_at_ms) WHERE state IN ('in_flight', 'unknown');
+
+CREATE INDEX command_ledger_relay_order
+    ON command_ledger(device_id, requested_at_ms, command_id)
+    WHERE command_type IN ('disconnect_meter', 'reconnect_meter') AND state <> 'rejected';
+
+CREATE TABLE command_reports (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    command_id         TEXT NOT NULL,
+    status             TEXT NOT NULL CHECK (status IN ('sent', 'acknowledged', 'failed', 'expired')),
+    occurred_at_ms     INTEGER NOT NULL,
+    failure_reason     TEXT,
+    attempt_count      INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+    next_attempt_at_ms INTEGER NOT NULL,
+    last_error         TEXT,
+    abandoned_at_ms    INTEGER,
+    CHECK ((status = 'failed') = (failure_reason IS NOT NULL))
+) STRICT;
+
+CREATE INDEX command_reports_due
+    ON command_reports(next_attempt_at_ms, id) WHERE abandoned_at_ms IS NULL;
+`
+
 func (s *Store) initialize(ctx context.Context) error {
 	var version int
 	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
@@ -245,6 +331,9 @@ func (s *Store) initialize(ctx context.Context) error {
 		return err
 	}
 	if err := s.recoverInterrupted(ctx); err != nil {
+		return err
+	}
+	if err := s.recoverInterruptedCommands(ctx); err != nil {
 		return err
 	}
 	return s.recoverFallbackIncidents(ctx)
@@ -279,6 +368,7 @@ func (s *Store) migrateSchema(ctx context.Context, version int) error {
 			{6, migrateV6ToV7, "migrate queue schema from version 6 to 7"},
 			{7, migrateV7ToV8, "migrate queue schema from version 7 to 8"},
 			{8, migrateV8ToV9, "migrate queue schema from version 8 to 9"},
+			{9, migrateV9ToV10, "migrate queue schema from version 9 to 10"},
 		}
 		for _, m := range incremental {
 			if version > m.from {
