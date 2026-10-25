@@ -8,10 +8,12 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"api-go/internal/domain"
@@ -34,6 +36,8 @@ func (c *Client) Vend(ctx context.Context, request domain.STSVendRequest) (domai
 		return domain.STSVend{}, err
 	}
 	values := url.Values{"meterId": {request.MeterID}, "subclass": {"0"}, "value": {strconv.FormatInt(request.AmountMinor, 10)}, "messageId": {request.Reference}, "vendType": {"1"}}
+	var obtainedConnection atomic.Bool
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GotConn: func(httptrace.GotConnInfo) { obtainedConnection.Store(true) }})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, strings.NewReader(values.Encode()))
 	if err != nil {
 		return domain.STSVend{}, err
@@ -41,6 +45,11 @@ func (c *Client) Vend(ctx context.Context, request domain.STSVendRequest) (domai
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response, err := c.http.Do(req)
 	if err != nil {
+		// Only a failure before obtaining a connection proves that no POST could
+		// have been sent. Any error after that remains conservatively uncertain.
+		if !obtainedConnection.Load() {
+			return domain.STSVend{}, fmt.Errorf("%w: %w", domain.ErrVendNotSent, err)
+		}
 		return domain.STSVend{}, fmt.Errorf("PrismVend transport: %w", err)
 	}
 	defer response.Body.Close()

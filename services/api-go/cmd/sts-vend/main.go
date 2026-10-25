@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -33,7 +34,7 @@ func run() error {
 	flag.StringVar(&request.PaymentID, "payment", "", "confirmed STS-routed payment ID")
 	flag.BoolVar(&unresolved, "list-unresolved", false, "list unresolved reservations without contacting provider")
 	flag.StringVar(&recoverFile, "recover", "", "JSON result recovered from provider records")
-	flag.BoolVar(&notIssued, "not-issued", false, "record provider-confirmed non-issuance; never retries")
+	flag.BoolVar(&notIssued, "not-issued", false, "record provider non-issuance and reverse its funded credit; never retries")
 	flag.StringVar(&actor, "actor", "", "operator identity for reconciliation audit")
 	flag.StringVar(&evidence, "evidence", "", "provider transaction or support evidence reference")
 	flag.StringVar(&request.MeterID, "meter", "", "registered DRN/PAN or blind IDRecord")
@@ -97,8 +98,14 @@ func run() error {
 	}
 	service := services.NewSTSVendingService(store, vendor)
 	result, err := service.Vend(ctx, request)
-	if err != nil {
-		return err
+	return writeVendResult(os.Stdout, result, err)
+}
+
+// Issued tokens must reach stdout even when database persistence failed. The
+// nonzero exit/error still tells the operator to save and reconcile that result.
+func writeVendResult(out io.Writer, result domain.STSVend, vendErr error) error {
+	if vendErr != nil && len(result.Tokens) == 0 {
+		return vendErr
 	}
-	return json.NewEncoder(os.Stdout).Encode(result)
+	return errors.Join(vendErr, json.NewEncoder(out).Encode(result))
 }

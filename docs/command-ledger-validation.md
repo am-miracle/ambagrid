@@ -78,3 +78,33 @@ PostgreSQL tests cover concurrent reservation, mode changes, recovery audit and
 active-vend/reconciliation ownership. Review found and fixed two races (active
 reconciliation and an inconsistent mode snapshot); follow-up review was clear.
 Standards: 0 remaining findings. Spec: 0 remaining findings.
+
+## Follow-up: token preservation, retry classification and compensation
+
+- Reproduced issued-token loss on persistence failure, blank CLI output on that
+  error, pre-send marking while MQTT was disconnected, an active vend classified
+  as uncertain, connection refusal classified as uncertain, and non-issuance
+  retaining credited balance. Each targeted regression failed before its fix.
+- The service preserves issued tokens with the save error; CLI stdout retains
+  the full result while its exit status remains nonzero.
+- MQTT readiness precedes its durable send hook. Broker loss after that boundary
+  remains conservatively uncertain, because a publish may have escaped.
+- Active vends report `ErrVendInProgress`; definite pre-connection failures
+  report `ErrVendNotSent`. Safe retry retains/rechecks the original funding ID;
+  a sent request with a lost response still cannot be automatically retried.
+- Non-issuance atomically records an exact compensating credit and adjusts the
+  assignment balance. Other payments remain untouched. Insufficient balance
+  rolls back resolution/compensation; duplicate compensation is rejected.
+- Previously closed non-issued funded vends can be listed and repaired without
+  replacing their provider outcome or original timestamp.
+- The filesystem headroom test uses a pinned free-space provider, checks refusal
+  and admission deterministically, and passed 20 runs plus repeated race runs.
+
+Review identified the upgrade/repair requirement for old non-issuance records;
+it is covered by a persisted-state integration regression.
+
+Final validation for this follow-up: full API and edge Go race/integration suites,
+API/edge `go vet`, all 95 Rust tests including PostgreSQL, Rust formatting/Clippy,
+and the real TLS broker ACL check passed. The deterministic filesystem test also
+caught a deliberately disabled projected-headroom guard; source was restored and
+the test passed again. Standards: 0 remaining findings. Spec: 0 remaining findings.

@@ -174,37 +174,32 @@ func TestFilesystemReserveStopsWritesAndRaisesHealthState(t *testing.T) {
 
 func TestFilesystemReserveIncludesIncomingWriteHeadroom(t *testing.T) {
 	t.Parallel()
-
 	ctx := context.Background()
 	cfg := testConfig(filepath.Join(t.TempDir(), "queue.db"))
 	cfg.MaxStorageBytes = 32 << 20
+	freeBytes := int64(64 << 20)
+	cfg.FilesystemFreeBytes = func(string) (int64, error) { return freeBytes, nil }
+	cfg.MinFilesystemFreeBytes = 63 << 20
 	q, err := sqlite.Open(ctx, cfg)
 	if err != nil {
-		t.Fatalf("open queue for free-space measurement: %v", err)
-	}
-	stats, err := q.Stats(ctx)
-	if err != nil {
-		t.Fatalf("measure filesystem free space: %v", err)
-	}
-	if err := q.Close(); err != nil {
-		t.Fatalf("close measured queue: %v", err)
-	}
-
-	cfg.MinFilesystemFreeBytes = stats.FilesystemFreeBytes - (1 << 20)
-	q, err = sqlite.Open(ctx, cfg)
-	if err != nil {
-		t.Fatalf("reopen queue with filesystem reserve: %v", err)
+		t.Fatal(err)
 	}
 	defer q.Close()
-	current, err := q.Stats(ctx)
+	stats, err := q.Stats(ctx)
 	if err != nil {
-		t.Fatalf("read current filesystem free space: %v", err)
+		t.Fatal(err)
 	}
-	if current.FilesystemFreeBytes <= cfg.MinFilesystemFreeBytes {
-		t.Skip("filesystem free space changed too much to exercise projected-write guard")
+	if stats.FilesystemFreeBytes != freeBytes || stats.State == domain.QueueFilesystemLow {
+		t.Fatalf("unexpected pre-write capacity: %+v", stats)
 	}
-	if _, err := q.Enqueue(ctx, testEvent(make([]byte, 1<<20), domain.PriorityCritical)); !errors.Is(err, domain.ErrFilesystemReserve) {
-		t.Fatalf("enqueue that would cross filesystem reserve error = %v, want ErrFilesystemReserve", err)
+	event := testEvent(make([]byte, 1<<20), domain.PriorityCritical)
+	if _, err := q.Enqueue(ctx, event); !errors.Is(err, domain.ErrFilesystemReserve) {
+		t.Fatalf("projected write admitted: %v", err)
+	}
+	// The same write is admitted once the projected filesystem reserve is safe.
+	freeBytes = 128 << 20
+	if _, err := q.Enqueue(ctx, event); err != nil {
+		t.Fatalf("write with sufficient reserve refused: %v", err)
 	}
 }
 

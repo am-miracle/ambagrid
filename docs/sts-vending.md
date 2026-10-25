@@ -8,7 +8,7 @@ authenticated gateway. No provider token-retrieval endpoint is assumed.
 
 ## One physical credit route per payment
 
-Apply all engine migrations, including `202610250003_sts_funding_and_reconciliation.sql`.
+Apply all engine migrations, through `202610250004_sts_unsent_and_reversals.sql`.
 Before accepting STS-funded payments, commission the meter's `smart_meters` row:
 set `credit_mode='sts'`, `sts_meter_number` to its registered DRN/PAN or IDRecord,
 `sts_installation` to the provisioned provider installation name, and `sts_currency`
@@ -49,9 +49,40 @@ tokens; restrict output to the intended operator/customer. `hWh` denotes 100 Wh.
 This manual workflow does not acknowledge a hardware command or confirm physical
 entry. Physical/provider commissioning is still required.
 
+## Connection failures and active requests
+
+`ErrVendInProgress` means another process owns this payment's active vend; wait
+for it to finish and retry the same command. This status does not call for provider
+reconciliation.
+
+`ErrVendNotSent` means the HTTP client failed before obtaining a usable connection,
+so no vending POST could have been sent. The database records a safely retryable
+reservation. Repeat the same payment command when connectivity returns; its
+funding is rechecked before each retry, and its canonical identity never changes.
+HTTP errors after a connection was obtained, including a lost reply, remain
+uncertain. This distinction uses Go's [HTTP connection trace](https://pkg.go.dev/net/http/httptrace#ClientTrace).
+No HTTP status code alone is treated as proof of non-issuance.
+
+## Preserve issued tokens if saving fails
+
+If PrismVend returns tokens but the database save fails, the service returns
+those tokens **with** the persistence error. The CLI prints the complete result
+to stdout and exits nonzero, reporting the error on stderr. Capture stdout in a
+restricted file so it can be imported through `-recover`; do not re-vend this
+payment or assume a failed CLI exit means no tokens were issued.
+
+```sh
+umask 077
+set -C # refuse to overwrite an existing recovery file
+go run ./cmd/sts-vend -payment PAYMENT_UUID -meter 12345678901 -amount-minor 5001 > recovered.json
+```
+
+An empty result file from an earlier/pre-send failure contains no issued tokens;
+check the error. Protect saved tokens and deliver each purchase only once.
+
 ## Reconcile uncertain outcomes
 
-Transport failure, crash or malformed response leaves a reserved payment unresolved;
+A crash or ambiguous transport/response failure leaves the payment unresolved;
 it is never automatically resent. Inspect the queue without contacting PrismVend:
 
 ```sh
@@ -80,10 +111,24 @@ go run ./cmd/sts-vend -reference PAYMENT_UUID -meter 12345678901 \
   -not-issued -actor operator-name -evidence 'provider confirmation reference'
 ```
 
-This records an audited terminal non-issuance; it does not resend, refund or erase
-funding history. Repeating the payment's vend returns `ErrVendNotIssued`. Arrange
-any refund through the operator's payment procedure. A resolved outcome cannot be
-overwritten. Reconciliation and vending use an exclusive cross-process owner, so
+This records an audited terminal non-issuance and an exact compensating credit
+entry, subtracting only that payment's kWh and money from its assignment balance.
+The customer summary excludes reversed energy. Original payment/credit history
+is retained. It does not resend tokens or perform a cash refund; arrange any
+refund through the payment provider's procedure. Repeating the vend returns
+`ErrVendNotIssued`. An insufficient balance rejects the entire reconciliation:
+no negative/clipped balance, partial reversal, or terminal result is committed.
+Investigate the account before retrying reconciliation. A resolved provider
+outcome cannot be overwritten. Reconciliation and vending use an exclusive cross-process owner, so
 an operator cannot close a live request before its provider exchange finishes.
 Legacy unlinked reservations can also be resolved by their original reference.
 Never delete a reservation or invent a new reference to retry uncertainty.
+
+### Repair non-issuance recorded by an older version
+
+Previously closed funded vends without a compensating entry appear in
+`-list-unresolved` with `needs_balance_reversal: true`. Repeat `-not-issued` with
+the original provider evidence to apply the missing reversal and new audit entry.
+This preserves the original non-issuance timestamp and cannot compensate twice.
+Legacy **unfunded** reservations lack a provable platform credit link; closing
+those does not alter an account balance.

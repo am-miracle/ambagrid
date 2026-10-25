@@ -9,6 +9,10 @@ import (
 	"time"
 )
 
+var ErrVendNotSent = errors.New("no vending request was sent; retry the same payment")
+
+var ErrVendInProgress = errors.New("vend is in progress; retry after the active request completes")
+
 var ErrVendNotIssued = errors.New("provider confirmed no token was issued; original payment remains closed to vending")
 
 var ErrVendUncertain = errors.New("vending outcome requires operator reconciliation; do not issue under a new reference")
@@ -66,11 +70,12 @@ func (v STSVend) Validate() error {
 }
 
 type STSVendRecord struct {
-	Reference   string    `json:"reference"`
-	PaymentID   *string   `json:"payment_id"`
-	MeterID     string    `json:"meter_id"`
-	AmountMinor int64     `json:"amount_minor"`
-	RequestedAt time.Time `json:"requested_at"`
+	NeedsBalanceReversal bool      `json:"needs_balance_reversal,omitempty"`
+	Reference            string    `json:"reference"`
+	PaymentID            *string   `json:"payment_id"`
+	MeterID              string    `json:"meter_id"`
+	AmountMinor          int64     `json:"amount_minor"`
+	RequestedAt          time.Time `json:"requested_at"`
 }
 type STSReconciliation struct {
 	Reference string

@@ -77,7 +77,7 @@ func DialPaho(ctx context.Context, cfg PahoConfig) (*PahoTransport, error) {
 	return t, nil
 }
 
-func (t *PahoTransport) Publish(ctx context.Context, topic string, payload []byte) error {
+func (t *PahoTransport) Publish(ctx context.Context, topic string, payload []byte, beforeSend func() error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -85,6 +85,11 @@ func (t *PahoTransport) Publish(ctx context.Context, topic string, payload []byt
 	// to Paho can still finish after cancellation; the ledger keeps it unresolved.
 	if !t.client.IsConnectionOpen() {
 		return errors.New("MQTT command connection is not open")
+	}
+	if beforeSend != nil {
+		if err := beforeSend(); err != nil {
+			return err
+		}
 	}
 	return wait(ctx, t.client.Publish(topic, qosAtLeastOnce, false, payload))
 }

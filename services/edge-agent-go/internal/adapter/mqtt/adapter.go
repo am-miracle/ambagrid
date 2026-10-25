@@ -16,10 +16,13 @@ import (
 	"edge-agent-go/internal/adapter"
 )
 
-// Transport is the broker connection. Deliver callbacks must return quickly;
+// Transport is the broker connection. Publish calls beforeSend, when non-nil,
+// after readiness checks and immediately before handing off a command. An error
+// from that hook forbids publication. Replies and queries pass nil.
+// Deliver callbacks must return quickly;
 // the adapter only decodes and hands off on them.
 type Transport interface {
-	Publish(ctx context.Context, topic string, payload []byte) error
+	Publish(ctx context.Context, topic string, payload []byte, beforeSend func() error) error
 	Subscribe(ctx context.Context, filter string, deliver func(topic string, payload []byte)) error
 }
 
@@ -156,12 +159,11 @@ func (a *Adapter) exchange(ctx context.Context, deviceID string, req request, co
 	}
 	defer a.forget(req.Ref)
 
+	var beforeSend func() error
 	if command {
-		if err := adapter.BeforeSend(ctx); err != nil {
-			return reply{}, err
-		}
+		beforeSend = func() error { return adapter.BeforeSend(ctx) }
 	}
-	if err := a.transport.Publish(ctx, commandTopic, payload); err != nil {
+	if err := a.transport.Publish(ctx, commandTopic, payload, beforeSend); err != nil {
 		return reply{}, adapter.ContextError(fmt.Errorf("publish %s to %s: %w", req.Op, commandTopic, err))
 	}
 	select {

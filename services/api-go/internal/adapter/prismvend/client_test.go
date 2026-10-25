@@ -2,6 +2,7 @@ package prismvend_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -46,5 +47,32 @@ func TestVendDoesNotFollowRedirectOrRetryAmbiguousFailure(t *testing.T) {
 	_, err := client.Vend(context.Background(), domain.STSVendRequest{Reference: "credit-1", MeterID: "12345678901", AmountMinor: 5001})
 	if err == nil || calls != 1 {
 		t.Fatalf("calls=%d err=%v", calls, err)
+	}
+}
+
+func TestConnectionRefusedIsDefinitelyNotSent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("request reached stopped provider") }))
+	endpoint := server.URL
+	server.Close()
+	client, _ := prismvend.New(endpoint)
+	_, err := client.Vend(context.Background(), domain.STSVendRequest{Reference: "credit-1", MeterID: "12345678901", AmountMinor: 5001})
+	if !errors.Is(err, domain.ErrVendNotSent) {
+		t.Fatalf("connection refusal misclassified: %v", err)
+	}
+}
+func TestLostResponseAfterSendingIsNotSafeToRetry(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		conn.Close()
+	}))
+	defer server.Close()
+	client, _ := prismvend.New(server.URL)
+	_, err := client.Vend(context.Background(), domain.STSVendRequest{Reference: "credit-1", MeterID: "12345678901", AmountMinor: 5001})
+	if err == nil || errors.Is(err, domain.ErrVendNotSent) {
+		t.Fatalf("sent request was marked retryable: %v", err)
 	}
 }

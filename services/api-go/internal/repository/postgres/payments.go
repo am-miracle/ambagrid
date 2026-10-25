@@ -112,12 +112,13 @@ SELECT
     COALESCE(cb.remaining_kwh, 0),
     COALESCE(cb.remaining_money_value_minor_units, 0),
     COUNT(DISTINCT p.payment_id),
-    COALESCE(SUM(ec.kwh_granted), 0),
+    COALESCE((SELECT SUM(ec.kwh_granted-COALESCE(scr.kwh,0))
+        FROM energy_credits ec LEFT JOIN sts_credit_reversals scr USING(credit_id)
+        WHERE ec.assignment_id=ma.assignment_id),0),
     MAX(p.confirmed_at),
     COALESCE(cb.updated_at, ma.started_at)
 FROM meter_assignments ma
 LEFT JOIN credit_balances cb ON cb.assignment_id = ma.assignment_id
-LEFT JOIN energy_credits ec ON ec.assignment_id = ma.assignment_id
 LEFT JOIN payments p ON p.customer_id = ma.customer_id AND p.status = 'confirmed'
 WHERE ma.ended_at IS NULL
 GROUP BY ma.customer_id, ma.assignment_id, cb.remaining_kwh,

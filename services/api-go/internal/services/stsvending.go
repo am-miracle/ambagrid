@@ -3,6 +3,7 @@ package services
 import (
 	"api-go/internal/domain"
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -15,6 +16,7 @@ type STSVendStore interface {
 type STSVendSession interface {
 	Reserve(context.Context, domain.STSVendRequest) (*domain.STSVend, bool, error)
 	Complete(context.Context, string, domain.STSVend) error
+	RecordUnsent(context.Context, string, string) error
 	Close()
 }
 type STSVendor interface {
@@ -49,13 +51,21 @@ func (s *STSVendingService) Vend(ctx context.Context, request domain.STSVendRequ
 	}
 	result, err := s.vendor.Vend(ctx, request)
 	if err != nil {
+		if errors.Is(err, domain.ErrVendNotSent) {
+			saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			if saveErr := session.RecordUnsent(saveCtx, request.Reference, err.Error()); saveErr != nil {
+				return domain.STSVend{}, fmt.Errorf("%w: record unsent outcome: %w", domain.ErrVendUncertain, saveErr)
+			}
+			return domain.STSVend{}, err
+		}
 		return domain.STSVend{}, fmt.Errorf("%w: %w", domain.ErrVendUncertain, err)
 	}
 	// Persist a successful reply even if the caller's deadline just elapsed.
 	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	if err := session.Complete(saveCtx, request.Reference, result); err != nil {
-		return domain.STSVend{}, fmt.Errorf("%w: persist vending result: %w", domain.ErrVendUncertain, err)
+		return result, fmt.Errorf("%w: persist vending result: %w", domain.ErrVendUncertain, err)
 	}
 	return result, nil
 }

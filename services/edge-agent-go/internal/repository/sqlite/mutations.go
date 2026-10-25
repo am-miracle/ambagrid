@@ -294,7 +294,7 @@ WHERE singleton = 1`); err != nil {
 
 func (s *Store) checkAdmission(event domain.Event) error {
 	writeHeadroom := s.writeHeadroom(event)
-	freeBytes, err := filesystemFreeBytes(filepath.Dir(s.cfg.Path))
+	freeBytes, err := s.cfg.FilesystemFreeBytes(filepath.Dir(s.cfg.Path))
 	if err != nil {
 		return fmt.Errorf("measure filesystem capacity: %w", err)
 	}

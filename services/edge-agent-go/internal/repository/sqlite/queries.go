@@ -167,7 +167,7 @@ FROM edge_sync_state WHERE singleton = 1`).Scan(&lastSuccessMS, &lastFailure, &s
 		return domain.QueueStats{}, fmt.Errorf("measure queue disk usage: %w", err)
 	}
 	stats.DiskBytes = diskBytes
-	freeBytes, err := filesystemFreeBytes(filepath.Dir(s.cfg.Path))
+	freeBytes, err := s.cfg.FilesystemFreeBytes(filepath.Dir(s.cfg.Path))
 	if err != nil {
 		return domain.QueueStats{}, fmt.Errorf("measure filesystem capacity: %w", err)
 	}

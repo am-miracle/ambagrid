@@ -39,9 +39,14 @@ type subscription struct {
 	deliver func(string, []byte)
 }
 
-func (b *memoryBroker) Publish(ctx context.Context, topic string, payload []byte) error {
+func (b *memoryBroker) Publish(ctx context.Context, topic string, payload []byte, beforeSend func() error) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if beforeSend != nil {
+		if err := beforeSend(); err != nil {
+			return err
+		}
 	}
 	b.mu.Lock()
 	subs := append([]subscription(nil), b.subs...)
@@ -170,7 +175,7 @@ func (d *meterDevice) handle(topic string, payload []byte) {
 	}
 	d.mu.Unlock()
 	if !drop {
-		_ = d.transport.Publish(d.ctx, replyTopic, out)
+		_ = d.transport.Publish(d.ctx, replyTopic, out, nil)
 	}
 }
 

@@ -35,7 +35,7 @@ func TestSTSVendDurabilityAndConcurrentReservation(t *testing.T) {
 	for range 8 {
 		wg.Go(func() {
 			_, err := service.Vend(ctx, request)
-			if err != nil && !errors.Is(err, domain.ErrVendUncertain) {
+			if err != nil && !errors.Is(err, domain.ErrVendUncertain) && !errors.Is(err, domain.ErrVendInProgress) {
 				t.Errorf("concurrent vend: %v", err)
 			}
 		})
@@ -93,6 +93,7 @@ func fundedSTSRequest(t *testing.T, mode string) (edgeFixture, domain.STSVendReq
 	exec("INSERT INTO tariff_plans(tariff_plan_id,site_id,name,currency,price_per_kwh,effective_from)VALUES($1,$2,'STS test','NGN',250,now()-interval '1 day')", tariffID, f.siteID)
 	clean := cleaner(t, f.pool)
 	t.Cleanup(func() {
+		clean("DELETE FROM sts_credit_reversals WHERE reference IN(SELECT reference FROM sts_vends WHERE payment_id IN(SELECT payment_id FROM payments WHERE customer_id=$1))", customerID)
 		clean("DELETE FROM sts_vend_reconciliations WHERE reference IN(SELECT reference FROM sts_vends WHERE payment_id IN(SELECT payment_id FROM payments WHERE customer_id=$1))", customerID)
 		clean("DELETE FROM sts_vends WHERE payment_id IN(SELECT payment_id FROM payments WHERE customer_id=$1)", customerID)
 		clean("DELETE FROM command_event_outbox WHERE aggregate_id IN(SELECT command_id::text FROM meter_commands WHERE meter_id=$1)OR aggregate_id IN(SELECT payment_id::text FROM payments WHERE customer_id=$2)OR aggregate_id IN(SELECT credit_id::text FROM energy_credits WHERE site_id=$3)", f.meterID, customerID, f.siteID)
@@ -266,5 +267,204 @@ func TestPaymentLocksDeliveryModeUntilTransactionEnds(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestConcurrentVendReportsInProgressRatherThanUncertain(t *testing.T) {
+	f, request, _ := fundedSTSRequest(t, "sts")
+	provider := pausedVendor{entered: make(chan struct{}), release: make(chan struct{})}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	service := services.NewSTSVendingService(NewSTSVendStore(f.pool, "test-installation"), provider)
+	done := make(chan error, 1)
+	go func() { _, err := service.Vend(ctx, request); done <- err }()
+	select {
+	case <-provider.entered:
+	case <-ctx.Done():
+		t.Fatal("provider never entered")
+	}
+	_, err := service.Vend(ctx, request)
+	close(provider.release)
+	if !errors.Is(err, domain.ErrVendInProgress) || errors.Is(err, domain.ErrVendUncertain) {
+		t.Fatalf("active vend misclassified: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConfirmedNonIssuanceReversesOnlyItsFundedCredit(t *testing.T) {
+	f, request, result := fundedSTSRequest(t, "sts")
+	ctx := context.Background()
+	store := NewSTSVendStore(f.pool, "test-installation")
+	service := services.NewSTSVendingService(store, &vendingProvider{fail: true})
+	if _, err := service.Vend(ctx, request); !errors.Is(err, domain.ErrVendUncertain) {
+		t.Fatal(err)
+	}
+	if err := services.ReconcileSTSVend(ctx, store, domain.STSReconciliation{Reference: request.Reference, MeterID: request.MeterID, Actor: "operator:test", Evidence: "provider confirms no tokens issued", NotIssued: true}); err != nil {
+		t.Fatal(err)
+	}
+	var kwh float64
+	var money int64
+	if err := f.pool.QueryRow(ctx, "SELECT remaining_kwh,remaining_money_value_minor_units FROM credit_balances WHERE assignment_id=$1", result.Credit.AssignmentID).Scan(&kwh, &money); err != nil {
+		t.Fatal(err)
+	}
+	if kwh != 0 || money != 0 {
+		t.Fatalf("undelivered credit remains in balance: %v kWh, %d minor units", kwh, money)
+	}
+}
+
+type failBeforeSendOnce struct{ calls int }
+
+func (v *failBeforeSendOnce) Vend(ctx context.Context, r domain.STSVendRequest) (domain.STSVend, error) {
+	v.calls++
+	if v.calls == 1 {
+		return domain.STSVend{}, domain.ErrVendNotSent
+	}
+	return (&vendingProvider{}).Vend(ctx, r)
+}
+func TestDefinitelyUnsentVendCanRetryWithSameFunding(t *testing.T) {
+	f, request, _ := fundedSTSRequest(t, "sts")
+	ctx := context.Background()
+	store := NewSTSVendStore(f.pool, "test-installation")
+	provider := &failBeforeSendOnce{}
+	service := services.NewSTSVendingService(store, provider)
+	if _, err := service.Vend(ctx, request); !errors.Is(err, domain.ErrVendNotSent) || errors.Is(err, domain.ErrVendUncertain) {
+		t.Fatalf("unsent error=%v", err)
+	}
+	records, err := store.ListUnresolved(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range records {
+		if r.Reference == request.Reference {
+			t.Fatal("definitely unsent request requires reconciliation")
+		}
+	}
+	result, err := service.Vend(ctx, request)
+	if err != nil || len(result.Tokens) != 2 || provider.calls != 2 {
+		t.Fatalf("retry=%+v err=%v calls=%d", result, err, provider.calls)
+	}
+	if _, err := service.Vend(ctx, request); err != nil || provider.calls != 2 {
+		t.Fatalf("completed vend repeated: %v", err)
+	}
+}
+func TestRetryRechecksFundingAfterRefund(t *testing.T) {
+	f, request, _ := fundedSTSRequest(t, "sts")
+	ctx := context.Background()
+	provider := &failBeforeSendOnce{}
+	service := services.NewSTSVendingService(NewSTSVendStore(f.pool, "test-installation"), provider)
+	service.Vend(ctx, request)
+	if _, err := f.pool.Exec(ctx, "UPDATE payments SET status='reversed' WHERE payment_id=$1", request.PaymentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Vend(ctx, request); err == nil {
+		t.Fatal("refunded payment retried")
+	}
+	if provider.calls != 1 {
+		t.Fatal("provider contacted after funding changed")
+	}
+}
+func TestNonIssuancePreservesOtherPaymentsAndNetSummary(t *testing.T) {
+	f, request, _ := fundedSTSRequest(t, "sts")
+	ctx := context.Background()
+	store := NewStore(f.pool, 5*time.Second)
+	second, err := services.NewPaymentService(store).ApplyWebhookPayment(ctx, domain.ApplyPaymentCommand{Provider: "integration", ExternalReference: f.siteID + "-second", CustomerID: f.siteID + "-customer", AmountMinorUnits: 7500, Currency: "NGN", Status: domain.PaymentStatusConfirmed, ConfirmedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vends := NewSTSVendStore(f.pool, "test-installation")
+	services.NewSTSVendingService(vends, &vendingProvider{fail: true}).Vend(ctx, request)
+	reconciliation := domain.STSReconciliation{Reference: request.Reference, MeterID: request.MeterID, Actor: "operator:test", Evidence: "provider definitive non-issuance", NotIssued: true}
+	if err := services.ReconcileSTSVend(ctx, vends, reconciliation); err != nil {
+		t.Fatal(err)
+	}
+	if err := services.ReconcileSTSVend(ctx, vends, reconciliation); err == nil {
+		t.Fatal("same credit reversed twice")
+	}
+	summaries, err := store.ListCustomerSummaries(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, summary := range summaries {
+		if summary.CustomerID == second.Payment.CustomerID {
+			found = true
+			if summary.RemainingKWh != second.Credit.KWhGranted || summary.RemainingMoneyValueMinorUnits != 7500 || summary.TotalKWhPurchased != second.Credit.KWhGranted {
+				t.Fatalf("reversal changed other funding: %+v", summary)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("customer summary missing")
+	}
+}
+func TestInsufficientBalanceLeavesNonIssuanceUnresolved(t *testing.T) {
+	f, request, result := fundedSTSRequest(t, "sts")
+	ctx := context.Background()
+	store := NewSTSVendStore(f.pool, "test-installation")
+	services.NewSTSVendingService(store, &vendingProvider{fail: true}).Vend(ctx, request)
+	if _, err := f.pool.Exec(ctx, "UPDATE credit_balances SET remaining_kwh=0 WHERE assignment_id=$1", result.Credit.AssignmentID); err != nil {
+		t.Fatal(err)
+	}
+	err := services.ReconcileSTSVend(ctx, store, domain.STSReconciliation{Reference: request.Reference, MeterID: request.MeterID, Actor: "operator:test", Evidence: "provider definitive non-issuance", NotIssued: true})
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("incomplete reversal accepted: %v", err)
+	}
+	var closed bool
+	var count int
+	if err := f.pool.QueryRow(ctx, "SELECT not_issued_at IS NOT NULL FROM sts_vends WHERE reference=$1", request.Reference).Scan(&closed); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(ctx, "SELECT count(*) FROM sts_credit_reversals WHERE reference=$1", request.Reference).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if closed || count != 0 {
+		t.Fatal("partial reversal escaped transaction")
+	}
+}
+
+func TestLegacyNonIssuanceCanRepairItsMissingBalanceReversal(t *testing.T) {
+	f, request, result := fundedSTSRequest(t, "sts")
+	ctx := context.Background()
+	store := NewSTSVendStore(f.pool, "test-installation")
+	services.NewSTSVendingService(store, &vendingProvider{fail: true}).Vend(ctx, request)
+	// This is the persisted state produced by the previous release: a funded
+	// non-issuance with its balance untouched and no compensating entry.
+	var originalAt time.Time
+	if err := f.pool.QueryRow(ctx, "UPDATE sts_vends SET not_issued_at=now() WHERE reference=$1 RETURNING not_issued_at", request.Reference).Scan(&originalAt); err != nil {
+		t.Fatal(err)
+	}
+	records, err := store.ListUnresolved(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, r := range records {
+		if r.Reference == request.Reference {
+			found = r.NeedsBalanceReversal
+		}
+	}
+	if !found {
+		t.Fatal("legacy uncorrected balance hidden from operator")
+	}
+	r := domain.STSReconciliation{Reference: request.Reference, MeterID: request.MeterID, Actor: "operator:test", Evidence: "repair of previously confirmed provider non-issuance", NotIssued: true}
+	if err := services.ReconcileSTSVend(ctx, store, r); err != nil {
+		t.Fatal(err)
+	}
+	if err := services.ReconcileSTSVend(ctx, store, r); err == nil {
+		t.Fatal("legacy compensation applied twice")
+	}
+	var kwh float64
+	var money int64
+	var closedAt time.Time
+	if err := f.pool.QueryRow(ctx, "SELECT remaining_kwh,remaining_money_value_minor_units FROM credit_balances WHERE assignment_id=$1", result.Credit.AssignmentID).Scan(&kwh, &money); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(ctx, "SELECT not_issued_at FROM sts_vends WHERE reference=$1", request.Reference).Scan(&closedAt); err != nil {
+		t.Fatal(err)
+	}
+	if kwh != 0 || money != 0 || !closedAt.Equal(originalAt) {
+		t.Fatalf("repair changed history or left credit: %v %d %s (was %s)", kwh, money, closedAt, originalAt)
 	}
 }
