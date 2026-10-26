@@ -1,0 +1,37 @@
+# Victron Cerbo GX battery service (com.victronenergy.battery), from Victron's
+# dbus_modbustcp attributes.csv. The Unit ID differs per installation.
+device_type: battery_bms
+manufacturer: victron
+model: Cerbo GX battery service
+points:
+  - field: voltage
+    address: 259
+    function: holding
+    type: u16
+    scale: 0.01
+    unit: V
+    unavailable: 65535
+  - field: current
+    address: 261
+    function: holding
+    type: i16
+    scale: 0.1
+    unit: A
+    unavailable: 32767
+    optional: true
+  - field: internal_temperature
+    address: 262
+    function: holding
+    type: i16
+    scale: 0.1
+    unit: C
+    unavailable: 32767
+    optional: true
+  - field: battery_soc
+    address: 266
+    function: holding
+    type: u16
+    scale: 0.1
+    unit: "%"
+    unavailable: 65535
+    optional: true

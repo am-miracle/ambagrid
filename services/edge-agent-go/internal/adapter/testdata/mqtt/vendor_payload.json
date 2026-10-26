@@ -1,1 +1,1 @@
-{"ref": "cmd-0101", "op": "credit", "device": "meter-01", "wh": 12500}
+{"op": "credit", "device": "meter-01", "wh": 12500}

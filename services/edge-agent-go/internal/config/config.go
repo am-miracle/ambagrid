@@ -33,7 +33,7 @@ const (
 type Config struct {
 	Queue      QueueConfig
 	Collector  CollectorConfig
-	Victron    VictronConfig
+	Modbus     ModbusConfig
 	Uploader   UploaderConfig
 	SMS        SMSConfig
 	Commands   CommandConfig
@@ -61,8 +61,11 @@ type MQTTConfig struct {
 	Username         string
 	Password         string
 	CAFile           string
-	TopicPrefix      string
 	CapabilitiesFile string
+	// CommandTopic and ReplyTopic are templates with {site_id} and {device_id}.
+	CommandTopic    string
+	ReplyTopic      string
+	ResponseTimeout time.Duration
 }
 
 type SMSConfig struct {
@@ -85,10 +88,14 @@ type SMSConfig struct {
 	HeartbeatDailyLimit int
 }
 
-type VictronConfig struct {
-	Address, DeviceID string
-	UnitID            byte
-	OptionalRegisters []uint16
+// ModbusConfig reads one Modbus device over TCP. MapFile describes its
+// registers, so a new device model needs a map rather than a code change.
+type ModbusConfig struct {
+	Address  string
+	UnitID   byte
+	DeviceID string
+	MapFile  string
+	Timeout  time.Duration
 }
 
 type CollectorConfig struct {
@@ -171,6 +178,10 @@ func FromEnv() (Config, error) {
 		return Config{}, err
 	}
 	allowInsecureMQTT, err := envBool("EDGE_MQTT_ALLOW_INSECURE", false)
+	if err != nil {
+		return Config{}, err
+	}
+	mqttResponseTimeout, err := envDuration("EDGE_MQTT_RESPONSE_TIMEOUT", 30*time.Second)
 	if err != nil {
 		return Config{}, err
 	}
@@ -288,38 +299,28 @@ func FromEnv() (Config, error) {
 		return Config{}, err
 	}
 
-	victronAddress := envString("EDGE_VICTRON_ADDRESS", "")
-	victronUnit, err := envInt("EDGE_VICTRON_UNIT_ID", -1)
+	modbusAddress := envString("EDGE_MODBUS_ADDRESS", "")
+	modbusUnit, err := envInt("EDGE_MODBUS_UNIT_ID", -1)
 	if err != nil {
 		return Config{}, err
 	}
-	victronDevice := envString("EDGE_VICTRON_DEVICE_ID", "")
-	var victronOptional []uint16
-	rawOptional := envString("EDGE_VICTRON_OPTIONAL_REGISTERS", "261,262,266")
-	if rawOptional != "none" {
-		for _, field := range strings.Split(rawOptional, ",") {
-			n, err := strconv.Atoi(strings.TrimSpace(field))
-			if err != nil || (n != 259 && n != 261 && n != 262 && n != 266) {
-				return Config{}, fmt.Errorf("EDGE_VICTRON_OPTIONAL_REGISTERS must list battery registers or none")
-			}
-			victronOptional = append(victronOptional, uint16(n))
-		}
+	modbusTimeout, err := envDuration("EDGE_MODBUS_TIMEOUT", 5*time.Second)
+	if err != nil {
+		return Config{}, err
 	}
-	if victronOptional == nil {
-		victronOptional = []uint16{}
-	}
-
-	if victronAddress != "" {
-		if _, _, err := net.SplitHostPort(victronAddress); err != nil {
-			return Config{}, fmt.Errorf("EDGE_VICTRON_ADDRESS must be host:port: %w", err)
+	modbusDevice := envString("EDGE_MODBUS_DEVICE_ID", "")
+	modbusMap := envString("EDGE_MODBUS_MAP_FILE", "")
+	if modbusAddress != "" {
+		if _, _, err := net.SplitHostPort(modbusAddress); err != nil {
+			return Config{}, fmt.Errorf("EDGE_MODBUS_ADDRESS must be host:port: %w", err)
 		}
-		if victronUnit < 0 || victronUnit > 255 || victronDevice == "" {
-			return Config{}, fmt.Errorf("Victron requires EDGE_VICTRON_UNIT_ID (0..255) and EDGE_VICTRON_DEVICE_ID")
+		if modbusUnit < 0 || modbusUnit > 255 || modbusDevice == "" || modbusMap == "" {
+			return Config{}, fmt.Errorf("EDGE_MODBUS_ADDRESS requires EDGE_MODBUS_UNIT_ID (0..255), EDGE_MODBUS_DEVICE_ID and EDGE_MODBUS_MAP_FILE")
 		}
 	}
 
 	cfg := Config{
-		Victron: VictronConfig{Address: victronAddress, DeviceID: victronDevice, UnitID: byte(victronUnit), OptionalRegisters: victronOptional},
+		Modbus: ModbusConfig{Address: modbusAddress, UnitID: byte(modbusUnit), DeviceID: modbusDevice, MapFile: modbusMap, Timeout: modbusTimeout},
 		Queue: QueueConfig{
 			Path:                   envString("EDGE_QUEUE_PATH", defaultQueuePath),
 			SiteID:                 siteID,
@@ -370,8 +371,10 @@ func FromEnv() (Config, error) {
 				Username:         envString("EDGE_MQTT_USERNAME", ""),
 				Password:         os.Getenv("EDGE_MQTT_PASSWORD"),
 				CAFile:           envString("EDGE_MQTT_CA_FILE", ""),
-				TopicPrefix:      envString("EDGE_MQTT_TOPIC_PREFIX", "ambagrid/"+siteID),
 				CapabilitiesFile: envString("EDGE_MQTT_CAPABILITIES_FILE", ""),
+				CommandTopic:     envString("EDGE_MQTT_COMMAND_TOPIC", "site/{site_id}/meter/{device_id}/cmd"),
+				ReplyTopic:       envString("EDGE_MQTT_REPLY_TOPIC", "site/{site_id}/meter/{device_id}/cmd/reply"),
+				ResponseTimeout:  mqttResponseTimeout,
 			},
 		},
 		HealthAddr: envString("EDGE_HEALTH_ADDR", defaultHealthAddr),
@@ -395,8 +398,8 @@ func FromEnv() (Config, error) {
 				return Config{}, fmt.Errorf("EDGE_COMMAND_ADAPTER=simulator requires EDGE_SIMULATOR_ENABLED")
 			}
 		case "mqtt":
-			if !cfg.Commands.MQTT.AllowInsecure && (!strings.HasPrefix(cfg.Commands.MQTT.Broker, "ssl://") || cfg.Commands.MQTT.Username == "" || cfg.Commands.MQTT.Password == "" || cfg.Commands.MQTT.CAFile == "") {
-				return Config{}, fmt.Errorf("production command MQTT requires ssl://, credentials and a CA; EDGE_MQTT_ALLOW_INSECURE is for isolated development only")
+			if !cfg.Commands.MQTT.AllowInsecure && (!tlsBroker(cfg.Commands.MQTT.Broker) || cfg.Commands.MQTT.Username == "" || cfg.Commands.MQTT.Password == "" || cfg.Commands.MQTT.CAFile == "") {
+				return Config{}, fmt.Errorf("production command MQTT requires a TLS broker URL (ssl://, tls://, mqtts://), credentials and a CA; EDGE_MQTT_ALLOW_INSECURE is for isolated development only")
 			}
 			if cfg.Commands.MQTT.Broker == "" || cfg.Commands.MQTT.CapabilitiesFile == "" {
 				return Config{}, fmt.Errorf("EDGE_COMMAND_ADAPTER=mqtt requires EDGE_MQTT_BROKER and EDGE_MQTT_CAPABILITIES_FILE")
@@ -508,4 +511,14 @@ func envInt64(key string, fallback int64) (int64, error) {
 		return 0, fmt.Errorf("%s must be an integer: %w", key, err)
 	}
 	return value, nil
+}
+
+// tlsBroker reports whether the broker URL uses a scheme autopaho connects to over TLS.
+func tlsBroker(broker string) bool {
+	scheme, _, ok := strings.Cut(broker, "://")
+	switch scheme {
+	case "ssl", "tls", "mqtts", "mqtt+ssl", "tcps", "wss":
+		return ok
+	}
+	return false
 }

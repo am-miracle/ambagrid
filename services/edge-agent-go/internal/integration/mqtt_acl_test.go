@@ -3,13 +3,15 @@
 package integration_test
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"net/url"
 	"os"
 	"testing"
 	"time"
 
-	paho "github.com/eclipse/paho.mqtt.golang"
+	"github.com/eclipse/paho.golang/paho"
 )
 
 // Run against the production ACL/config with disposable test credentials.
@@ -17,6 +19,10 @@ func TestCommandBrokerAccessControl(t *testing.T) {
 	broker := os.Getenv("MQTT_ACL_TEST_BROKER")
 	if broker == "" {
 		t.Skip("requires commissioned ACL test broker; see deploy/mqtt/test-acl.sh")
+	}
+	address, err := url.Parse(broker)
+	if err != nil {
+		t.Fatal(err)
 	}
 	pem, err := os.ReadFile(os.Getenv("MQTT_ACL_TEST_CA"))
 	if err != nil {
@@ -26,22 +32,29 @@ func TestCommandBrokerAccessControl(t *testing.T) {
 	if !roots.AppendCertsFromPEM(pem) {
 		t.Fatal("test CA invalid")
 	}
-	wait := func(token paho.Token) error {
+	received := make(chan string, 16)
+	connect := func(user string, allowed bool) *paho.Client {
 		t.Helper()
-		if !token.WaitTimeout(3 * time.Second) {
-			t.Fatal("MQTT operation stalled")
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		conn, err := (&tls.Dialer{Config: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}).DialContext(ctx, "tcp", address.Host)
+		if err != nil {
+			t.Fatal(err)
 		}
-		return token.Error()
-	}
-	connect := func(user string, allowed bool) paho.Client {
-		t.Helper()
-		opts := paho.NewClientOptions().AddBroker(broker).SetClientID("acl-test-" + user).SetUsername(user).SetPassword("acl-test-password").SetAutoReconnect(false).SetConnectTimeout(time.Second)
-		opts.SetTLSConfig(&tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12})
-		client := paho.NewClient(opts)
-		err := wait(client.Connect())
+		client := paho.NewClient(paho.ClientConfig{
+			Conn: conn, ClientID: "acl-test-" + user,
+			OnPublishReceived: []func(paho.PublishReceived) (bool, error){func(pr paho.PublishReceived) (bool, error) {
+				received <- user + " got " + pr.Packet.Topic + ":" + string(pr.Packet.Payload)
+				return true, nil
+			}},
+		})
+		_, err = client.Connect(ctx, &paho.Connect{
+			ClientID: "acl-test-" + user, CleanStart: true, KeepAlive: 10,
+			Username: user, UsernameFlag: user != "", Password: []byte("acl-test-password"), PasswordFlag: user != "",
+		})
 		if !allowed {
 			if err == nil {
-				client.Disconnect(0)
+				client.Disconnect(&paho.Disconnect{})
 				t.Fatal("anonymous connection accepted")
 			}
 			return nil
@@ -49,67 +62,74 @@ func TestCommandBrokerAccessControl(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { client.Disconnect(100) })
+		t.Cleanup(func() { client.Disconnect(&paho.Disconnect{}) })
 		return client
 	}
-	connect("", false)
-	gateway := connect("gateway-ng-kaji-01", true)
-	device := connect("device-ng-kaji-01-meter-01", true)
-	other := connect("gateway-other-site", true)
-	deniedReads := make(chan string, 4)
-	wait(other.Subscribe("ambagrid/ng-kaji-01/#", 1, func(_ paho.Client, m paho.Message) { deniedReads <- m.Topic() }))
-	received := make(chan string, 16)
-	handler := func(_ paho.Client, m paho.Message) { received <- m.Topic() + ":" + string(m.Payload()) }
-	command := "ambagrid/ng-kaji-01/meter-01/command"
-	if err := wait(device.Subscribe(command, 1, handler)); err != nil {
-		t.Fatal(err)
+	subscribe := func(c *paho.Client, filter string) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if _, err := c.Subscribe(ctx, &paho.Subscribe{Subscriptions: []paho.SubscribeOptions{{Topic: filter, QoS: 1}}}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := wait(gateway.Subscribe("ambagrid/ng-kaji-01/+/command/reply", 1, handler)); err != nil {
-		t.Fatal(err)
+	publish := func(c *paho.Client, topic, payload string) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		// A refused publish still returns a PUBACK, with an error reason code;
+		// the protected subscriber not receiving it is what proves the rule.
+		_, _ = c.Publish(ctx, &paho.Publish{Topic: topic, QoS: 1, Payload: []byte(payload)})
 	}
 	expect := func(want string) {
 		t.Helper()
 		select {
 		case got := <-received:
 			if got != want {
-				t.Fatalf("received %s want %s", got, want)
+				t.Fatalf("received %q, want %q", got, want)
 			}
 		case <-time.After(time.Second):
-			t.Fatalf("missing allowed message %s", want)
+			t.Fatalf("missing allowed message %q", want)
 		}
 	}
-	if err := wait(gateway.Publish(command, 1, false, "allowed-command")); err != nil {
-		t.Fatal(err)
+	expectNothing := func(what string) {
+		t.Helper()
+		select {
+		case got := <-received:
+			t.Fatalf("%s delivered: %s", what, got)
+		case <-time.After(200 * time.Millisecond):
+		}
 	}
-	expect(command + ":allowed-command")
-	if err := wait(device.Publish(command+"/reply", 1, false, "allowed-reply")); err != nil {
-		t.Fatal(err)
-	}
-	expect(command + "/reply:allowed-reply")
-	select {
-	case topic := <-deniedReads:
-		t.Fatalf("cross-site read allowed: %s", topic)
-	case <-time.After(200 * time.Millisecond):
-	}
+
+	connect("", false)
+	gateway := connect("gateway-ng-kaji-01", true)
+	device := connect("device-ng-kaji-01-meter-01", true)
+	other := connect("gateway-other-site", true)
+
+	command := "site/ng-kaji-01/meter/meter-01/cmd"
+	subscribe(device, command)
+	subscribe(gateway, "site/ng-kaji-01/meter/+/cmd/reply")
+	subscribe(other, "site/ng-kaji-01/#")
+
+	publish(gateway, command, "allowed-command")
+	expect("device-ng-kaji-01-meter-01 got " + command + ":allowed-command")
+	publish(device, command+"/reply", "allowed-reply")
+	expect("gateway-ng-kaji-01 got " + command + "/reply:allowed-reply")
+	expectNothing("cross-site read")
+
 	for _, attempt := range []struct {
 		name   string
-		client paho.Client
+		client *paho.Client
 		topic  string
 	}{
 		{"cross-site command", other, command},
 		{"device issuing command", device, command},
 		{"gateway forging device reply", gateway, command + "/reply"},
-		{"device forging other device reply", device, "ambagrid/ng-kaji-01/meter-99/command/reply"},
+		{"device forging other device reply", device, "site/ng-kaji-01/meter/meter-99/cmd/reply"},
 	} {
 		t.Run(attempt.name, func(t *testing.T) {
-			// MQTT 3 PUBACK may acknowledge discarded unauthorized writes; assert the
-			// protected subscriber never receives them, not just Publish's return code.
-			wait(attempt.client.Publish(attempt.topic, 1, false, "forbidden"))
-			select {
-			case got := <-received:
-				t.Fatalf("unauthorized delivery: %s", got)
-			case <-time.After(200 * time.Millisecond):
-			}
+			publish(attempt.client, attempt.topic, "forbidden")
+			expectNothing("unauthorized publish")
 		})
 	}
 }

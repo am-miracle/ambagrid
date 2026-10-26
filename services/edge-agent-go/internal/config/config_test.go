@@ -188,8 +188,18 @@ func TestFromEnvConfiguresMQTTCommandAdapter(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := cfg.Commands.MQTT
-	if cfg.Commands.Adapter != "mqtt" || m.Broker != "tcp://localhost:1883" || m.ClientID != "ambagrid-edge-gateway-01" || m.TopicPrefix != "ambagrid/ng-kaji-01" {
+	if cfg.Commands.Adapter != "mqtt" || m.Broker != "tcp://localhost:1883" || m.ClientID != "ambagrid-edge-gateway-01" ||
+		m.CommandTopic != "site/{site_id}/meter/{device_id}/cmd" || m.ReplyTopic != "site/{site_id}/meter/{device_id}/cmd/reply" || m.ResponseTimeout != 30*time.Second {
 		t.Fatalf("mqtt config = %+v", cfg.Commands)
+	}
+	t.Setenv("EDGE_MQTT_COMMAND_TOPIC", "ambagrid/{site_id}/{device_id}/command")
+	t.Setenv("EDGE_MQTT_REPLY_TOPIC", "ambagrid/{site_id}/{device_id}/reply")
+	t.Setenv("EDGE_MQTT_RESPONSE_TIMEOUT", "5s")
+	if cfg, err = config.FromEnv(); err != nil {
+		t.Fatal(err)
+	}
+	if m := cfg.Commands.MQTT; m.CommandTopic != "ambagrid/{site_id}/{device_id}/command" || m.ReplyTopic != "ambagrid/{site_id}/{device_id}/reply" || m.ResponseTimeout != 5*time.Second {
+		t.Fatalf("configured topics = %+v", m)
 	}
 	t.Setenv("EDGE_COMMAND_ADAPTER", "modbus")
 	if _, err := config.FromEnv(); err == nil {
@@ -197,23 +207,34 @@ func TestFromEnvConfiguresMQTTCommandAdapter(t *testing.T) {
 	}
 }
 
-func TestVictronRequiresBatteryServiceIdentity(t *testing.T) {
+func TestModbusRequiresDeviceIdentityAndRegisterMap(t *testing.T) {
 	t.Setenv("EDGE_SITE_ID", "test-site")
 	t.Setenv("EDGE_GATEWAY_ID", "test-gateway")
-	t.Setenv("EDGE_VICTRON_ADDRESS", "192.0.2.1:502")
-	t.Setenv("EDGE_VICTRON_UNIT_ID", "")
-	t.Setenv("EDGE_VICTRON_DEVICE_ID", "")
+	t.Setenv("EDGE_MODBUS_ADDRESS", "192.0.2.1:502")
 	if _, err := config.FromEnv(); err == nil {
-		t.Fatal("expected missing Victron unit/device error")
+		t.Fatal("accepted a Modbus device without unit, device ID or register map")
 	}
-	t.Setenv("EDGE_VICTRON_UNIT_ID", "225")
-	t.Setenv("EDGE_VICTRON_DEVICE_ID", "battery-01")
+	t.Setenv("EDGE_MODBUS_UNIT_ID", "225")
+	t.Setenv("EDGE_MODBUS_DEVICE_ID", "battery-01")
+	t.Setenv("EDGE_MODBUS_MAP_FILE", "/etc/ambagrid/victron-battery.yaml")
 	cfg, err := config.FromEnv()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Victron.UnitID != 225 || cfg.Victron.DeviceID != "battery-01" {
-		t.Fatalf("config=%+v", cfg.Victron)
+	m := cfg.Modbus
+	if m.Address != "192.0.2.1:502" || m.UnitID != 225 || m.DeviceID != "battery-01" || m.MapFile != "/etc/ambagrid/victron-battery.yaml" || m.Timeout != 5*time.Second {
+		t.Fatalf("modbus config = %+v", m)
+	}
+	for _, bad := range []string{"256", "-1"} {
+		t.Setenv("EDGE_MODBUS_UNIT_ID", bad)
+		if _, err := config.FromEnv(); err == nil {
+			t.Errorf("accepted unit ID %s", bad)
+		}
+	}
+	t.Setenv("EDGE_MODBUS_UNIT_ID", "225")
+	t.Setenv("EDGE_MODBUS_ADDRESS", "no-port")
+	if _, err := config.FromEnv(); err == nil {
+		t.Error("accepted an address without a port")
 	}
 }
 
@@ -229,9 +250,17 @@ func TestProductionMQTTRequiresTLSAndCredentials(t *testing.T) {
 	t.Setenv("EDGE_MQTT_USERNAME", "gateway-site-01")
 	t.Setenv("EDGE_MQTT_PASSWORD", "test-password")
 	t.Setenv("EDGE_MQTT_CA_FILE", "/etc/ambagrid/ca.crt")
-	if _, err := config.FromEnv(); err != nil {
-		t.Fatal(err)
+	for _, broker := range []string{"ssl://broker.example:8883", "mqtts://broker.example:8883", "tls://broker.example:8883"} {
+		t.Setenv("EDGE_MQTT_BROKER", broker)
+		if _, err := config.FromEnv(); err != nil {
+			t.Errorf("rejected TLS broker %s: %v", broker, err)
+		}
 	}
+	t.Setenv("EDGE_MQTT_BROKER", "mqtt://broker.example:1883")
+	if _, err := config.FromEnv(); err == nil {
+		t.Fatal("accepted a plaintext production broker")
+	}
+	t.Setenv("EDGE_MQTT_BROKER", "ssl://broker.example:8883")
 	t.Setenv("EDGE_MQTT_USERNAME", "")
 	if _, err := config.FromEnv(); err == nil {
 		t.Fatal("accepted anonymous production broker")

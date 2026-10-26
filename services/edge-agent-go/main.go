@@ -19,9 +19,9 @@ import (
 	"time"
 
 	"edge-agent-go/internal/adapter"
+	"edge-agent-go/internal/adapter/modbus"
 	"edge-agent-go/internal/adapter/mqtt"
 	"edge-agent-go/internal/adapter/simulator"
-	"edge-agent-go/internal/adapter/victron"
 	"edge-agent-go/internal/collector"
 	"edge-agent-go/internal/commands"
 	"edge-agent-go/internal/config"
@@ -84,12 +84,21 @@ func run() (runErr error) {
 		meter = simulator.New(cfg.Queue.SiteID, simulatorOptions...)
 		sources = append(sources, meter)
 	}
-	if cfg.Victron.Address != "" {
-		battery, err := victron.New(victron.Config{SiteID: cfg.Queue.SiteID, DeviceID: cfg.Victron.DeviceID, UnitID: cfg.Victron.UnitID, OptionalRegisters: cfg.Victron.OptionalRegisters}, &victron.TCP{Address: cfg.Victron.Address})
+	if cfg.Modbus.Address != "" {
+		registerMap, err := modbus.LoadMap(cfg.Modbus.MapFile)
 		if err != nil {
-			return err
+			return fmt.Errorf("load Modbus register map: %w", err)
 		}
-		sources = append(sources, battery)
+		modbusClient := modbus.NewTCPClient(cfg.Modbus.Address, cfg.Modbus.Timeout)
+		defer modbusClient.Close()
+		device, err := modbus.New(modbus.Config{
+			Map: registerMap, UnitID: cfg.Modbus.UnitID,
+			Device: modbus.Device{SiteID: cfg.Queue.SiteID, DeviceID: cfg.Modbus.DeviceID},
+		}, modbusClient)
+		if err != nil {
+			return fmt.Errorf("configure Modbus device: %w", err)
+		}
+		sources = append(sources, device)
 	}
 	if len(sources) > 0 {
 		telemetryCollector, err := collector.New(collector.Config{
@@ -278,15 +287,19 @@ func newCommandAdapter(ctx context.Context, cfg config.Config, meter *simulator.
 	if err != nil {
 		return nil, nil, err
 	}
+	topics, err := mqtt.NewTopics(m.CommandTopic, m.ReplyTopic, cfg.Queue.SiteID)
+	if err != nil {
+		return nil, nil, err
+	}
 	dialCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	transport, err := mqtt.DialPaho(dialCtx, mqtt.PahoConfig{
+	transport, err := mqtt.DialAutopaho(dialCtx, mqtt.AutopahoConfig{
 		AllowInsecure: m.AllowInsecure, Broker: m.Broker, ClientID: m.ClientID, Username: m.Username, Password: m.Password, CAFile: m.CAFile,
 	})
 	if err != nil {
 		return nil, nil, err
 	}
-	commandAdapter, err := mqtt.New(dialCtx, mqtt.Config{TopicPrefix: m.TopicPrefix, Capabilities: caps}, transport)
+	commandAdapter, err := mqtt.New(dialCtx, mqtt.Config{Topics: topics, Capabilities: caps, ResponseTimeout: m.ResponseTimeout}, transport)
 	if err != nil {
 		transport.Close()
 		return nil, nil, err

@@ -24,7 +24,7 @@ docker run --rm -v "$fixture_dir:/fixtures" --entrypoint sh eclipse-mosquitto:2.
 docker run -d --name "$container_name" -p 127.0.0.1::8883 -v "$repo_dir/deploy/mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" -v "$repo_dir/deploy/mqtt/commands.acl:/mosquitto/config/commands.acl:ro" -v "$fixture_dir:/mosquitto/secrets:ro" eclipse-mosquitto:2.0 >/dev/null
 port=$(docker port "$container_name" 8883/tcp | sed 's/.*://')
 attempt=0
-until docker logs "$container_name" 2>&1 | rg -q 'running'; do
+until docker logs "$container_name" 2>&1 | grep -q 'running'; do
  attempt=$((attempt+1)); if [ "$attempt" -ge 20 ]; then docker logs "$container_name"; exit 1; fi
  sleep 0.2
 done
