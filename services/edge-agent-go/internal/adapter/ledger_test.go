@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -390,6 +391,49 @@ func TestLedgerRecordsSuccessReportedWithoutBeforeSend(t *testing.T) {
 	result, err := ledger.Execute(context.Background(), kwhCredit)
 	if err != nil || result.CommandID != kwhCredit.ID {
 		t.Fatalf("retry = %+v, %v; want the recorded result", result, err)
+	}
+	if n := meter.appliedCount(kwhCredit.ID); n != 1 {
+		t.Fatalf("credit applied %d times, want once", n)
+	}
+}
+
+// unavailableStore stands in for a store that cannot write while down is set.
+type unavailableStore struct {
+	*queuesqlite.Store
+	down *atomic.Bool
+}
+
+func (s unavailableStore) BeginCommandAttempt(ctx context.Context, entry adapter.LedgerEntry, at time.Time) error {
+	if s.down.Load() {
+		return errors.New("disk I/O error")
+	}
+	return s.Store.BeginCommandAttempt(ctx, entry, at)
+}
+
+func TestLedgerNeverResendsAnUnhookedCommandItCouldNotRecord(t *testing.T) {
+	sqlite, meter := tempStore(t), newMeter()
+	meter.skipHook = true
+	var down atomic.Bool
+	down.Store(true)
+	ledger := adapter.NewLedger(unavailableStore{sqlite, &down}, meter)
+
+	if _, err := ledger.Execute(context.Background(), kwhCredit); !errors.Is(err, adapter.ErrSendHookSkipped) {
+		t.Fatalf("error = %v, want ErrSendHookSkipped", err)
+	}
+	result, _ := ledger.Execute(context.Background(), kwhCredit)
+	if result.CommandID != kwhCredit.ID {
+		t.Fatalf("retry while the store is down = %+v, want the applied result", result)
+	}
+	if n := meter.appliedCount(kwhCredit.ID); n != 1 {
+		t.Fatalf("credit applied %d times while unrecorded, want once", n)
+	}
+
+	down.Store(false)
+	if result, err := ledger.Execute(context.Background(), kwhCredit); err != nil || result.CommandID != kwhCredit.ID {
+		t.Fatalf("retry after recovery = %+v, %v", result, err)
+	}
+	if got := state(t, sqlite, kwhCredit.ID); got != adapter.CommandApplied {
+		t.Fatalf("state after recovery = %q, want applied", got)
 	}
 	if n := meter.appliedCount(kwhCredit.ID); n != 1 {
 		t.Fatalf("credit applied %d times, want once", n)

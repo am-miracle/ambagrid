@@ -101,9 +101,39 @@ func (r STSReconciliation) Validate() error {
 
 // STSReversalShortfall is a discrepancy to investigate, not customer debt.
 type STSReversalShortfall struct {
-	Reference           string    `json:"reference"`
-	CreditID            string    `json:"credit_id"`
-	ShortfallKWh        string    `json:"shortfall_kwh"`
-	ShortfallMoneyMinor int64     `json:"shortfall_money_minor"`
-	ReversedAt          time.Time `json:"reversed_at"`
+	Reference           string     `json:"reference"`
+	CreditID            string     `json:"credit_id"`
+	ShortfallKWh        DecimalKWh `json:"shortfall_kwh"`
+	ShortfallMoneyMinor int64      `json:"shortfall_money_minor"`
+	ReversedAt          time.Time  `json:"reversed_at"`
+}
+
+// DecimalKWh is an exact kWh amount as Postgres numeric text, kept out of
+// float64 so reconciliation figures are never rounded.
+type DecimalKWh string
+
+var decimalKWh = regexp.MustCompile(`^-?[0-9]+(\.[0-9]+)?$`)
+
+func (k *DecimalKWh) Scan(src any) error {
+	var text string
+	switch v := src.(type) {
+	case string:
+		text = v
+	case []byte:
+		text = string(v)
+	default:
+		return fmt.Errorf("scan kWh: want numeric text, got %T", src)
+	}
+	if !decimalKWh.MatchString(text) {
+		return fmt.Errorf("scan kWh: %q is not a decimal", text)
+	}
+	*k = DecimalKWh(text)
+	return nil
+}
+
+func (k DecimalKWh) MarshalJSON() ([]byte, error) {
+	if !decimalKWh.MatchString(string(k)) {
+		return nil, fmt.Errorf("marshal kWh: %q is not a decimal", string(k))
+	}
+	return []byte(k), nil
 }

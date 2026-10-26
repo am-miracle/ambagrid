@@ -98,24 +98,26 @@ func (s *stsVendSession) Complete(ctx context.Context, reference string, result 
 	return nil
 }
 
+// stsListLimit bounds an operator listing to one screen of work.
+const stsListLimit = 200
+
 func (s *STSVendStore) ListReversalShortfalls(ctx context.Context) ([]domain.STSReversalShortfall, error) {
 	rows, err := s.pool.Query(ctx, `SELECT scr.reference,scr.credit_id::text,scr.shortfall_kwh::text,scr.shortfall_money_minor,scr.reversed_at
  FROM sts_credit_reversals scr JOIN sts_vends sv USING(reference)
  WHERE sv.installation=$1 AND (scr.shortfall_kwh>0 OR scr.shortfall_money_minor>0)
- ORDER BY scr.reversed_at,scr.reference LIMIT 200`, s.installation)
+ ORDER BY scr.reversed_at,scr.reference LIMIT $2`, s.installation, stsListLimit)
 	if err != nil {
 		return nil, fmt.Errorf("list STS reversal shortfalls: %w", err)
 	}
-	defer rows.Close()
-	shortfalls := []domain.STSReversalShortfall{}
-	for rows.Next() {
+	shortfalls, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.STSReversalShortfall, error) {
 		var r domain.STSReversalShortfall
-		if err := rows.Scan(&r.Reference, &r.CreditID, &r.ShortfallKWh, &r.ShortfallMoneyMinor, &r.ReversedAt); err != nil {
-			return nil, fmt.Errorf("scan STS reversal shortfall: %w", err)
-		}
-		shortfalls = append(shortfalls, r)
+		err := row.Scan(&r.Reference, &r.CreditID, &r.ShortfallKWh, &r.ShortfallMoneyMinor, &r.ReversedAt)
+		return r, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("scan STS reversal shortfalls: %w", err)
 	}
-	return shortfalls, rows.Err()
+	return shortfalls, nil
 }
 
 func (s *STSVendStore) ListUnresolved(ctx context.Context) ([]domain.STSVendRecord, error) {
@@ -124,20 +126,19 @@ func (s *STSVendStore) ListUnresolved(ctx context.Context) ([]domain.STSVendReco
   (not_issued_at IS NULL AND NOT safe_to_retry) OR
   (not_issued_at IS NOT NULL AND payment_id IS NOT NULL AND NOT EXISTS(
    SELECT 1 FROM sts_credit_reversals WHERE reference=sv.reference)))
- ORDER BY requested_at,reference LIMIT 200`, s.installation)
+ ORDER BY requested_at,reference LIMIT $2`, s.installation, stsListLimit)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list unresolved STS vends: %w", err)
 	}
-	defer rows.Close()
-	records := []domain.STSVendRecord{}
-	for rows.Next() {
+	records, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.STSVendRecord, error) {
 		var r domain.STSVendRecord
-		if err := rows.Scan(&r.Reference, &r.PaymentID, &r.MeterID, &r.AmountMinor, &r.RequestedAt, &r.NeedsBalanceReversal); err != nil {
-			return nil, err
-		}
-		records = append(records, r)
+		err := row.Scan(&r.Reference, &r.PaymentID, &r.MeterID, &r.AmountMinor, &r.RequestedAt, &r.NeedsBalanceReversal)
+		return r, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("scan unresolved STS vends: %w", err)
 	}
-	return records, rows.Err()
+	return records, nil
 }
 func (s *STSVendStore) Reconcile(ctx context.Context, r domain.STSReconciliation) error {
 	if err := r.Validate(); err != nil {

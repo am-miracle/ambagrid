@@ -58,10 +58,18 @@ type Ledger struct {
 
 	mu     sync.Mutex
 	owners map[string]chan struct{}
+	// unrecorded holds commands a device applied while the store could not
+	// record them; it lasts only as long as the process.
+	unrecorded map[string]unrecordedCommand
+}
+
+type unrecordedCommand struct {
+	entry  LedgerEntry
+	result CommandResult
 }
 
 func NewLedger(store LedgerStore, inner CommandAdapter) *Ledger {
-	return &Ledger{store: store, inner: inner, now: time.Now, owners: make(map[string]chan struct{})}
+	return &Ledger{store: store, inner: inner, now: time.Now, owners: make(map[string]chan struct{}), unrecorded: make(map[string]unrecordedCommand)}
 }
 
 func (l *Ledger) Capabilities() Capabilities {
@@ -88,6 +96,19 @@ func (l *Ledger) Execute(ctx context.Context, cmd Command) (CommandResult, error
 		return CommandResult{}, err
 	}
 	defer release()
+
+	l.mu.Lock()
+	pending, unrecorded := l.unrecorded[cmd.ID]
+	l.mu.Unlock()
+	if unrecorded {
+		if !bytes.Equal(pending.entry.RequestHash, hash) {
+			return CommandResult{}, fmt.Errorf("%w: command ID %q was already used with different parameters", ErrInvalidCommand, cmd.ID)
+		}
+		if err := l.recordApplied(ctx, pending); err != nil {
+			return pending.result, fmt.Errorf("%w: command %q applied but still unrecorded: %w", ErrSendHookSkipped, cmd.ID, err)
+		}
+		return pending.result, nil
+	}
 
 	entry, found, err := l.store.LoadCommand(ctx, cmd.ID)
 	if err != nil {
@@ -189,10 +210,8 @@ func (l *Ledger) send(ctx context.Context, cmd Command, hash []byte) (CommandRes
 		}
 		// The adapter broke its contract, but the device acted: record it as
 		// applied so a retry finds it instead of sending it again.
-		if recordErr := l.store.BeginCommandAttempt(persistCtx, entry, now); recordErr != nil {
+		if recordErr := l.recordApplied(ctx, unrecordedCommand{entry: entry, result: result}); recordErr != nil {
 			l.record(cmd.ID, recordErr)
-		} else {
-			l.record(cmd.ID, l.store.CompleteCommand(persistCtx, cmd.ID, CommandApplied, &result, "", now))
 		}
 		return result, fmt.Errorf("%w: command %q", ErrSendHookSkipped, cmd.ID)
 	}
@@ -208,6 +227,25 @@ func (l *Ledger) send(ctx context.Context, cmd Command, hash []byte) (CommandRes
 		l.record(cmd.ID, l.store.MarkCommandUnknown(persistCtx, cmd.ID, err.Error(), now))
 		return CommandResult{}, fmt.Errorf("%w: %w", ErrOutcomeUnknown, err)
 	}
+}
+
+// recordApplied stores a command the device applied without the send hook. On
+// failure it is kept in memory, so a retry in this process is never resent.
+func (l *Ledger) recordApplied(ctx context.Context, applied unrecordedCommand) error {
+	persistCtx := context.WithoutCancel(ctx)
+	now := l.now().UTC()
+	err := l.store.BeginCommandAttempt(persistCtx, applied.entry, now)
+	if err == nil {
+		err = l.store.CompleteCommand(persistCtx, applied.entry.CommandID, CommandApplied, &applied.result, "", now)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if err != nil {
+		l.unrecorded[applied.entry.CommandID] = applied
+		return err
+	}
+	delete(l.unrecorded, applied.entry.CommandID)
+	return nil
 }
 
 // record logs rather than returns a failure to store an outcome the device has
