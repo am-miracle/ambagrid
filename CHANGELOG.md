@@ -42,6 +42,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **edge:** Record commands applied without the send hook
 - **sts:** Reverse what the balance holds and record shortfalls
 - **adapters:** Retain applied results through storage outages
+- **deps:** Patch ctutils constant-time advisory
 
 ### Maintenance
 

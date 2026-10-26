@@ -29,8 +29,17 @@ changes were checked against the adapter requirements before committing.
 - Standards review: 0 remaining actionable findings. Spec review: 0 remaining
   actionable findings after fixing cancellation, topic collisions and readiness.
 
-This follow-up did not rerun the earlier ten reported bug injections or the Rust
-suite; Rust code and migrations are unchanged. Physical hardware and a live
+The first follow-up CI run passed all Go checks and Rust formatting, Clippy,
+unit and database-backed tests, then failed its dependency audit on `ctutils`
+0.4.2 ([RUSTSEC-2026-0385](https://rustsec.org/advisories/RUSTSEC-2026-0385.html)).
+The lockfile now selects patched 0.4.4 with its checksum verified against the
+official crates.io registry metadata. Crates.io DNS was unavailable locally,
+so CI supplies validation of that dependency update. The audit also reported
+allowed warnings for Tokio I/O safety and a yanked chacha20 release; those do
+not cause the audit failure and are unchanged by this focused patch.
+
+This follow-up did not rerun the earlier ten reported bug injections. Rust
+application code and migrations are unchanged. Physical hardware and a live
 PrismVend installation still require commissioning.
 
 Validated 2026-10-25, including the existing uncommitted command-delivery WIP
