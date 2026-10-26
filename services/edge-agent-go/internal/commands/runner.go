@@ -41,18 +41,23 @@ type Config struct {
 	CommandTimeout time.Duration
 }
 
+type Executor interface {
+	Execute(context.Context, adapter.Command) (adapter.CommandResult, error)
+}
+
 // Runner handles one command at a time in request order, which is what lets
 // the relay ordering rule compare a command against everything sent before it.
 type Runner struct {
 	cfg      Config
 	platform Platform
-	executor adapter.CommandAdapter
+	executor Executor
 	store    Store
 	now      func() time.Time
 }
 
-// New expects executor to be an *adapter.Ledger, which supplies at-most-once delivery.
-func New(cfg Config, platform Platform, executor adapter.CommandAdapter, store Store) *Runner {
+// New expects executor to supply durable at-most-once delivery, either through
+// a Ledger or a device router whose individual routes each use a Ledger.
+func New(cfg Config, platform Platform, executor Executor, store Store) *Runner {
 	return &Runner{cfg: cfg, platform: platform, executor: executor, store: store, now: time.Now}
 }
 

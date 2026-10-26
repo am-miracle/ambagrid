@@ -11,6 +11,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"edge-agent-go/internal/adapter"
@@ -36,6 +37,8 @@ type Transport interface {
 }
 
 type Config struct {
+	// DeviceID binds an inventory adapter to one device; empty keeps the legacy site-wide mode.
+	DeviceID     string
 	Topics       Topics
 	Capabilities adapter.Capabilities
 	// ResponseTimeout bounds the wait for a device reply. A PUBACK only means
@@ -101,7 +104,14 @@ func New(ctx context.Context, cfg Config, transport Transport) (adapter.CommandA
 		cfg.ResponseTimeout = DefaultResponseTimeout
 	}
 	a := &Adapter{cfg: cfg, transport: transport, now: time.Now, waiting: make(map[string]waiter)}
-	if err := transport.Subscribe(ctx, cfg.Topics.ReplyFilter(), a.deliver); err != nil {
+	filter := cfg.Topics.ReplyFilter()
+	if cfg.DeviceID != "" {
+		if err := topicSafe(cfg.DeviceID); err != nil {
+			return nil, err
+		}
+		filter = cfg.Topics.Reply(cfg.DeviceID)
+	}
+	if err := transport.Subscribe(ctx, filter, a.deliver); err != nil {
 		return nil, fmt.Errorf("subscribe to meter replies: %w", err)
 	}
 	if cfg.Capabilities.Capabilities.OutcomeQuery {
@@ -115,6 +125,9 @@ func (a *Adapter) Capabilities() adapter.Capabilities {
 }
 
 func (a *Adapter) Execute(ctx context.Context, cmd adapter.Command) (adapter.CommandResult, error) {
+	if a.cfg.DeviceID != "" && cmd.DeviceID != a.cfg.DeviceID {
+		return adapter.CommandResult{}, fmt.Errorf("%w: adapter belongs to device %q", adapter.ErrUnsupported, a.cfg.DeviceID)
+	}
 	if err := ctx.Err(); err != nil {
 		return adapter.CommandResult{}, adapter.ContextError(err)
 	}
@@ -140,6 +153,9 @@ func (a *Adapter) Execute(ctx context.Context, cmd adapter.Command) (adapter.Com
 }
 
 func (r reconcilingAdapter) Outcome(ctx context.Context, cmd adapter.Command) (adapter.CommandResult, bool, error) {
+	if r.cfg.DeviceID != "" && cmd.DeviceID != r.cfg.DeviceID {
+		return adapter.CommandResult{}, false, fmt.Errorf("%w: adapter belongs to device %q", adapter.ErrUnsupported, r.cfg.DeviceID)
+	}
 	if err := topicSafe(cmd.DeviceID); err != nil {
 		return adapter.CommandResult{}, false, err
 	}
@@ -161,6 +177,7 @@ func (r reconcilingAdapter) Outcome(ctx context.Context, cmd adapter.Command) (a
 // data. Only commands mark the send through adapter.BeforeSend; an outcome
 // query changes nothing on the device.
 func (a *Adapter) exchange(ctx context.Context, deviceID, correlation string, req request, command bool) (reply, error) {
+	caller := ctx
 	ctx, cancel := context.WithTimeout(ctx, a.cfg.ResponseTimeout)
 	defer cancel()
 	payload, err := json.Marshal(req)
@@ -174,18 +191,30 @@ func (a *Adapter) exchange(ctx context.Context, deviceID, correlation string, re
 	}
 	defer a.forget(correlation)
 
-	var beforeSend func() error
-	if command {
-		beforeSend = func() error { return adapter.BeforeSend(ctx) }
+	var handedOff atomic.Bool
+	beforeSend := func() error {
+		if command {
+			if err := adapter.BeforeSend(ctx); err != nil {
+				return err
+			}
+		}
+		handedOff.Store(true)
+		return nil
 	}
 	msg := Message{Topic: a.cfg.Topics.Command(deviceID), Payload: payload, ResponseTopic: replyTopic, CorrelationData: []byte(correlation)}
 	if err := a.transport.Publish(ctx, msg, beforeSend); err != nil {
+		if handedOff.Load() && caller.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return reply{}, fmt.Errorf("%w: %w", adapter.ErrProtocolTimeout, err)
+		}
 		return reply{}, adapter.ContextError(fmt.Errorf("publish %s to %s: %w", req.Op, msg.Topic, err))
 	}
 	select {
 	case got := <-replies:
 		return got, nil
 	case <-ctx.Done():
+		if handedOff.Load() && caller.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return reply{}, fmt.Errorf("%w: %w", adapter.ErrProtocolTimeout, ctx.Err())
+		}
 		return reply{}, adapter.ContextError(ctx.Err())
 	}
 }

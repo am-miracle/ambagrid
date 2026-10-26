@@ -218,6 +218,16 @@ suitable for hardware commands in production.
 
 ## Modbus telemetry
 
+For multiple devices or mixed command adapters, set `EDGE_DEVICES_FILE` to a
+device inventory such as `deploy/devices.example.yaml`. Paths in that file are
+relative to the inventory. It replaces the legacy adapter-selection variables;
+broker credentials and platform polling settings remain in the environment.
+See [per-device configuration and metrics](../../docs/hardware-adapters.md#per-device-configuration).
+
+Adapter health metrics include success timestamps, error/timeout counters and
+unsupported fields/commands under `ambagrid_edge_adapter_`, labeled by adapter
+and configured device. They remain available even when queue statistics fail.
+
 A Modbus TCP device can feed the collector without the simulator. Set
 `EDGE_MODBUS_ADDRESS` to `host:port`, `EDGE_MODBUS_UNIT_ID` to its unit ID,
 `EDGE_MODBUS_DEVICE_ID` to its platform asset ID, and `EDGE_MODBUS_MAP_FILE` to

@@ -59,6 +59,7 @@ func (a *Adapter) Read(ctx context.Context) ([]domain.Reading, error) {
 		want := uint16(p.Type.Words())
 		words, err := a.client.ReadRegisters(ctx, a.cfg.UnitID, p.Function, p.Address, want)
 		if errors.Is(err, ErrRegisterUnavailable) {
+			adapter.ReportUnsupportedField(ctx)
 			continue
 		}
 		if err != nil {

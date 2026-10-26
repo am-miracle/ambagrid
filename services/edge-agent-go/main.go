@@ -2,8 +2,8 @@
 // meters, batteries, and inverters, persists them in a SQLite durable queue,
 // and uploads batches to the ingestion service over HTTP. The queue survives
 // power loss and connectivity gaps — records are only removed after the server
-// acknowledges them. All configuration is environment-based so the same binary
-// runs across sites with different identities and endpoints.
+// acknowledges them. Environment settings and an optional device inventory let
+// the same binary run across sites with different hardware and endpoints.
 package main
 
 import (
@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"edge-agent-go/internal/adapter"
-	"edge-agent-go/internal/adapter/modbus"
 	"edge-agent-go/internal/adapter/mqtt"
 	"edge-agent-go/internal/adapter/simulator"
 	"edge-agent-go/internal/collector"
@@ -66,40 +65,20 @@ func run() (runErr error) {
 		}
 	}()
 
+	adapterMetrics := health.NewAdapterMetrics()
+	hardware, err := configureHardware(ctx, cfg, durableQueue, adapterMetrics)
+	if err != nil {
+		return fmt.Errorf("configure hardware: %w", err)
+	}
+	defer hardware.close()
+
 	var workerWG sync.WaitGroup
 	workerCtx, cancelWorkers := context.WithCancel(ctx)
 	defer func() {
 		cancelWorkers()
 		workerWG.Wait()
 	}()
-
-	var meter *simulator.Adapter
-	var sources []collector.Source
-	if cfg.Collector.Enabled {
-		simulatorOptions := []simulator.Option{}
-		if cfg.Collector.Faults {
-			simulatorOptions = append(simulatorOptions, simulator.WithCriticalFaults())
-		}
-		// One instance serves telemetry and commands, so relay changes show up in readings.
-		meter = simulator.New(cfg.Queue.SiteID, simulatorOptions...)
-		sources = append(sources, meter)
-	}
-	if cfg.Modbus.Address != "" {
-		registerMap, err := modbus.LoadMap(cfg.Modbus.MapFile)
-		if err != nil {
-			return fmt.Errorf("load Modbus register map: %w", err)
-		}
-		modbusClient := modbus.NewTCPClient(cfg.Modbus.Address, cfg.Modbus.Timeout)
-		defer modbusClient.Close()
-		device, err := modbus.New(modbus.Config{
-			Map: registerMap, UnitID: cfg.Modbus.UnitID,
-			Device: modbus.Device{SiteID: cfg.Queue.SiteID, DeviceID: cfg.Modbus.DeviceID},
-		}, modbusClient)
-		if err != nil {
-			return fmt.Errorf("configure Modbus device: %w", err)
-		}
-		sources = append(sources, device)
-	}
+	sources := hardware.sources
 	if len(sources) > 0 {
 		telemetryCollector, err := collector.New(collector.Config{
 			SiteID:           cfg.Queue.SiteID,
@@ -120,20 +99,19 @@ func run() (runErr error) {
 	}
 
 	if cfg.Commands.Enabled {
-		commandAdapter, closeAdapter, err := newCommandAdapter(ctx, cfg, meter)
-		if err != nil {
-			return fmt.Errorf("configure meter command adapter: %w", err)
-		}
-		defer closeAdapter()
 		runner := commands.New(
 			commands.Config{PollInterval: cfg.Commands.PollInterval, CommandTimeout: cfg.Commands.Timeout},
 			commands.NewHTTPClient(cfg.Commands.Endpoint, cfg.Commands.APIKey, cfg.Commands.Timeout),
-			adapter.NewLedger(durableQueue, commandAdapter), durableQueue,
+			hardware.executor, durableQueue,
 		)
 		workerWG.Add(1)
 		go func() {
 			defer workerWG.Done()
-			slog.Info("meter command delivery started", "endpoint", cfg.Commands.Endpoint, "adapter", cfg.Commands.Adapter)
+			selection := cfg.Commands.Adapter
+			if cfg.DevicesFile != "" {
+				selection = "inventory"
+			}
+			slog.Info("meter command delivery started", "endpoint", cfg.Commands.Endpoint, "adapter", selection)
 			runner.Run(workerCtx)
 		}()
 	}
@@ -197,7 +175,7 @@ func run() (runErr error) {
 		Addr: cfg.HealthAddr,
 		Handler: health.NewHandler(durableQueue, domain.FallbackRateLimitPolicy{
 			MaxAttempts: cfg.SMS.MaxAttempts, HourlyLimit: cfg.SMS.HourlyLimit, DailyLimit: cfg.SMS.DailyLimit,
-		}),
+		}, adapterMetrics),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	serverErrors := make(chan error, 1)
@@ -291,18 +269,25 @@ func newCommandAdapter(ctx context.Context, cfg config.Config, meter *simulator.
 	if err != nil {
 		return nil, nil, err
 	}
-	dialCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	transport, err := mqtt.DialAutopaho(dialCtx, mqtt.AutopahoConfig{
-		AllowInsecure: m.AllowInsecure, Broker: m.Broker, ClientID: m.ClientID, Username: m.Username, Password: m.Password, CAFile: m.CAFile,
-	})
+	transport, err := dialCommandMQTT(ctx, m)
 	if err != nil {
 		return nil, nil, err
 	}
-	commandAdapter, err := mqtt.New(dialCtx, mqtt.Config{Topics: topics, Capabilities: caps, ResponseTimeout: m.ResponseTimeout}, transport)
+	subscribeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	commandAdapter, err := mqtt.New(subscribeCtx, mqtt.Config{Topics: topics, Capabilities: caps, ResponseTimeout: m.ResponseTimeout}, transport)
 	if err != nil {
 		transport.Close()
 		return nil, nil, err
 	}
 	return commandAdapter, transport.Close, nil
+}
+
+func dialCommandMQTT(ctx context.Context, m config.MQTTConfig) (*mqtt.AutopahoTransport, error) {
+	dialCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	return mqtt.DialAutopaho(dialCtx, mqtt.AutopahoConfig{
+		AllowInsecure: m.AllowInsecure, Broker: m.Broker, ClientID: m.ClientID,
+		Username: m.Username, Password: m.Password, CAFile: m.CAFile,
+	})
 }

@@ -212,3 +212,27 @@ func TestAdapterReadsVictronBatteryOverTCP(t *testing.T) {
 		t.Fatalf("reading = %+v", r)
 	}
 }
+
+func TestTCPClientDistinguishesProtocolTimeoutFromCallerDeadline(t *testing.T) {
+	s := startServer(t)
+	s.stall = make(chan struct{})
+	blocked := s.stall
+	t.Cleanup(func() { close(blocked) })
+	client := modbus.NewTCPClient(s.listener.Addr().String(), 30*time.Millisecond)
+	t.Cleanup(func() { client.Close() })
+	if _, err := client.ReadRegisters(context.Background(), 1, modbus.Holding, 1, 1); !errors.Is(err, adapter.ErrProtocolTimeout) || !errors.Is(err, adapter.ErrTimeout) {
+		t.Fatalf("protocol timeout: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	if _, err := client.ReadRegisters(ctx, 1, modbus.Holding, 1, 1); !errors.Is(err, adapter.ErrTimeout) || errors.Is(err, adapter.ErrProtocolTimeout) {
+		t.Fatalf("caller timeout classified as protocol: %v", err)
+	}
+	s.mu.Lock()
+	s.stall = nil
+	s.holding[1] = 230
+	s.mu.Unlock()
+	if words, err := client.ReadRegisters(context.Background(), 1, modbus.Holding, 1, 1); err != nil || len(words) != 1 || words[0] != 230 {
+		t.Fatalf("read after timeouts did not reconnect cleanly: %v %v", words, err)
+	}
+}

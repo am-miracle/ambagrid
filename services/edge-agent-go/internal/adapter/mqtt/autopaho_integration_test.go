@@ -157,3 +157,22 @@ func TestAutopahoRestoresSubscriptionsAfterReconnecting(t *testing.T) {
 		t.Fatalf("command after reconnect = %+v, %v", result, err)
 	}
 }
+
+func TestDeviceAdaptersShareAutopahoWithoutOverwritingReplySubscriptions(t *testing.T) {
+	address, _ := startBroker(t, "127.0.0.1:0")
+	edge, meter := dialTransport(t, address, "edge"), dialTransport(t, address, "meter")
+	newMeterDevice(t, meter)
+	var devices []adapter.CommandAdapter
+	for _, id := range []string{"meter-01", "meter-02"} {
+		a, err := mqtt.New(context.Background(), mqtt.Config{DeviceID: id, Topics: testTopics(t), Capabilities: meterCaps, ResponseTimeout: time.Second}, edge)
+		if err != nil {
+			t.Fatal(err)
+		}
+		devices = append(devices, a)
+	}
+	for i, id := range []string{"meter-01", "meter-02"} {
+		if _, err := execute(devices[i], adapter.Command{ID: "status-" + id, DeviceID: id, Type: adapter.CommandRequestStatus}); err != nil {
+			t.Fatalf("%s: %v", id, err)
+		}
+	}
+}

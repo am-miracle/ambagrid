@@ -25,6 +25,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **edge:** Add durable telemetry and critical fallback (#21)
 - **adapters:** Deliver durable commands and add Victron and STS integrations
 - **edge:** Use MQTT v5 requests and mapped Modbus telemetry
+- **edge:** Add adapter health metrics and per-device wiring
 
 ### Documentation
 

@@ -310,8 +310,8 @@ func TestAdapterEnforcesItsOwnResponseTimeout(t *testing.T) {
 	}()
 	select {
 	case err := <-done:
-		if !errors.Is(err, adapter.ErrTimeout) {
-			t.Fatalf("error = %v, want ErrTimeout", err)
+		if !errors.Is(err, adapter.ErrTimeout) || !errors.Is(err, adapter.ErrProtocolTimeout) {
+			t.Fatalf("error = %v, want protocol ErrTimeout", err)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("adapter kept waiting for a reply with no response timeout")
@@ -382,5 +382,25 @@ func TestMQTTCreditRequiresReceiverDeduplication(t *testing.T) {
 	_, err := mqtt.New(context.Background(), mqtt.Config{Topics: testTopics(t), Capabilities: caps}, &memoryBroker{})
 	if !errors.Is(err, adapter.ErrUnsupported) {
 		t.Fatalf("error = %v, want unsafe credit rejected", err)
+	}
+}
+
+func TestLocalSendHookDeadlineIsNotAProtocolTimeout(t *testing.T) {
+	broker := &memoryBroker{}
+	a, err := mqtt.New(context.Background(), mqtt.Config{Topics: testTopics(t), Capabilities: meterCaps, ResponseTimeout: 10 * time.Millisecond}, broker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := adapter.WithSendHook(context.Background(), func() error {
+		// Local persistence is still busy after the exchange budget expires.
+		time.Sleep(30 * time.Millisecond)
+		return context.DeadlineExceeded
+	})
+	_, err = a.Execute(ctx, adapter.Command{ID: "blocked-store", DeviceID: "meter-01", Type: adapter.CommandDisconnect})
+	if !errors.Is(err, adapter.ErrTimeout) || errors.Is(err, adapter.ErrProtocolTimeout) {
+		t.Fatalf("local wait classified as device timeout: %v", err)
+	}
+	if len(broker.published) != 0 {
+		t.Fatal("published despite failed local persistence")
 	}
 }

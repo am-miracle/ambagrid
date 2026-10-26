@@ -15,7 +15,10 @@ var (
 	ErrUnsupported = errors.New("adapter does not support this command or field")
 	// ErrTimeout may expire before the device is contacted, e.g. while queued
 	// behind another command, so it alone must not count as a device protocol timeout.
-	ErrTimeout         = errors.New("adapter operation exceeded its deadline")
+	ErrTimeout = errors.New("adapter operation exceeded its deadline")
+	// ErrProtocolTimeout marks an adapter-configured device exchange timeout,
+	// excluding caller deadlines and queued waits. It also matches ErrTimeout.
+	ErrProtocolTimeout = fmt.Errorf("device protocol timed out: %w", ErrTimeout)
 	ErrDeviceRejected  = errors.New("device rejected the command")
 	ErrInvalidCommand  = errors.New("command is invalid")
 	ErrInvalidResponse = errors.New("device response could not be decoded")

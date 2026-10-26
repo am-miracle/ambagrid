@@ -1,5 +1,34 @@
 # Command delivery and vendor integration validation
 
+## Adapter health and per-device wiring — 2026-10-26
+
+- Added independent Prometheus adapter metrics: read/command success timestamps,
+  execution errors, device protocol timeouts and unsupported fields/commands.
+  Queue-statistics failure does not hide these series. Cached command results
+  do not refresh device health; ledger capability refusals still count as errors.
+- Added strict `EDGE_DEVICES_FILE` inventories with independent telemetry and
+  command choices, per-device capabilities, relative map paths and no routing
+  fallback for unknown devices. Existing environment-only deployments still work.
+- Simulator state is shared between its telemetry and command route. MQTT devices
+  share one transport with separate exact reply subscriptions. Every command
+  route retains ledger protection. Startup failures clean up opened transports;
+  shutdown stops workers before closing hardware.
+- Full edge `go vet ./...` and `go test -race -tags=integration ./... -count=1`
+  passed. New tests cover inventory validation/TLS policy, runtime routing and
+  ledger retries, metric values during queue failure, unsupported optional Modbus
+  registers, shared real MQTT transport subscriptions, and protocol timeout
+  classification. The exact explicit CI conformance command was also checked.
+- A real TCP regression exposed a cached closed Modbus connection after timeout;
+  the error path now resets it. Cancellation/timeout cases passed ten repeated
+  race runs, with an additional successful-read-after-timeouts assertion in the
+  final suite. A pre-send persistence regression failed before the MQTT handoff
+  guard and passed five race repeats afterward; local waits no longer count as
+  device protocol timeouts.
+- Standards review: 0 remaining actionable findings. Spec review: 0 remaining
+  actionable findings after fixing pre-send timeout attribution.
+- Updated the roadmap, documented inventory/metrics, shipped example configuration,
+  and replaced the obsolete statement that upload remained future work.
+
 ## MQTT v5 and register-map follow-up — 2026-10-26
 
 The uncommitted MQTT v5, YAML Modbus map, ledger fallback and exact STS decimal

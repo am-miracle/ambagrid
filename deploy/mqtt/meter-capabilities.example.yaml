@@ -1,0 +1,12 @@
+# Example for a commissioned bridge implementing AmbaGrid MQTT command v2.
+# Set capabilities to the actual device guarantees before using this file.
+device_type: smart_meter
+manufacturer: example
+model: mqtt-v5-bridge
+capabilities:
+  telemetry: true
+  relay_control: true
+  prepaid_credit: true
+  sts_token: false
+  idempotent_refs: true
+  outcome_query: false

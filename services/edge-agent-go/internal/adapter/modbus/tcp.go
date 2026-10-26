@@ -62,6 +62,7 @@ func (c *TCPClient) ReadRegisters(ctx context.Context, unit byte, function Funct
 	case <-ctx.Done():
 		return nil, adapter.ContextError(ctx.Err())
 	}
+	caller := ctx
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
@@ -96,7 +97,13 @@ func (c *TCPClient) ReadRegisters(ctx context.Context, unit byte, function Funct
 		return nil, fmt.Errorf("%w: function %q", adapter.ErrUnsupported, function)
 	}
 	if err != nil {
-		return nil, classify(ctx, err)
+		// A timeout may leave grid-x caching a stream our cancellation
+		// callback has closed. Reset it before the next read reconnects.
+		_ = c.handler.Close()
+		if caller.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("%w: %w", adapter.ErrProtocolTimeout, err)
+		}
+		return nil, classify(caller, err)
 	}
 	if len(raw) != 2*int(quantity) {
 		return nil, fmt.Errorf("%w: %d bytes for %d registers", adapter.ErrInvalidResponse, len(raw), quantity)
@@ -126,7 +133,7 @@ func classify(ctx context.Context, err error) error {
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
-		return fmt.Errorf("%w: %w", adapter.ErrTimeout, err)
+		return fmt.Errorf("%w: %w", adapter.ErrProtocolTimeout, err)
 	}
 	return err
 }

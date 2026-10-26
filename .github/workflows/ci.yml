@@ -93,6 +93,10 @@ jobs:
         working-directory: services/edge-agent-go
         run: go test -race -tags=integration ./...
 
+      - name: Adapter conformance (simulator, MQTT v5, Modbus)
+        working-directory: services/edge-agent-go
+        run: go test -race -tags=integration -count=1 ./internal/adapter/simulator ./internal/adapter/mqtt ./internal/adapter/modbus -run 'Test(Telemetry|Command)Conformance'
+
   rust:
     name: Rust
     runs-on: ubuntu-latest

@@ -143,3 +143,36 @@ func (c *collector) collectCommands(ctx context.Context, ch chan<- prometheus.Me
 	ch <- prometheus.MustNewConstMetric(c.reportsPending, prometheus.GaugeValue, float64(stats.PendingReports))
 	ch <- prometheus.MustNewConstMetric(c.reportsAbandoned, prometheus.GaugeValue, float64(stats.AbandonedReports))
 }
+
+// AdapterMetrics observes hardware calls independently of queue availability.
+// Values reset on restart; zero success timestamps mean no successful call yet.
+type AdapterMetrics struct {
+	lastRead, lastCommand                            *prometheus.GaugeVec
+	readErrors, commandErrors, timeouts, unsupported *prometheus.CounterVec
+}
+
+func NewAdapterMetrics() *AdapterMetrics {
+	labels := []string{"adapter", "device_id"}
+	return &AdapterMetrics{
+		lastRead:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "ambagrid_edge_adapter_last_successful_read_timestamp_seconds", Help: "Unix time of the last successful hardware read; zero until success."}, labels),
+		lastCommand:   prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "ambagrid_edge_adapter_last_successful_command_timestamp_seconds", Help: "Unix time of the last successful hardware command; zero until success."}, labels),
+		readErrors:    prometheus.NewCounterVec(prometheus.CounterOpts{Name: "ambagrid_edge_adapter_read_errors_total", Help: "Failed hardware read calls, including cancellation."}, labels),
+		commandErrors: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "ambagrid_edge_adapter_command_errors_total", Help: "Failed hardware command calls, including cancellation."}, labels),
+		timeouts:      prometheus.NewCounterVec(prometheus.CounterOpts{Name: "ambagrid_edge_adapter_protocol_timeouts_total", Help: "Device protocol timeouts; excludes caller deadlines and queued waits."}, append(labels, "operation")),
+		unsupported:   prometheus.NewCounterVec(prometheus.CounterOpts{Name: "ambagrid_edge_adapter_unsupported_total", Help: "Unsupported telemetry fields or commands, including fields omitted from partial reads."}, append(labels, "operation")),
+	}
+}
+
+func (m *AdapterMetrics) collectors() []prometheus.Collector {
+	return []prometheus.Collector{m.lastRead, m.lastCommand, m.readErrors, m.commandErrors, m.timeouts, m.unsupported}
+}
+func (m *AdapterMetrics) Describe(ch chan<- *prometheus.Desc) {
+	for _, c := range m.collectors() {
+		c.Describe(ch)
+	}
+}
+func (m *AdapterMetrics) Collect(ch chan<- prometheus.Metric) {
+	for _, c := range m.collectors() {
+		c.Collect(ch)
+	}
+}

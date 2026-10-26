@@ -93,3 +93,14 @@ func TestReadSurfacesTransportFailures(t *testing.T) {
 		t.Fatalf("capabilities = %+v", caps)
 	}
 }
+
+func TestReadReportsUnsupportedFieldsEvenWhenPartialTelemetrySucceeds(t *testing.T) {
+	d := &device{}
+	d.Inject([]byte(`{"holding":{"259":5234}}`))
+	unsupported := 0
+	ctx := adapter.WithUnsupportedFieldHook(context.Background(), func() { unsupported++ })
+	readings, err := newAdapter(t, d).Read(ctx)
+	if err != nil || len(readings) != 1 || unsupported != 3 {
+		t.Fatalf("readings=%+v err=%v unsupported=%d, want three omitted optional registers", readings, err, unsupported)
+	}
+}

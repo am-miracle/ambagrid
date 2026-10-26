@@ -174,6 +174,26 @@ A reply is only accepted on the reply topic of the device the request went to: t
 
 ## Adapter Health
 
+The edge exports the following Prometheus series on `/metrics`, independently of
+queue-statistics availability. Every series has `adapter` and `device_id` labels;
+timeout and unsupported counters also have `operation` (`read` or `command`).
+
+| Metric (all prefixed `ambagrid_edge_adapter_`) | Meaning |
+| --- | --- |
+| `last_successful_read_timestamp_seconds` | Unix time of the last successful nonempty read |
+| `last_successful_command_timestamp_seconds` | Unix time of the last successfully sent and confirmed command |
+| `read_errors_total` | Failed read calls, including cancellation |
+| `command_errors_total` | Failed command execution calls, including validation, cancellation and unresolved outcomes |
+| `protocol_timeouts_total` | Adapter-configured exchange/response timeout; excludes caller deadlines and queued waits |
+| `unsupported_total` | Unsupported telemetry fields or commands; missing optional Modbus registers count even when the poll succeeds |
+
+Success gauges start at zero. Counters reset on process restart. Cached ledger
+successes and outcome queries do not refresh the successful-command gauge.
+Unavailable-value sentinels represent missing data, not unsupported registers,
+and do not increment the unsupported counter. Explicit inventory routes use
+their configured device ID; the legacy site-wide command route uses `all`.
+Command IDs and error text are never metric labels.
+
 Operators need to know when an adapter is failing.
 
 Track:
@@ -187,6 +207,55 @@ Track:
 - protocol timeout
 
 Adapter failures should create alerts when they affect operations or revenue.
+
+The metrics above supply the implemented health signals. Firmware mismatch
+detection and adapter-health alert rules are not yet implemented.
+
+## Per-device configuration
+
+Set `EDGE_DEVICES_FILE` to a strict YAML inventory to choose adapters independently
+for each platform device. A device can have telemetry, commands, or both:
+
+```yaml
+devices:
+  - id: meter-01
+    command: mqtt
+    capabilities_file: mqtt/meter-capabilities.example.yaml
+  - id: battery-01
+    telemetry: modbus
+    modbus:
+      address: 192.0.2.1:502
+      unit_id: 225
+      map_file: modbus/victron-battery.yaml
+      timeout: 5s
+```
+
+This example is shipped as `deploy/devices.example.yaml`; copy it and adjust
+addresses, IDs, capabilities and Unit IDs for the installation. Map and
+capability paths resolve relative to the inventory. Unknown keys, duplicate IDs,
+unknown adapters and incomplete settings fail startup. MQTT credentials, broker
+URL, TLS policy, topic templates and response timeout remain in `EDGE_MQTT_*`.
+All MQTT devices share one connection but use separate reply subscriptions and
+per-device capability declarations. Commands for unconfigured devices are refused;
+they never inherit another device's capabilities or transport. Each route uses
+the durable ledger before reaching the device.
+
+Telemetry choices are `modbus` and `simulator`; command choices are `mqtt` and
+`simulator`. Omit a choice to disable that operation for the device. The simulator
+has fixed telemetry identities `meter-01`, `battery-01`, `inverter-01`, and only
+`meter-01` accepts commands; one simulator instance supplies its state.
+`EDGE_COMMANDS_ENABLED` still controls platform polling, and the collector interval
+still applies to all telemetry sources.
+
+The inventory replaces `EDGE_SIMULATOR_ENABLED=true`, `EDGE_MODBUS_ADDRESS`,
+`EDGE_COMMAND_ADAPTER` and `EDGE_MQTT_CAPABILITIES_FILE`; mixing these selection
+settings is rejected. Without an inventory, the existing environment-only setup
+continues to work. Container deployments must mount the inventory and referenced
+maps/capability files into the container with paths that agree.
+
+CI explicitly runs simulator, MQTT and Modbus conformance tests with `-race` and
+`-tags=integration`; the regular edge suite also tests runtime routing, metric
+classification, cancellation and reconnect behavior.
 
 ## Test Fixtures
 
