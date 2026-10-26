@@ -24,12 +24,14 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - Add revenue operations dashboard (#19)
 - **edge:** Add durable telemetry and critical fallback (#21)
 - **adapters:** Deliver durable commands and add Victron and STS integrations
+- **edge:** Use MQTT v5 requests and mapped Modbus telemetry
 
 ### Documentation
 
 - Add open source project foundations
 - Add ontology and roadmap docs
 - Regenerate changelog
+- **adapters:** Document MQTT v5 migration and validation
 
 ### Fixed
 
@@ -37,6 +39,9 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **engine:** Make outbox dependencies explicit (#14)
 - **adapters:** Enforce funded STS delivery and production MQTT isolation
 - **adapters:** Preserve vending results and reverse undelivered credits
+- **edge:** Record commands applied without the send hook
+- **sts:** Reverse what the balance holds and record shortfalls
+- **adapters:** Retain applied results through storage outages
 
 ### Maintenance
 
@@ -47,4 +52,8 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - Harden ingestion bridge package split
 
 Move ingestion bridge internals into dedicated packages with focused config, telemetry, stats, and bridge tests. Validate MQTT topic filters before deriving constraints, cover queue shutdown/resubscribe behavior, and document simulator payload fields. Harden the virtual meter simulator state model and add tests for generated readings.
+
+### Testing
+
+- **api:** Tolerate database clock skew in the expiry bound
 

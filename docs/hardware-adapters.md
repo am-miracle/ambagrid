@@ -141,32 +141,36 @@ Unknown keys are rejected when the declaration is loaded, so a misspelled capabi
 
 Production use requires [broker access control](mqtt-command-security.md).
 
-The MQTT command adapter (`EDGE_COMMAND_ADAPTER=mqtt`) talks to any device or bridge that speaks this protocol, version 1. Messages are JSON at QoS 1, not retained.
+The MQTT command adapter (`EDGE_COMMAND_ADAPTER=mqtt`) talks to any device or bridge that speaks this protocol, version 2. It uses MQTT v5 request/response: payloads are JSON at QoS 1, not retained, and the request's `ResponseTopic` and `CorrelationData` properties carry the routing. Version 1 (the command ID as `"ref"` in the payload, MQTT 3.1.1) is no longer spoken.
 
 A prepaid-credit MQTT device must declare `idempotent_refs: true` and durably
-apply each reference once, including broker-level redelivery. The adapter refuses
+apply each correlation value once, including broker-level redelivery. The adapter refuses
 prepaid-credit declarations without this guarantee. QoS 1 alone does not prevent
 double credit. A publish already handed to Paho/broker may finish after the caller
 stops waiting; cancellation cannot recall it. Such outcomes remain unresolved in
 the ledger. Devices requiring a hard receipt-time expiry must enforce it locally;
 this protocol does not provide broker-side expiry.
 
-The gateway publishes a request to `{prefix}/{device_id}/command`, where `{prefix}` is `EDGE_MQTT_TOPIC_PREFIX` (default `ambagrid/{site_id}`). `ref` is the platform command ID:
+Topics come from a configured topic map. `EDGE_MQTT_COMMAND_TOPIC` and `EDGE_MQTT_REPLY_TOPIC` are templates using `{site_id}` and `{device_id}`; `{device_id}` must fill a whole topic level, and the defaults are `site/{site_id}/meter/{device_id}/cmd` and `site/{site_id}/meter/{device_id}/cmd/reply`.
+
+The gateway subscribes to every device's reply topic before it publishes anything. Expanded command and reply topic sets must not overlap. After reconnecting, commands remain blocked until reply subscriptions have been restored; transient restoration failures are retried. A request goes to the command topic with `ResponseTopic` set to that device's reply topic and `CorrelationData` set to the platform command ID, so a retry is the same request:
 
 ```json
-{"ref": "cmd-0101", "op": "credit", "device": "meter-01", "wh": 12500}
-{"ref": "cmd-0102", "op": "relay", "device": "meter-01", "closed": false}
-{"ref": "cmd-0103", "op": "status", "device": "meter-01"}
+{"op": "credit", "device": "meter-01", "wh": 12500}
+{"op": "relay", "device": "meter-01", "closed": false}
+{"op": "status", "device": "meter-01"}
 ```
 
-A credit carries either `wh` or an STS `token`. The device replies on `{prefix}/{device_id}/command/reply` with the same `ref`:
+A credit carries either `wh` or an STS `token`. The device publishes its reply to the request's `ResponseTopic`, echoing its `CorrelationData`:
 
 ```json
-{"ref": "cmd-0101", "ok": true, "ts_ms": 1790865060000, "relay": 1, "balance_wh": 12500}
-{"ref": "cmd-0101", "ok": false, "code": "E_METER_LOCKED", "msg": "meter cover open"}
+{"ok": true, "ts_ms": 1790865060000, "relay": 1, "balance_wh": 12500}
+{"ok": false, "code": "E_METER_LOCKED", "msg": "meter cover open"}
 ```
 
-Replies are only accepted on the reply topic of the device the request went to. A device declaring `outcome_query` also answers `{"ref": "<query ref>", "op": "outcome", "device": "meter-01", "target": "cmd-0101"}` with `{"ref": "<query ref>", "ok": true, "applied": true}` plus its status fields. Device IDs containing `/`, `+`, or `#` are refused. Fixtures for the suite are in `services/edge-agent-go/internal/adapter/testdata/mqtt/`.
+A reply is only accepted on the reply topic of the device the request went to: the command ID is guessable, so the topic, which broker access rules restrict to that device, says who answered. A PUBACK only means the broker has the request; the gateway waits up to `EDGE_MQTT_RESPONSE_TIMEOUT` (default 30s) for the device's reply. A device declaring `outcome_query` also answers `{"op": "outcome", "device": "meter-01", "target": "cmd-0101"}`, sent with its own correlation value, with `{"ok": true, "applied": true}` plus its status fields. Device IDs containing `/`, `+`, or `#` are refused. Fixtures for the suite are in `services/edge-agent-go/internal/adapter/testdata/mqtt/`.
+
+`paho/extensions/rpc` is deliberately not used: its `Request` replaces the correlation data with a timestamp, so retries would not be idempotent, and it answers on one shared `{client_id}/responses` topic that access rules cannot scope per device.
 
 ## Adapter Health
 
@@ -211,26 +215,40 @@ First targets:
 
 The core should stay stable while hardware support grows around it.
 
-## Victron Cerbo GX battery telemetry
+## Modbus register maps
 
-The edge collector supports the GX `com.victronenergy.battery` Modbus-TCP
-service. Enable Modbus-TCP on the Cerbo GX, then use **Available services** to
-find the battery service Unit ID. Set `EDGE_VICTRON_ADDRESS=192.0.2.1:502`,
-`EDGE_VICTRON_UNIT_ID=225` (replace with the actual ID), and
-`EDGE_VICTRON_DEVICE_ID=battery-01` (the platform asset ID).
-Collection runs at `EDGE_COLLECTOR_INTERVAL`; simulator collection may remain disabled.
+The Modbus read adapter (`internal/adapter/modbus`) reads any device described by a YAML register map, so a new device model needs a map and fixtures rather than a driver. Set `EDGE_MODBUS_ADDRESS` (`host:port`), `EDGE_MODBUS_UNIT_ID`, `EDGE_MODBUS_DEVICE_ID` (the platform asset ID) and `EDGE_MODBUS_MAP_FILE`. Collection runs at `EDGE_COLLECTOR_INTERVAL`; the simulator may stay disabled. `EDGE_MODBUS_TIMEOUT` (default 5s) bounds each exchange, including dialing. Context cancellation interrupts both queued reads and active socket I/O; the next read reconnects after an interrupted exchange.
 
-The driver individually reads registers 259 (V /100), 261 (signed A /10),
-262 (signed °C /10), and 266 (SoC % /10). By default voltage is required;
-current, temperature and SoC may be absent. `EDGE_VICTRON_OPTIONAL_REGISTERS`
-accepts a comma-separated subset of 259,261,262,266, or `none` to require all.
-Only missing registers/unavailable values are omitted; timeouts and transport
-failures still fail the poll. A poll with no measurements fails.
-Unknown temperature/SoC remain absent through protobuf and cannot clear an
-existing overheat incident. The driver supports telemetry only. It does
-not control GX relays, vend credit, or equate inverter shutdown with meter disconnect.
-Timestamps describe successful GX acquisition; GX may hold cached battery data,
-so they do not prove the underlying battery's last physical communication time.
-Commission against the configured firmware/battery before using freshness alerts.
+```yaml
+device_type: battery_bms
+manufacturer: victron
+model: Cerbo GX battery service
+points:
+  - field: voltage        # voltage, current, active_power, frequency, total_kwh,
+    address: 259          # internal_temperature, battery_soc, solar_irradiance
+    function: holding     # holding or input
+    type: u16             # u16, i16, u32, i32, f32
+    scale: 0.01           # multiplies the raw value into the field's unit
+    unit: V               # must match the field: V, A, kW, Hz, kWh, C, %, W/m2
+    unavailable: 65535    # raw value meaning "no reading"
+  - field: total_kwh
+    address: 30
+    function: input
+    type: u32
+    word_order: big       # required for 32-bit types: which register is the high word
+    scale: 0.001
+    unit: kWh
+    optional: true        # a missing or unavailable register is left missing
+```
+
+Unknown keys are rejected when the map is loaded. Each point is read separately, because devices may lack the registers between them and fail a request spanning the gap. A required point that is unavailable fails the read; an optional one is left missing rather than reported as zero, and a missing temperature cannot open or clear an overheat incident. `solar_irradiance` cannot be optional because a reading has no way to mark it missing. Decoding is a pure function of the register words and the map, which is where most fixture tests live. Modbus exceptions 1 and 2 (illegal function or address) mean the register does not exist; others count as the device rejecting the read. The transport is [grid-x/modbus](https://github.com/grid-x/modbus) over TCP behind a small `Client` interface; its RTU, ASCII and UDP clients fit the same interface.
+
+### Victron Cerbo GX battery
+
+`deploy/modbus/victron-battery.yaml` maps the GX `com.victronenergy.battery` service: registers 259 (V), 261 (A), 262 (°C) and 266 (SoC %), with voltage required and the rest optional. Enable Modbus-TCP on the GX, find the battery service's Unit ID under **Available services** (100 is the system, not the battery), and set `EDGE_MODBUS_ADDRESS=192.0.2.1:502`, `EDGE_MODBUS_UNIT_ID=225` (the actual ID) and `EDGE_MODBUS_DEVICE_ID=battery-01`. Timestamps describe successful GX acquisition; the GX may hold cached battery data, so commission against the installed firmware and battery before relying on freshness alerts.
+
+### SunSpec, later
+
+SunSpec devices start with Model 1 (Common) at register 40000, and the model chain can be walked from there instead of hard-coding addresses; current inverter models are the 701–712 series. Take register definitions only from the official SunSpec model definitions (JSON/SMDX on GitHub): third-party tables contradict each other.
 
 See [verified vendor documentation and register sources](vendor-integration-research.md).

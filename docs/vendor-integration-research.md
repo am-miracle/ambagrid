@@ -15,7 +15,7 @@ Victron's [server register definitions](https://github.com/victronenergy/dbus_mo
 | 262 | Battery temperature | int16 | 10 | °C |
 | 266 | State of charge | uint16 | 10 | % |
 
-Implementation decision: start with configurable individual FC3 reads of these fields, normalize into existing domain readings, and timestamp successful acquisition locally. Implement the telemetry interface only; no command adapter is exposed. Use finite exchange deadlines and context cancellation. Validate framing and transaction/unit/function identifiers before accepting data. Treat configured optional registers as absent rather than manufacturing zero readings; transport failures still fail the poll.
+Implementation decision: these fields are now `deploy/modbus/victron-battery.yaml`, read by the generic Modbus register-map adapter (see [register maps](hardware-adapters.md#modbus-register-maps)). Read each register individually with FC3, normalize into existing domain readings, and timestamp successful acquisition locally. Implement the telemetry interface only; no command adapter is exposed. Use finite exchange deadlines and context cancellation. Validate framing and transaction/unit/function identifiers before accepting data. Treat configured optional registers as absent rather than manufacturing zero readings; transport failures still fail the poll.
 
 ## PrismVend STS
 

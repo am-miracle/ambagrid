@@ -36,7 +36,8 @@ Authorization uses authenticated **username**, not the caller-controlled client 
 Do not replace the explicit users with global pattern permissions that would
 also apply to unrelated users.
 
-Configure the edge with `EDGE_MQTT_BROKER=ssl://broker.example:8883`,
+Configure the edge with `EDGE_MQTT_BROKER=ssl://broker.example:8883` (or another
+TLS scheme such as `mqtts://`),
 `EDGE_MQTT_USERNAME`, `EDGE_MQTT_PASSWORD`, and `EDGE_MQTT_CA_FILE`. The edge
 refuses plaintext/anonymous command connections by default. The explicit
 `EDGE_MQTT_ALLOW_INSECURE=true` escape hatch is for isolated development only.

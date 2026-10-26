@@ -21,8 +21,11 @@ services:
   `internal/adapter/testdata/<adapter>/`.
 - `internal/adapter/devicetest` gives test devices the stall, hold and recording
   controls the suite drives, without linking `testing` into the binary.
-- `internal/adapter/mqtt` carries meter commands over MQTT using the protocol
-  in `docs/hardware-adapters.md`, with a paho transport for production.
+- `internal/adapter/mqtt` carries meter commands as MQTT v5 requests using the
+  protocol and topic map in `docs/hardware-adapters.md`, over an autopaho
+  (`github.com/eclipse/paho.golang`) connection in production.
+- `internal/adapter/modbus` reads telemetry from any Modbus TCP device described
+  by a YAML register map, through a pure decoder and a grid-x/modbus client.
 - `internal/adapter/simulator` is the simulated meter adapter over simulated
   meter, battery, and inverter hardware. Its device keeps relay, balance and
   tamper state, and can take the meter offline to exercise stale last-seen
@@ -98,9 +101,11 @@ gateways default to a 256 MiB filesystem reserve.
 | `EDGE_COMMAND_PRUNE_INTERVAL` | `1h` | Interval between ledger pruning passes. Unresolved commands are never pruned. |
 | `EDGE_COMMANDS_ENABLED` | `false` | Fetch meter commands from api-go and run them through the command ledger. |
 | `EDGE_COMMAND_ADAPTER` | `simulator` | `simulator` (requires `EDGE_SIMULATOR_ENABLED`) or `mqtt`. |
-| `EDGE_MQTT_BROKER` | required for `mqtt` | TLS broker URL, e.g. `ssl://broker:8883`. |
+| `EDGE_MQTT_BROKER` | required for `mqtt` | TLS broker URL, e.g. `ssl://broker:8883` or `mqtts://broker:8883`. |
 | `EDGE_MQTT_CAPABILITIES_FILE` | required for `mqtt` | YAML capability declaration of the meters behind the broker. |
-| `EDGE_MQTT_TOPIC_PREFIX` | `ambagrid/{site_id}` | Commands go to `{prefix}/{device_id}/command`. |
+| `EDGE_MQTT_COMMAND_TOPIC` | `site/{site_id}/meter/{device_id}/cmd` | Command topic template; `{device_id}` must fill a whole level. |
+| `EDGE_MQTT_REPLY_TOPIC` | `site/{site_id}/meter/{device_id}/cmd/reply` | Per-device reply topic template, sent as each request's `ResponseTopic`. |
+| `EDGE_MQTT_RESPONSE_TIMEOUT` | `30s` | How long to wait for a device's reply; a PUBACK alone is not an answer. |
 | `EDGE_MQTT_CLIENT_ID` | `ambagrid-edge-{gateway_id}` | Must be unique on the broker. |
 | `EDGE_MQTT_USERNAME`, `EDGE_MQTT_PASSWORD` | empty | Required broker credentials unless insecure development is explicitly enabled. |
 | `EDGE_MQTT_ALLOW_INSECURE` | `false` | Allow plaintext or anonymous command transport for isolated development. |
@@ -211,11 +216,18 @@ Run `deploy/mqtt/test-acl.sh` from the repository root to exercise a disposable
 TLS broker with the production policy. The anonymous development broker is not
 suitable for hardware commands in production.
 
-## Victron hardware telemetry
+## Modbus telemetry
 
-A Cerbo GX battery service can feed the collector without the simulator. Set
-`EDGE_VICTRON_ADDRESS` to `host:502`, `EDGE_VICTRON_UNIT_ID` to the battery
-service Unit ID from the GX Available services screen, and
-`EDGE_VICTRON_DEVICE_ID` to its platform battery asset ID. The shared
-`EDGE_COLLECTOR_INTERVAL` controls polling. See the
-[driver setup and limitations](../../docs/hardware-adapters.md#victron-cerbo-gx-battery-telemetry).
+A Modbus TCP device can feed the collector without the simulator. Set
+`EDGE_MODBUS_ADDRESS` to `host:port`, `EDGE_MODBUS_UNIT_ID` to its unit ID,
+`EDGE_MODBUS_DEVICE_ID` to its platform asset ID, and `EDGE_MODBUS_MAP_FILE` to
+its register map; `EDGE_MODBUS_TIMEOUT` (default `5s`) bounds each request. A
+Victron Cerbo GX battery service uses `deploy/modbus/victron-battery.yaml`. The
+shared `EDGE_COLLECTOR_INTERVAL` controls polling. See
+[register maps](../../docs/hardware-adapters.md#modbus-register-maps).
+
+## Integration tests
+
+`go test -tags=integration ./...` also runs the MQTT adapter's conformance suite
+over autopaho against an in-process MQTT v5 broker, and the Modbus client
+against an in-process Modbus TCP server, so neither needs external services.

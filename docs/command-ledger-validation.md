@@ -1,5 +1,38 @@
 # Command delivery and vendor integration validation
 
+## MQTT v5 and register-map follow-up — 2026-10-26
+
+The uncommitted MQTT v5, YAML Modbus map, ledger fallback and exact STS decimal
+changes were checked against the adapter requirements before committing.
+
+- API: `go vet ./...` and `go test -race ./...` passed, including PostgreSQL
+  integration tests against a freshly migrated `ambagrid_review_20261026` database.
+- Edge: `go vet ./...` and `go test -race -tags=integration ./...` passed.
+  The full MQTT and Modbus packages also passed five repeated race-enabled runs.
+- `deploy/mqtt/test-acl.sh` passed against a disposable Mosquitto TLS broker
+  using the production configuration, ACL and MQTT v5 request/response topics.
+- New real TCP tests reproduced cancellation delays during active Modbus reads
+  and while queued, including deadlines. The fix uses context-aware acquisition,
+  closes the raw socket when the context ends, and joins that cancellation callback
+  before allowing the next exchange. The configured timeout also bounds dialing.
+- Topic validation now rejects command/reply collisions after site expansion,
+  including collisions that depend on device IDs. The expanded-topic regression
+  failed before the validation fix.
+- Subscription restoration retries transient failures with bounded attempts and
+  stops on disconnect or shutdown. Connection generation and readiness transitions
+  share a lock, preventing stale restoration from marking a disconnected session
+  ready. Removing either retry or the generation guard made its test fail; the
+  source was restored byte-for-byte afterward.
+- The in-process broker helper drops sockets and removes its listener before
+  `Server.Close`, avoiding mochi's recursive client-list lock while still stopping
+  its background loops. Repeated race runs completed without hangs.
+- Standards review: 0 remaining actionable findings. Spec review: 0 remaining
+  actionable findings after fixing cancellation, topic collisions and readiness.
+
+This follow-up did not rerun the earlier ten reported bug injections or the Rust
+suite; Rust code and migrations are unchanged. Physical hardware and a live
+PrismVend installation still require commissioning.
+
 Validated 2026-10-25, including the existing uncommitted command-delivery WIP
 and the Victron telemetry / PrismVend manual vending additions.
 
@@ -51,7 +84,7 @@ physical battery, licensed Security Module, production keys, provider tariff or
 customer meter was accessed. Automatic payment-to-token dispatch is not wired;
 the STS command implements a separate durable manual vending workflow.
 
-Paho/broker publications already in flight cannot be recalled by context
+Publications already handed to the MQTT client or broker cannot be recalled by context
 cancellation. Devices requiring hard receipt-time expiry must enforce it locally;
 the present MQTT protocol has no broker-side message expiry.
 
