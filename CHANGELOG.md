@@ -44,6 +44,8 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **sts:** Reverse what the balance holds and record shortfalls
 - **adapters:** Retain applied results through storage outages
 - **deps:** Patch ctutils constant-time advisory
+- Address hardware adapter and STS review feedback
+- Preserve command evidence and STS operator visibility
 
 ### Maintenance
 
