@@ -7,8 +7,12 @@ import (
 	"time"
 
 	"api-go/internal/domain"
+	"api-go/internal/page"
 	"api-go/internal/repository"
 )
+
+// ErrReportNeedsReconciliation is returned only after conflicting evidence commits.
+var ErrReportNeedsReconciliation = fmt.Errorf("%w: command report retained for reconciliation", domain.ErrConflict)
 
 const (
 	defaultEdgeCommandBatch = 50
@@ -23,6 +27,7 @@ type EdgeCommandService struct {
 	repository repository.EdgeCommandRepository
 	topics     OutcomeTopics
 	now        func() time.Time
+	thresholds SiteHealthThresholds
 }
 
 // OutcomeTopics are the deployment topics for settled command outcomes.
@@ -31,14 +36,14 @@ type OutcomeTopics struct {
 	Failed       string
 }
 
-func NewEdgeCommandService(repository repository.EdgeCommandRepository, topics OutcomeTopics) *EdgeCommandService {
+func NewEdgeCommandService(repository repository.EdgeCommandRepository, topics OutcomeTopics, thresholds SiteHealthThresholds) *EdgeCommandService {
 	if topics.Acknowledged == "" {
 		topics.Acknowledged = "meter.command.acknowledged"
 	}
 	if topics.Failed == "" {
 		topics.Failed = "meter.command.failed"
 	}
-	return &EdgeCommandService{repository: repository, topics: topics, now: time.Now}
+	return &EdgeCommandService{repository: repository, topics: topics, now: time.Now, thresholds: thresholds}
 }
 
 // Poll expires the site's overdue undelivered commands, then returns its
@@ -58,11 +63,7 @@ func (s *EdgeCommandService) Poll(ctx context.Context, siteID string, limit int)
 			return err
 		}
 		for _, cmd := range expired {
-			metadata := map[string]any{"expires_at": cmd.ExpiresAt.UTC()}
-			if err := tx.InsertAuditEvent(ctx, siteID, commandExpiryActor, "meter_command.expired", "meter_command", cmd.CommandID, metadata); err != nil {
-				return err
-			}
-			if err := s.publishOutcome(ctx, tx, cmd, siteID, commandExpiryActor, now); err != nil {
+			if err := s.recordExpiry(ctx, tx, siteID, cmd, now); err != nil {
 				return err
 			}
 		}
@@ -98,16 +99,22 @@ func (s *EdgeCommandService) Report(ctx context.Context, siteID string, report d
 	}
 
 	var (
-		result  domain.MeterCommand
-		changed bool
+		result      domain.MeterCommand
+		changed     bool
+		conflicting bool
 	)
 	err := s.repository.RunEdgeCommandTx(ctx, func(tx repository.EdgeCommandTx) error {
 		current, err := tx.LockSiteCommand(ctx, siteID, report.CommandID)
 		if err != nil {
 			return err
 		}
+		original := report
 		report.OccurredAt = current.ClampOccurredAt(report.OccurredAt, s.now().UTC())
 		result, changed, err = current.ApplyReport(report)
+		if errors.Is(err, domain.ErrConflict) {
+			result, conflicting = current, true
+			return tx.RetainConflictingReport(ctx, siteID, current, original)
+		}
 		if err != nil || !changed {
 			return err
 		}
@@ -127,7 +134,83 @@ func (s *EdgeCommandService) Report(ctx context.Context, siteID string, report d
 	if err != nil {
 		return domain.MeterCommand{}, false, err
 	}
+	if conflicting {
+		return result, false, ErrReportNeedsReconciliation
+	}
 	return result, changed, nil
+}
+
+func (s *EdgeCommandService) recordExpiry(ctx context.Context, tx repository.EdgeCommandTx, siteID string, cmd domain.MeterCommand, now time.Time) error {
+	metadata := map[string]any{"expires_at": cmd.ExpiresAt.UTC()}
+	if err := tx.InsertAuditEvent(ctx, siteID, commandExpiryActor, "meter_command.expired", "meter_command", cmd.CommandID, metadata); err != nil {
+		return err
+	}
+	return s.publishOutcome(ctx, tx, cmd, siteID, commandExpiryActor, now)
+}
+
+func (s *EdgeCommandService) ListReconciliation(ctx context.Context, siteID string, limit int, cursor string) (page.Page[domain.CommandReconciliation], error) {
+	if limit <= 0 {
+		limit = defaultEdgeCommandBatch
+	}
+	limit = min(limit, maxEdgeCommandBatch)
+	after, err := page.DecodeTimeIDCursor(cursor, domain.ValidateCommandID)
+	if err != nil {
+		return page.Page[domain.CommandReconciliation]{}, err
+	}
+	now := s.now().UTC()
+	result, err := s.repository.ListCommandReconciliation(ctx, siteID, now, limit, after)
+	if err != nil {
+		return page.Page[domain.CommandReconciliation]{}, err
+	}
+	for i := range result.Items {
+		item := &result.Items[i]
+		item.Age = max(0, now.Sub(item.Command.RequestedAt))
+		item.Overdue = max(0, now.Sub(item.Command.ExpiresAt))
+		item.Site.HealthStatus = siteHealthStatus(item.Site, now, s.thresholds)
+	}
+	return result, nil
+}
+
+// SweepExpired settles a bounded batch that no edge has ever been offered.
+func (s *EdgeCommandService) SweepExpired(ctx context.Context) (int, error) {
+	count := 0
+	err := s.repository.RunEdgeCommandTx(ctx, func(tx repository.EdgeCommandTx) error {
+		now := s.now().UTC()
+		commands, err := tx.ExpireUndeliveredCommands(ctx, now, maxEdgeCommandBatch)
+		if err != nil {
+			return err
+		}
+		for _, item := range commands {
+			if err := s.recordExpiry(ctx, tx, item.SiteID, item.Command, now); err != nil {
+				return err
+			}
+		}
+		count = len(commands)
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// RunExpiryWorker also expires commands at sites that never poll again.
+func (s *EdgeCommandService) RunExpiryWorker(ctx context.Context, onError func(error)) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		if _, err := s.SweepExpired(ctx); err != nil && ctx.Err() == nil {
+			onError(err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // publishOutcome announces settled outcomes only; "sent" is an intermediate

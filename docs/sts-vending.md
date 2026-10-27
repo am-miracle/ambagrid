@@ -8,15 +8,17 @@ authenticated gateway. No provider token-retrieval endpoint is assumed.
 
 ## One physical credit route per payment
 
-Apply all engine migrations, through `202610250005_sts_reversal_shortfall.sql`.
+Apply all engine migrations, through `202610270001_sts_funding_visibility.sql`,
+before deploying the API version that lists retry eligibility.
 Before accepting STS-funded payments, commission the meter's `smart_meters` row:
 set `credit_mode='sts'`, `sts_meter_number` to its registered DRN/PAN or IDRecord,
 `sts_installation` to the provisioned provider installation name, and `sts_currency`
 to that installation's three-letter currency. All are required for STS mode.
 
 Each energy credit snapshots the delivery mode when issued. Payment processing
-locks that configuration for the transaction. STS-mode payments create no credit
-or reconnect command. Vending requires a confirmed payment with an STS snapshot,
+locks that configuration for the transaction. STS-mode payments create an
+`energy_credit` and update the balance, but create no credit or reconnect command.
+Vending requires a confirmed payment with an STS snapshot,
 the configured meter/installation, matching currency and exact payment amount.
 Only hundredth-based currency tariffs (`minor_units_per_major=100`) are accepted.
 Amounts represent credit purchases; fees must already be excluded from the recorded
@@ -59,6 +61,9 @@ reconciliation.
 so no vending POST could have been sent. The database records a safely retryable
 reservation. Repeat the same payment command when connectivity returns; its
 funding is rechecked before each retry, and its canonical identity never changes.
+Proven-unsent reservations remain visible in `-list-unresolved`, including when
+a refund or configuration change blocks their next attempt. `safe_to_retry`
+records transport evidence only; it is not permission to bypass funding checks.
 HTTP errors after a connection was obtained, including a lost reply, remain
 uncertain. This distinction uses Go's [HTTP connection trace](https://pkg.go.dev/net/http/httptrace#ClientTrace).
 No HTTP status code alone is treated as proof of non-issuance.
@@ -89,6 +94,25 @@ it is never automatically resent. Inspect the queue without contacting PrismVend
 go run ./cmd/sts-vend -list-unresolved
 ```
 
+The listing includes all incomplete reservations for the configured installation,
+up to 200 oldest first. Its `status` identifies the next kind of work:
+
+| Status | Meaning |
+|---|---|
+| `outcome_uncertain` | No definite result; inspect provider evidence before proceeding. An active vend may still be completing. |
+| `retryable_unsent` | No request was sent and current funding checks pass; retry the same payment when ready. |
+| `retry_blocked` | No request was sent, but current funding or configuration prevents retry. |
+| `needs_balance_reversal` | Legacy non-issuance needs its missing compensating balance entry. |
+
+Blocked rows include `retry_blocked_reason`, such as `payment_reversed`,
+`installation_changed`, or `currency_changed`. This is computed from the same
+eligibility function used by the funding trigger, so changes appear even before
+a retry is attempted and the reason clears when eligibility is restored.
+`last_error`, when present, is the previously recorded transport error, not the
+current funding diagnosis. Listing never contacts PrismVend or changes a
+reservation; a database read failure is returned as an error, not as a blocked
+funding status. Completed vends and fully reconciled non-issuance are excluded.
+
 Use the original reference to obtain provider transaction evidence and the complete
 ordered token result through the provider's operator procedures. Then save the
 recovered `STSVend` JSON (the same shape printed by a successful command) in a
@@ -117,11 +141,23 @@ The customer summary excludes reversed energy. Original payment/credit history
 is retained. It does not resend tokens or perform a cash refund; arrange any
 refund through the payment provider's procedure. Repeating the vend returns
 `ErrVendNotIssued`. If the balance no longer holds the whole credit, the
-non-issuance is still recorded: the reversal subtracts what the balance holds,
-never taking it below zero, and records the exact remainder as a shortfall on
-the reversal row. For an STS meter a shortfall means the platform recorded more
-consumption than was ever delivered, so it is a discrepancy to investigate, not
-customer debt. List them without contacting PrismVend:
+non-issuance is still recorded. The reversal uses the largest portion of that
+credit supported by both remaining balances, capped at the original credit.
+It rounds the monetary portion down to whole minor units, derives the kWh
+portion from that same proportion of the original credit, and rounds kWh down
+to six decimal places. If either portion rounds to zero, neither is subtracted.
+Legacy credits with zero or absent monetary value reverse only available kWh.
+Neither balance goes negative; every unreversed amount, including rounding
+remainders, is recorded as a shortfall on the reversal row.
+
+For example, a credit of 0.200040 kWh worth 5,001 minor units with only 0.1 kWh
+remaining reverses 0.100000 kWh and 2,500 minor units. It records shortfalls of
+0.100040 kWh and 2,501 minor units, preserving the remaining monetary balance.
+The paired reversal does not repair pre-existing balance drift or establish a
+single tariff for an aggregate balance. Existing reversal entries remain
+historical records; this rule applies to new reconciliations. Shortfalls are
+discrepancies to investigate, not customer debt. List them without contacting
+PrismVend:
 
 ```sh
 go run ./cmd/sts-vend -list-shortfalls

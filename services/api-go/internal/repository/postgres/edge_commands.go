@@ -17,19 +17,21 @@ const meterCommandColumns = `mc.command_id::text, mc.meter_id, mc.command_type, 
     mc.requested_by, mc.reason, mc.requested_at, mc.expires_at, mc.sent_at,
     mc.acknowledged_at, mc.failure_reason, mc.credit_kwh::float8, mc.credit_id::text`
 
-// A command already sent stays sent after its deadline: the device may have
-// applied it, so only reconciliation can settle it.
+// Only a requested command has certainly never reached the edge. A queued one
+// may have been sent, so the platform expiring it could contradict the device.
 const expireOverdueCommandsSQL = `
 UPDATE meter_commands mc SET status = 'expired'
 FROM smart_meters sm
 WHERE sm.meter_id = mc.meter_id
   AND sm.site_id = $1
-  AND mc.status IN ('requested', 'queued')
+  AND mc.status = 'requested'
   AND mc.expires_at <= $2
 RETURNING ` + meterCommandColumns
 
 // Commands awaiting a send take priority so unresolved sent commands cannot
 // consume the whole batch. Spare capacity still redelivers sent commands.
+// Overdue queued commands are redelivered so the edge settles them: it refuses
+// one it never sent as expired, and reports the outcome of one it did.
 const listPendingEdgeCommandsSQL = `
 SELECT mc.command_id::text, mc.meter_id, sm.asset_id, mc.command_type,
     mc.status, mc.requested_at, mc.expires_at, mc.credit_kwh::float8
@@ -37,9 +39,10 @@ FROM meter_commands mc
 JOIN smart_meters sm ON sm.meter_id = mc.meter_id
 WHERE sm.site_id = $1
   AND mc.status IN ('requested', 'queued', 'sent')
-  AND mc.expires_at > $2
+  AND (mc.status = 'queued' OR mc.expires_at > $2)
 ORDER BY (mc.status = 'sent'), mc.requested_at, mc.command_id
-LIMIT $3`
+LIMIT $3
+FOR UPDATE OF mc`
 
 const markCommandsQueuedSQL = `
 UPDATE meter_commands SET status = 'queued'

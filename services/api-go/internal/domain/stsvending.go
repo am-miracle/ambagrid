@@ -69,7 +69,21 @@ func (v STSVend) Validate() error {
 	return nil
 }
 
+type STSVendStatus string
+
+const (
+	STSVendOutcomeUncertain     STSVendStatus = "outcome_uncertain"
+	STSVendRetryableUnsent      STSVendStatus = "retryable_unsent"
+	STSVendRetryBlocked         STSVendStatus = "retry_blocked"
+	STSVendNeedsBalanceReversal STSVendStatus = "needs_balance_reversal"
+)
+
 type STSVendRecord struct {
+	Status STSVendStatus `json:"status"`
+	// SafeToRetry proves no request was sent; current funding may still block a retry.
+	SafeToRetry          bool      `json:"safe_to_retry"`
+	RetryBlockedReason   *string   `json:"retry_blocked_reason,omitempty"`
+	LastError            *string   `json:"last_error,omitempty"`
 	NeedsBalanceReversal bool      `json:"needs_balance_reversal,omitempty"`
 	Reference            string    `json:"reference"`
 	PaymentID            *string   `json:"payment_id"`

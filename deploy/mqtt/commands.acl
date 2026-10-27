@@ -9,6 +9,9 @@ user device-ng-kaji-01-meter-01
 topic read site/ng-kaji-01/meter/meter-01/cmd
 topic write site/ng-kaji-01/meter/meter-01/cmd/reply
 
+# An authenticated telemetry identity has no permissions on this command broker.
+user telemetry-ng-kaji-01
+
 # A second tenant makes cross-site denial testable. Replace all examples with
 # commissioned identities; give each physical device its own credentials.
 user gateway-other-site

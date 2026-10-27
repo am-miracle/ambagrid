@@ -203,7 +203,7 @@ Track:
 - read error rate
 - command failure rate
 - unsupported fields
-- firmware mismatch
+- firmware mismatch (planned; not implemented)
 - protocol timeout
 
 Adapter failures should create alerts when they affect operations or revenue.

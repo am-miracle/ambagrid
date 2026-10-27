@@ -105,17 +105,19 @@ func TestCommandBrokerAccessControl(t *testing.T) {
 	gateway := connect("gateway-ng-kaji-01", true)
 	device := connect("device-ng-kaji-01-meter-01", true)
 	other := connect("gateway-other-site", true)
+	telemetry := connect("telemetry-ng-kaji-01", true)
 
 	command := "site/ng-kaji-01/meter/meter-01/cmd"
 	subscribe(device, command)
 	subscribe(gateway, "site/ng-kaji-01/meter/+/cmd/reply")
 	subscribe(other, "site/ng-kaji-01/#")
+	subscribe(telemetry, "site/ng-kaji-01/#")
 
 	publish(gateway, command, "allowed-command")
 	expect("device-ng-kaji-01-meter-01 got " + command + ":allowed-command")
 	publish(device, command+"/reply", "allowed-reply")
 	expect("gateway-ng-kaji-01 got " + command + "/reply:allowed-reply")
-	expectNothing("cross-site read")
+	expectNothing("cross-site or telemetry read")
 
 	for _, attempt := range []struct {
 		name   string
@@ -123,6 +125,8 @@ func TestCommandBrokerAccessControl(t *testing.T) {
 		topic  string
 	}{
 		{"cross-site command", other, command},
+		{"telemetry issuing command", telemetry, command},
+		{"telemetry forging device reply", telemetry, command + "/reply"},
 		{"device issuing command", device, command},
 		{"gateway forging device reply", gateway, command + "/reply"},
 		{"device forging other device reply", device, "site/ng-kaji-01/meter/meter-99/cmd/reply"},

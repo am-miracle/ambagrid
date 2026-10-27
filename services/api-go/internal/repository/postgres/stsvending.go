@@ -124,9 +124,11 @@ func (s *STSVendStore) ListReversalShortfalls(ctx context.Context) ([]domain.STS
 }
 
 func (s *STSVendStore) ListUnresolved(ctx context.Context) ([]domain.STSVendRecord, error) {
-	rows, err := s.pool.Query(ctx, `SELECT reference,payment_id::text,meter_id,amount_minor,requested_at,not_issued_at IS NOT NULL
+	rows, err := s.pool.Query(ctx, `SELECT reference,payment_id::text,meter_id,amount_minor,requested_at,
+ not_issued_at IS NOT NULL,safe_to_retry,last_error,
+ CASE WHEN safe_to_retry THEN sts_funding_block_reason(reference,payment_id,meter_id,amount_minor,installation) END
  FROM sts_vends sv WHERE installation=$1 AND result IS NULL AND (
-  (not_issued_at IS NULL AND NOT safe_to_retry) OR
+  not_issued_at IS NULL OR
   (not_issued_at IS NOT NULL AND payment_id IS NOT NULL AND NOT EXISTS(
    SELECT 1 FROM sts_credit_reversals WHERE reference=sv.reference)))
  ORDER BY requested_at,reference LIMIT $2`, s.installation, stsListLimit)
@@ -135,7 +137,8 @@ func (s *STSVendStore) ListUnresolved(ctx context.Context) ([]domain.STSVendReco
 	}
 	records, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.STSVendRecord, error) {
 		var r domain.STSVendRecord
-		err := row.Scan(&r.Reference, &r.PaymentID, &r.MeterID, &r.AmountMinor, &r.RequestedAt, &r.NeedsBalanceReversal)
+		err := row.Scan(&r.Reference, &r.PaymentID, &r.MeterID, &r.AmountMinor, &r.RequestedAt,
+			&r.NeedsBalanceReversal, &r.SafeToRetry, &r.LastError, &r.RetryBlockedReason)
 		return r, err
 	})
 	if err != nil {
@@ -267,8 +270,8 @@ type stsCreditReversal struct {
 	hasBalance                 bool
 }
 
-// reverseSTSCredit subtracts what the balance holds, in exact numeric arithmetic;
-// the rest, all of it when a settled balance was deleted, is the shortfall.
+// reverseSTSCredit undoes a jointly affordable portion of the original credit.
+// Unreversed amounts, including rounding remainders, are recorded as shortfalls.
 func reverseSTSCredit(ctx context.Context, tx pgx.Tx, r domain.STSReconciliation) error {
 	rows, err := tx.Query(ctx, `SELECT ec.credit_id::text,ec.assignment_id::text,ec.kwh_granted::text,COALESCE(ec.money_value_minor_units,0)
     FROM sts_vends sv JOIN energy_credits ec USING(payment_id)
@@ -294,9 +297,28 @@ func reverseSTSCredit(ctx context.Context, tx pgx.Tx, r domain.STSReconciliation
 	// Until the balance is read, the whole credit counts as shortfall.
 	v := reversals[0]
 	v.kwh = "0"
-	err = tx.QueryRow(ctx, `SELECT LEAST(remaining_kwh,$2::numeric)::text,($2::numeric-LEAST(remaining_kwh,$2::numeric))::text,
-    LEAST(remaining_money_value_minor_units,$3),$3-LEAST(remaining_money_value_minor_units,$3)
-    FROM credit_balances WHERE assignment_id=$1::uuid FOR UPDATE`, v.assignmentID, v.shortfallKWh, v.shortfallMinor).Scan(&v.kwh, &v.shortfallKWh, &v.moneyMinor, &v.shortfallMinor)
+	// Quantize the shared fraction to whole minor units, then round kWh down.
+	// div keeps both bounds exact; positive-value credits never reverse only one leg.
+	err = tx.QueryRow(ctx, `
+    WITH balance AS (
+        SELECT remaining_kwh, remaining_money_value_minor_units
+        FROM credit_balances WHERE assignment_id=$1::uuid FOR UPDATE
+    ), money_cap AS (
+        SELECT remaining_kwh,
+            CASE WHEN $3::bigint=0 THEN 0::numeric
+                 ELSE LEAST($3::numeric, remaining_money_value_minor_units,
+                            div(remaining_kwh*$3::numeric, $2::numeric)) END AS money
+        FROM balance
+    ), paired AS (
+        SELECT (CASE WHEN $3::bigint=0 THEN LEAST(remaining_kwh, $2::numeric)
+                     ELSE div($2::numeric*1000000*money, $3::numeric)/1000000 END)::numeric(18,6) AS kwh,
+               money
+        FROM money_cap
+    )
+    SELECT kwh::text, ($2::numeric-kwh)::text,
+           (CASE WHEN kwh=0 THEN 0 ELSE money END)::bigint,
+           $3::bigint-(CASE WHEN kwh=0 THEN 0 ELSE money END)::bigint
+    FROM paired`, v.assignmentID, v.shortfallKWh, v.shortfallMinor).Scan(&v.kwh, &v.shortfallKWh, &v.moneyMinor, &v.shortfallMinor)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 	case err != nil:

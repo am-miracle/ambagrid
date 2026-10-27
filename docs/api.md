@@ -384,20 +384,29 @@ Edge agents fetch their site's meter commands here. Enabled when
 `API_EDGE_API_KEYS` is set; each request carries `Authorization: Bearer <site
 key>`, and the key decides the site. One transaction:
 
-1. marks the site's `requested` and `queued` commands past `expires_at` as
-   `expired`, with a `system:command-expiry` audit event;
-2. returns up to `limit` (default 50, at most 200) commands in `requested`,
-   `queued`, or `sent` whose `expires_at` has not passed. `requested` and
-   `queued` commands take priority over `sent` commands, with oldest-first
-   ordering within each group;
+1. marks the site's `requested` commands past `expires_at` as `expired`, with
+   a `system:command-expiry` audit event;
+2. returns up to `limit` (default 50, at most 200) commands: `requested` and
+   `sent` ones whose `expires_at` has not passed, and every `queued` one.
+   `requested` and `queued` commands take priority over `sent` commands, with
+   oldest-first ordering within each group;
 3. marks the returned `requested` commands `queued`.
 
 `device_id` is the meter's `asset_id`, the identity the gateway uses.
 `expires_in_ms` is the time left on the platform clock, so the edge can enforce
 expiry without trusting its own clock; `credit_kwh` is present on
-`credit_meter` commands. A `sent`
-command past its expiry is neither returned nor expired: the device may have
-applied it, so it waits for reconciliation.
+`credit_meter` commands. Only a `requested` command has certainly never
+reached the edge, so it is the only one the platform expires. A `queued`
+command past its expiry is still returned, with `expires_in_ms` of zero or
+less, so the edge settles it: it reports `expired` if it never sent it, or the
+device outcome if it did. A `sent` command past its expiry is neither returned
+nor expired: the device may have applied it, so it waits for reconciliation.
+
+The API also expires never-delivered `requested` commands at startup and once
+per minute, up to 200 per batch across all sites, even without site polling or
+configured edge keys. Expiry, audit, and the failed-outcome outbox event commit
+together. Polling locks delivery rows so the expiry worker cannot expire a
+command while it is being handed to an edge.
 
 ```json
 {
@@ -429,14 +438,42 @@ event from actor `edge:<site_id>`.
 `status` is `sent`, `acknowledged`, `failed` (requires `failure_reason`), or
 `expired`. Reports are idempotent: a repeat, or a `sent` arriving after the
 outcome, returns `200` with `"changed": false`. A report contradicting a
-definite outcome, such as `failed` after `acknowledged`, returns `409`. A
-command belonging to another site returns `404`. A device outcome overrides
-server-side expiry, because the gateway may have sent the command before the
-platform's deadline passed. `occurred_at` is clamped to between the command's
+definite outcome, including a report after legacy platform expiry, is retained
+as a `meter_command.report_conflict` audit event. Only after that transaction
+commits does the API return `202` with `"changed": false` and
+`"reconciliation_required": true`. The returned `status` remains the platform's
+existing status. No new outcome event is published. Repeating the same evidence
+does not add another audit event. A storage failure returns an error so the
+edge retains and retries its report; another site's command returns `404`.
+`occurred_at` is clamped to between the command's
 `requested_at` and the platform's current time, so a wrong gateway clock cannot
 record impossible times. Settled outcomes (`acknowledged`, `failed`, `expired`)
 publish `meter.command.acknowledged` or `meter.command.failed` through the
 outbox in the same transaction.
+
+Conflicting evidence preserves the original `occurred_at` without clamping,
+plus reported status, failure reason, platform status, and receipt time. A
+`202` acknowledges durable receipt of evidence, not successful execution or a
+status correction. Existing edge agents already treat it as delivered.
+
+### `GET /v1/edge/commands/reconciliation`
+
+A read-only, site-scoped list authenticated by the same bearer key as polling.
+It includes overdue `queued` and `sent` commands and any command with retained
+conflicting reports. `limit` defaults to 50, with a maximum of 200; `cursor`
+continues in oldest-request-first order. The response uses the standard
+`data`, `page`, and `request_id` collection envelope.
+
+Each entry includes `command_id`, `meter_id`, `site_id`, `command_type`,
+platform `status`, `requested_at`, `expires_at`, optional `sent_at`,
+`age_seconds`, `overdue_seconds`, `last_contact_at`, `last_sms_heartbeat_at`,
+`site_health`, and `last_report_at` (platform receipt time). Site health uses
+the same HTTP/SMS rules and configured thresholds as `/v1/sites`.
+`reconciliation_reason` is `overdue_outcome_unknown` or `conflicting_report`.
+Conflicts include `conflict_count`, `latest_conflict` (reported `status`, raw
+`occurred_at`, and optional `failure_reason`) and `latest_conflict_received_at`.
+All conflicting evidence remains in `audit_events`, not only the latest report
+shown in this list. Listing never retries hardware or changes command status.
 
 ### `GET /healthz` and `GET /readyz`
 

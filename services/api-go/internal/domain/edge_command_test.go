@@ -76,8 +76,9 @@ func TestApplyReportTransitions(t *testing.T) {
 		{CommandStatusFailed, CommandStatusFailed, repeat},
 		{CommandStatusFailed, CommandStatusAcknowledged, conflict},
 		{CommandStatusExpired, CommandStatusExpired, repeat},
-		{CommandStatusExpired, CommandStatusSent, change},
-		{CommandStatusExpired, CommandStatusAcknowledged, change},
+		{CommandStatusExpired, CommandStatusSent, conflict},
+		{CommandStatusExpired, CommandStatusAcknowledged, conflict},
+		{CommandStatusExpired, CommandStatusFailed, conflict},
 	} {
 		next, changed, err := command(c.from).ApplyReport(report(c.to))
 		switch c.want {

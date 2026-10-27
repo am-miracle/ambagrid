@@ -329,6 +329,21 @@ func TestRunnerKeepsReportsUntilThePlatformTakesThem(t *testing.T) {
 	}
 }
 
+func TestRunnerDeliversReportsAcceptedForReconciliation(t *testing.T) {
+	platform, server := newPlatform(t, pending("cmd-off", "disconnect_meter", time.Minute, time.Hour))
+	platform.reportFailure = http.StatusAccepted
+	h := newHarness(t, server)
+	h.sync(t)
+	stats, err := h.store.CommandLedgerStats(context.Background(), time.Now())
+	if err != nil || stats.PendingReports != 0 || stats.AbandonedReports != 0 {
+		t.Fatalf("accepted evidence must leave neither pending nor abandoned reports: %+v err=%v", stats, err)
+	}
+	h.sync(t)
+	if n := len(h.meter.Device().Received()); n != 1 {
+		t.Fatalf("accepted reports caused the command to run %d times", n)
+	}
+}
+
 func TestRunnerAbandonsReportsThePlatformRefuses(t *testing.T) {
 	platform, server := newPlatform(t, pending("cmd-off", "disconnect_meter", time.Minute, time.Hour))
 	h := newHarness(t, server)
@@ -397,6 +412,28 @@ func TestRunnerTrustsPlatformTimeRemainingOverItsOwnClock(t *testing.T) {
 	}
 	if got := platform.statuses("cmd-late"); !reflect.DeepEqual(got, []string{"expired"}) {
 		t.Errorf("late command reports = %v, want it refused", got)
+	}
+}
+
+func TestRunnerIgnoresOverdueRedeliveryOfACommandItAlreadyRan(t *testing.T) {
+	platform, server := newPlatform(t, pending("cmd-ran", "disconnect_meter", time.Minute, time.Hour))
+	platform.reportFailure = http.StatusServiceUnavailable
+	h := newHarness(t, server)
+	_ = h.runner.SyncOnce(context.Background())
+
+	// Its reports have not landed, so the platform still has it queued and
+	// redelivers it past its deadline.
+	platform.mu.Lock()
+	platform.reportFailure = 0
+	platform.mu.Unlock()
+	platform.add(expiresIn(pending("cmd-ran", "disconnect_meter", 2*time.Hour, time.Hour), -time.Hour))
+	_ = h.runner.SyncOnce(context.Background())
+
+	if got := len(h.meter.Device().Received()); got != 1 {
+		t.Fatalf("meter received %d commands, want the command sent once", got)
+	}
+	if got := platform.statuses("cmd-ran"); slices.Contains(got, "expired") {
+		t.Fatalf("reports = %v; a command that ran must never be reported expired", got)
 	}
 }
 

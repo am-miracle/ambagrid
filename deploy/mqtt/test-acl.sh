@@ -15,7 +15,7 @@ touch "$fixture_dir/passwords"
 chmod 600 "$fixture_dir/passwords"
 docker run --rm -v "$fixture_dir:/fixtures" --entrypoint sh eclipse-mosquitto:2.0 -c '
  set -e
- for username in gateway-ng-kaji-01 device-ng-kaji-01-meter-01 gateway-other-site device-other-site-meter-01; do
+ for username in gateway-ng-kaji-01 device-ng-kaji-01-meter-01 telemetry-ng-kaji-01 gateway-other-site device-other-site-meter-01; do
   mosquitto_passwd -b /fixtures/passwords "$username" acl-test-password
  done
  chmod 600 /fixtures/passwords /fixtures/server.key

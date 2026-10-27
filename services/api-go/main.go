@@ -76,11 +76,26 @@ func main() {
 		logger.Info("SMS fallback webhook enabled", "path", "/v1/sms/inbound")
 	}
 
+	commandService := services.NewEdgeCommandService(postgres.NewEdgeCommandStore(pool, cfg.DBQueryTimeout), services.OutcomeTopics{
+		Acknowledged: cfg.CommandAcknowledgedTopic, Failed: cfg.CommandFailedTopic,
+	}, services.SiteHealthThresholds{
+		OfflineAfter: cfg.SiteOfflineAfter, EventStaleAfter: cfg.SiteEventStaleAfter,
+	})
+	workerCtx, stopWorker := context.WithCancel(ctx)
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		commandService.RunExpiryWorker(workerCtx, func(err error) {
+			logger.Error("expire undelivered meter commands", "error", err)
+		})
+	}()
+	defer func() {
+		stopWorker()
+		<-workerDone
+	}()
 	var edgeCommands controller.EdgeCommandService
 	if len(cfg.EdgeAPIKeys) > 0 {
-		edgeCommands = services.NewEdgeCommandService(postgres.NewEdgeCommandStore(pool, cfg.DBQueryTimeout), services.OutcomeTopics{
-			Acknowledged: cfg.CommandAcknowledgedTopic, Failed: cfg.CommandFailedTopic,
-		})
+		edgeCommands = commandService
 		logger.Info("edge command delivery enabled", "path", "/v1/edge/commands", "sites", len(cfg.EdgeAPIKeys))
 	}
 

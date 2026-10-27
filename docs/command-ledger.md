@@ -100,9 +100,11 @@ happened".
 Retention must stay longer than the longest time upstream may retry one
 command ID, so `API_METER_COMMAND_TTL` (default 24 hours) must be set well
 below it. The two are configured in different services; the edge checks each
-polled command's remaining lifetime against its retention and, when one could
-outlive it, logs an error and sets
-`ambagrid_edge_command_expiry_beyond_retention` to 1. The command still runs.
+polled command's remaining lifetime against its retention. A non-empty poll
+sets `ambagrid_edge_command_expiry_beyond_retention` to 1 if any command could
+outlive retention, or 0 otherwise; empty polls leave it unchanged. The edge
+logs an error only when the condition changes from false to true. The command
+still runs.
 
 ## Operations
 
@@ -142,7 +144,7 @@ runs the selected batch oldest first.
 ```text
 api-go                                 edge agent
 POST /v1/edge/commands/poll  ───────►  runner, one command at a time, oldest first
-  expire overdue, mark queued            expired?          → refuse, report expired
+  expire requested, mark queued          expired?          → refuse, report expired
                                          older relay cmd?  → refuse, report failed
                                          otherwise         → ledger.Execute
 POST /v1/edge/commands/{id}/report ◄──  command_reports outbox
@@ -171,14 +173,58 @@ because a wrong key is an operator fix after which the reports still matter.
 ### Expiry
 
 `meter_commands.expires_at` defaults to 24 hours after the request
-(`API_METER_COMMAND_TTL`). The platform expires undelivered commands when the
-site polls and stops serving any command past its deadline. The edge checks
-again before sending, against its own clock, and refuses a late command it has
-never sent. A command that may already have reached the device is never
-reported as expired, nor resent after its deadline.
+(`API_METER_COMMAND_TTL`). When the site polls and in a background sweep, the
+platform expires overdue `requested` commands: those have never been delivered.
+The sweep runs at startup and every minute, settling at most 200 commands per
+batch across all sites, with audit and outcome publication in one transaction.
+The edge checks again before sending, against its own clock, and refuses a late
+command it has never sent. A command that may already have reached the device
+is never reported as expired, nor resent after its deadline.
 
-The platform accepts a device outcome for a command it already expired, since
-the gateway may have sent it before the deadline passed on the server's clock.
+A `queued` command was delivered, so the edge may have sent it before the
+deadline even if its report arrives later. The platform never expires it.
+Polls keep returning it past its deadline until the edge settles it, as
+`expired` if it never sent it or with the device's outcome if it did. A
+delivery whose poll response was lost settles the same way. Platform expiry is
+therefore final: a later report other than `expired` is retained as conflicting
+evidence without changing status or publishing another outcome. After durable
+capture, `202` tells the edge that the report reached reconciliation; a storage
+failure leaves it retryable. This handles rows expired incorrectly by older
+platform code without silently contradicting previously published failures.
+
+### Reconciliation and rollout
+
+`GET /v1/edge/commands/reconciliation` uses the site's edge bearer key and lists
+overdue `queued`/`sent` commands plus commands with conflicting reports. It
+shows site health, contact and report receipt times, command age, overdue age,
+and the latest conflict. All conflicting reports are retained in `audit_events`
+as `meter_command.report_conflict`; exact retries are deduplicated. Commands at
+sites that never return remain unresolved and visible instead of becoming
+assumed failures. See [the endpoint contract](api.md#get-v1edgecommandsreconciliation).
+
+Deploy this API version before updating edge agents. It needs no new database
+migration. Verify capture with a known conflicting report: expect `202`,
+unchanged platform status, one conflict audit event, and no new outcome event.
+Do not reopen expired rows or resend hardware commands as a rollout repair.
+
+Inventory pre-rollout expirations using the deployment timestamp as a cutoff;
+their prior delivery state cannot reliably be recovered from status alone:
+
+```sql
+SELECT sm.site_id, mc.command_id, mc.meter_id, mc.requested_at,
+       mc.expires_at, mc.sent_at
+FROM meter_commands mc
+JOIN smart_meters sm ON sm.meter_id = mc.meter_id
+WHERE mc.status = 'expired' AND mc.requested_at < :'deployment_at'::timestamptz
+ORDER BY mc.requested_at, mc.command_id;
+```
+
+Compare these rows with edge ledger results and provider/device evidence. Reports
+already abandoned after a `409` remain in the edge's SQLite `command_reports`
+table until pruning; preserve those records before retention removes them and
+submit verified evidence through the report endpoint. It durably accepts the
+conflict for review. This read-only workflow does not reverse previous failure
+events, resolve conflicting outcomes, or authorize a replacement command.
 
 ### Relay ordering
 

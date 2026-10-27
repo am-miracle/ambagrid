@@ -57,6 +57,7 @@ func (a API) Handler() http.Handler {
 		a.handleRoute(mux, http.MethodPost, wh.Pattern, a.handleWebhookPayment(provider))
 	}
 	if a.EdgeCommands != nil {
+		a.handleRoute(mux, http.MethodGet, "/v1/edge/commands/reconciliation", a.handleListCommandReconciliation)
 		a.handleRoute(mux, http.MethodPost, "/v1/edge/commands/poll", a.handlePollEdgeCommands)
 		a.handleRoute(mux, http.MethodPost, "/v1/edge/commands/{command_id}/report", a.handleReportEdgeCommand)
 	}

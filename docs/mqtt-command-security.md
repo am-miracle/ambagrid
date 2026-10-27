@@ -13,7 +13,8 @@ Compose broker is for local development; its published ports bind to loopback.
 Before starting the production broker:
 
 1. Replace the example users/topics in `deploy/mqtt/commands.acl` with the exact
-   commissioned identities and site prefixes. Remove the example second tenant.
+   commissioned identities and site prefixes. Remove the example second tenant
+   and the telemetry test identity, which deliberately has no command-broker grants.
 2. Provision `deploy/mqtt/secrets/server.crt` and `server.key`. The certificate
    must cover the broker's real DNS name and include the intermediate chain.
 3. Create `deploy/mqtt/secrets/passwords` with `mosquitto_passwd`. Use separate,
@@ -52,7 +53,8 @@ deploy/mqtt/test-acl.sh
 
 It creates a disposable TLS broker using the actual config/ACL and synthetic
 credentials, then checks authorized command/reply delivery, rejected anonymous
-access, cross-site command denial, and blocked forged replies. It removes its
+access, cross-site command denial, and blocked forged replies. An authenticated
+telemetry identity is tested for denied command/reply reads and writes. It removes its
 container and keys afterwards. Docker, OpenSSL, and Go are required.
 Changing production ACLs requires repeating these checks against that deployment
 with its own test identities. Rotate/revoke credentials using the broker's

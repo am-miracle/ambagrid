@@ -32,7 +32,7 @@ func run() error {
 	var recoverFile, actor, evidence string
 	flag.StringVar(&request.Reference, "reference", "", "reservation reference for reconciliation")
 	flag.StringVar(&request.PaymentID, "payment", "", "confirmed STS-routed payment ID")
-	flag.BoolVar(&unresolved, "list-unresolved", false, "list unresolved reservations without contacting provider")
+	flag.BoolVar(&unresolved, "list-unresolved", false, "list incomplete reservations and retry eligibility without contacting provider")
 	flag.BoolVar(&shortfalls, "list-shortfalls", false, "list non-issuance reversals the balance could not fully cover")
 	flag.StringVar(&recoverFile, "recover", "", "JSON result recovered from provider records")
 	flag.BoolVar(&notIssued, "not-issued", false, "record provider non-issuance and reverse its funded credit; never retries")

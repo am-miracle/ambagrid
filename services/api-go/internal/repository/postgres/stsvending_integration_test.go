@@ -332,14 +332,9 @@ func TestDefinitelyUnsentVendCanRetryWithSameFunding(t *testing.T) {
 	if _, err := service.Vend(ctx, request); !errors.Is(err, domain.ErrVendNotSent) || errors.Is(err, domain.ErrVendUncertain) {
 		t.Fatalf("unsent error=%v", err)
 	}
-	records, err := store.ListUnresolved(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, r := range records {
-		if r.Reference == request.Reference {
-			t.Fatal("definitely unsent request requires reconciliation")
-		}
+	r := listedSTSVend(t, store, request.Reference)
+	if r.Status != domain.STSVendRetryableUnsent || !r.SafeToRetry || r.RetryBlockedReason != nil || r.LastError == nil {
+		t.Fatalf("unsent request must be visible without implying an uncertain outcome: %+v", r)
 	}
 	result, err := service.Vend(ctx, request)
 	if err != nil || len(result.Tokens) != 2 || provider.calls != 2 {
@@ -348,13 +343,25 @@ func TestDefinitelyUnsentVendCanRetryWithSameFunding(t *testing.T) {
 	if _, err := service.Vend(ctx, request); err != nil || provider.calls != 2 {
 		t.Fatalf("completed vend repeated: %v", err)
 	}
+	records, err := services.ListUnresolvedSTSVends(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range records {
+		if record.Reference == request.Reference {
+			t.Fatal("completed vend remains in incomplete reservations")
+		}
+	}
 }
 func TestRetryRechecksFundingAfterRefund(t *testing.T) {
 	f, request, _ := fundedSTSRequest(t, "sts")
 	ctx := context.Background()
 	provider := &failBeforeSendOnce{}
-	service := services.NewSTSVendingService(NewSTSVendStore(f.pool, "test-installation"), provider)
-	service.Vend(ctx, request)
+	store := NewSTSVendStore(f.pool, "test-installation")
+	service := services.NewSTSVendingService(store, provider)
+	if _, err := service.Vend(ctx, request); !errors.Is(err, domain.ErrVendNotSent) {
+		t.Fatal(err)
+	}
 	if _, err := f.pool.Exec(ctx, "UPDATE payments SET status='reversed' WHERE payment_id=$1", request.PaymentID); err != nil {
 		t.Fatal(err)
 	}
@@ -363,6 +370,65 @@ func TestRetryRechecksFundingAfterRefund(t *testing.T) {
 	}
 	if provider.calls != 1 {
 		t.Fatal("provider contacted after funding changed")
+	}
+	r := listedSTSVend(t, store, request.Reference)
+	if r.Status != domain.STSVendRetryBlocked || !r.SafeToRetry || r.RetryBlockedReason == nil || *r.RetryBlockedReason != "payment_reversed" || r.LastError == nil {
+		t.Fatalf("refunded request is hidden or misclassified: %+v", r)
+	}
+	if _, err := f.pool.Exec(ctx, "UPDATE payments SET status='confirmed' WHERE payment_id=$1", request.PaymentID); err != nil {
+		t.Fatal(err)
+	}
+	r = listedSTSVend(t, store, request.Reference)
+	if r.Status != domain.STSVendRetryableUnsent || r.RetryBlockedReason != nil {
+		t.Fatalf("listing retained a stale funding rejection: %+v", r)
+	}
+	if _, err := service.Vend(ctx, request); err != nil || provider.calls != 2 {
+		t.Fatalf("restored funding cannot retry the same payment: calls=%d err=%v", provider.calls, err)
+	}
+}
+
+func listedSTSVend(t *testing.T, store services.STSVendReportStore, reference string) domain.STSVendRecord {
+	t.Helper()
+	records, err := services.ListUnresolvedSTSVends(context.Background(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range records {
+		if record.Reference == reference {
+			return record
+		}
+	}
+	t.Fatalf("reservation %s missing from operator listing", reference)
+	return domain.STSVendRecord{}
+}
+
+func TestUnsentSTSReservationShowsCurrentConfigurationBlock(t *testing.T) {
+	f, request, _ := fundedSTSRequest(t, "sts")
+	ctx := context.Background()
+	store := NewSTSVendStore(f.pool, "test-installation")
+	provider := &failBeforeSendOnce{}
+	service := services.NewSTSVendingService(store, provider)
+	if _, err := service.Vend(ctx, request); !errors.Is(err, domain.ErrVendNotSent) {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, "UPDATE smart_meters SET sts_installation='replacement-installation' WHERE meter_id=$1", f.meterID); err != nil {
+		t.Fatal(err)
+	}
+	r := listedSTSVend(t, store, request.Reference)
+	if r.Status != domain.STSVendRetryBlocked || r.RetryBlockedReason == nil || *r.RetryBlockedReason != "installation_changed" {
+		t.Fatalf("configuration change not visible before retry: %+v", r)
+	}
+	if _, err := service.Vend(ctx, request); err == nil || provider.calls != 1 {
+		t.Fatalf("blocked reservation retried: calls=%d err=%v", provider.calls, err)
+	}
+	records, err := NewSTSVendStore(f.pool, "replacement-installation").ListUnresolved(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range records {
+		if r.Reference == request.Reference {
+			t.Fatal("reservation leaked into another installation's operator list")
+		}
 	}
 }
 func TestNonIssuancePreservesOtherPaymentsAndNetSummary(t *testing.T) {
@@ -399,7 +465,7 @@ func TestNonIssuancePreservesOtherPaymentsAndNetSummary(t *testing.T) {
 		t.Fatal("customer summary missing")
 	}
 }
-func TestInsufficientBalanceReversesWhatRemainsAndRecordsShortfall(t *testing.T) {
+func TestInsufficientBalanceReversesPairedPortionAndRecordsShortfall(t *testing.T) {
 	f, request, result := fundedSTSRequest(t, "sts")
 	ctx := context.Background()
 	store := NewSTSVendStore(f.pool, "test-installation")
@@ -421,15 +487,15 @@ func TestInsufficientBalanceReversesWhatRemainsAndRecordsShortfall(t *testing.T)
 	if err := f.pool.QueryRow(ctx, "SELECT remaining_kwh::text,remaining_money_value_minor_units FROM credit_balances WHERE assignment_id=$1", result.Credit.AssignmentID).Scan(&balanceKWh, &balanceMoney); err != nil {
 		t.Fatal(err)
 	}
-	if balanceKWh != "0.000000" || balanceMoney != 0 {
-		t.Fatalf("balance = %s kWh, %d minor; want exactly zero", balanceKWh, balanceMoney)
+	if balanceKWh != "0.000000" || balanceMoney != 2501 {
+		t.Fatalf("balance = %s kWh, %d minor; want zero kWh and 2501 minor units", balanceKWh, balanceMoney)
 	}
 	var reversedKWh, shortfallKWh string
 	var reversedMoney, shortfallMoney int64
 	if err := f.pool.QueryRow(ctx, "SELECT kwh::text,shortfall_kwh::text,money_minor,shortfall_money_minor FROM sts_credit_reversals WHERE reference=$1", request.Reference).Scan(&reversedKWh, &shortfallKWh, &reversedMoney, &shortfallMoney); err != nil {
 		t.Fatal(err)
 	}
-	if reversedKWh != "0.100000" || shortfallKWh != "0.100040" || reversedMoney != 5001 || shortfallMoney != 0 {
+	if reversedKWh != "0.100000" || shortfallKWh != "0.100040" || reversedMoney != 2500 || shortfallMoney != 2501 {
 		t.Fatalf("reversal = %s kWh (shortfall %s), %d minor (shortfall %d)", reversedKWh, shortfallKWh, reversedMoney, shortfallMoney)
 	}
 
@@ -437,8 +503,63 @@ func TestInsufficientBalanceReversesWhatRemainsAndRecordsShortfall(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(shortfalls) != 1 || shortfalls[0].Reference != request.Reference || shortfalls[0].ShortfallKWh != "0.100040" || shortfalls[0].ShortfallMoneyMinor != 0 {
+	if len(shortfalls) != 1 || shortfalls[0].Reference != request.Reference || shortfalls[0].ShortfallKWh != "0.100040" || shortfalls[0].ShortfallMoneyMinor != 2501 {
 		t.Fatalf("shortfalls = %+v, want this reversal listed for review", shortfalls)
+	}
+}
+
+func TestSTSReversalUsesOriginalCreditProportionsAndRoundsDown(t *testing.T) {
+	for _, tc := range []struct {
+		name, creditKWh, balanceKWh, reversedKWh string
+		creditMoney, balanceMoney, reversedMoney int64
+	}{
+		{"money limits reversal", "0.200040", "0.200040", "0.100000", 5001, 2500, 2500},
+		{"zero energy preserves money", "0.200040", "0", "0.000000", 5001, 5001, 0},
+		{"zero money preserves energy", "0.200040", "0.200040", "0.000000", 5001, 0, 0},
+		{"less than one minor unit", "0.200040", "0.000039", "0.000000", 5001, 5001, 0},
+		{"fractional micro kWh rounds down", "0.200041", "0.200041", "0.100000", 5001, 2500, 2500},
+		{"less than one micro kWh", "0.000001", "0.000001", "0.000000", 5001, 2500, 0},
+		{"zero-value legacy credit", "0.200040", "0.100000", "0.100000", 0, 1000, 0},
+		{"larger balance caps at original credit", "0.200040", "1", "0.200040", 5001, 10000, 5001},
+		{"large money stays exact", "0.200040", "0.100020", "0.100019", 9223372036854775807, 9223372036854775807, 4611686018427387903},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, request, result := fundedSTSRequest(t, "sts")
+			ctx := context.Background()
+			store := NewSTSVendStore(f.pool, "test-installation")
+			if _, err := services.NewSTSVendingService(store, &vendingProvider{fail: true}).Vend(ctx, request); !errors.Is(err, domain.ErrVendUncertain) {
+				t.Fatalf("reserve uncertain vend: %v", err)
+			}
+			if _, err := f.pool.Exec(ctx, "UPDATE energy_credits SET kwh_granted=$2::numeric,money_value_minor_units=$3 WHERE credit_id=$1", result.Credit.CreditID, tc.creditKWh, tc.creditMoney); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.pool.Exec(ctx, "UPDATE credit_balances SET remaining_kwh=$2::numeric,remaining_money_value_minor_units=$3 WHERE assignment_id=$1", result.Credit.AssignmentID, tc.balanceKWh, tc.balanceMoney); err != nil {
+				t.Fatal(err)
+			}
+			r := domain.STSReconciliation{Reference: request.Reference, MeterID: request.MeterID, Actor: "operator:test", Evidence: "provider definitive non-issuance", NotIssued: true}
+			if err := services.ReconcileSTSVend(ctx, store, r); err != nil {
+				t.Fatal(err)
+			}
+			var kwh string
+			var money int64
+			var conserved bool
+			if err := f.pool.QueryRow(ctx, `
+				SELECT scr.kwh::text, scr.money_minor,
+				       scr.kwh+scr.shortfall_kwh=$2::numeric
+				       AND scr.money_minor+scr.shortfall_money_minor=$3::numeric
+				       AND cb.remaining_kwh+scr.kwh=$4::numeric
+				       AND cb.remaining_money_value_minor_units+scr.money_minor=$5::numeric
+				FROM sts_credit_reversals scr JOIN credit_balances cb ON cb.assignment_id=$6::uuid
+				WHERE scr.reference=$1`, request.Reference, tc.creditKWh, tc.creditMoney, tc.balanceKWh, tc.balanceMoney, result.Credit.AssignmentID).Scan(&kwh, &money, &conserved); err != nil {
+				t.Fatal(err)
+			}
+			if kwh != tc.reversedKWh || money != tc.reversedMoney || !conserved {
+				t.Fatalf("reversed=%s kWh/%d minor, want=%s/%d; conservation=%t", kwh, money, tc.reversedKWh, tc.reversedMoney, conserved)
+			}
+			if err := services.ReconcileSTSVend(ctx, store, r); !errors.Is(err, domain.ErrConflict) {
+				t.Fatalf("second reversal was not refused: %v", err)
+			}
+		})
 	}
 }
 

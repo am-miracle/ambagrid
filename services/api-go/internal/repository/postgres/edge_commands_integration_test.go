@@ -63,7 +63,7 @@ func newEdgeFixture(t *testing.T) edgeFixture {
 		clean("DELETE FROM assets WHERE asset_id = ANY($1)", []string{f.assetID, otherAsset})
 		clean("DELETE FROM sites WHERE site_id = ANY($1)", []string{f.siteID, f.other})
 	})
-	f.service = services.NewEdgeCommandService(NewEdgeCommandStore(pool, 5*time.Second), services.OutcomeTopics{})
+	f.service = services.NewEdgeCommandService(NewEdgeCommandStore(pool, 5*time.Second), services.OutcomeTopics{}, services.SiteHealthThresholds{OfflineAfter: 5 * time.Minute, EventStaleAfter: 5 * time.Minute})
 	return f
 }
 
@@ -173,7 +173,7 @@ func TestEdgeReportsMoveCommandsThroughTheirLifecycle(t *testing.T) {
 	if _, _, err := report(domain.CommandStatusFailed, sentAt, "late failure"); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("failure after acknowledgement err = %v, want ErrConflict", err)
 	}
-	if got := f.audits(t, id); len(got) != 2 || got[0] != "meter_command.sent" || got[1] != "meter_command.acknowledged" {
+	if got := f.audits(t, id); len(got) != 3 || got[0] != "meter_command.sent" || got[1] != "meter_command.acknowledged" || got[2] != "meter_command.report_conflict" {
 		t.Fatalf("audit trail = %v", got)
 	}
 	if polled, err := f.service.Poll(ctx, f.siteID, 0); err != nil || len(polled) != 0 {
@@ -202,7 +202,35 @@ func TestEdgeReportsRecordFailureAndRespectSiteBoundaries(t *testing.T) {
 	}
 }
 
-func TestEdgeReportOverridesServerExpiryWithDeviceOutcome(t *testing.T) {
+func TestEdgePollLeavesOverdueDeliveredCommandsForTheEdgeToSettle(t *testing.T) {
+	f := newEdgeFixture(t)
+	ctx := context.Background()
+	id := f.insertCommand(t, f.meterID, domain.CommandReconnectMeter, 2*time.Hour, 24*time.Hour)
+	if _, err := f.service.Poll(ctx, f.siteID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, "UPDATE meter_commands SET expires_at = requested_at + interval '1 hour' WHERE command_id = $1::uuid", id); err != nil {
+		t.Fatal(err)
+	}
+
+	polled, err := f.service.Poll(ctx, f.siteID, 0)
+	if err != nil || len(polled) != 1 || polled[0].CommandID != id || polled[0].Status != domain.CommandStatusQueued || polled[0].ExpiresIn > 0 {
+		t.Fatalf("poll = %+v, %v; want the overdue queued command redelivered with no time left", polled, err)
+	}
+	if got := f.outboxEvents(t, id); len(got) != 0 {
+		t.Fatalf("overdue queued command published %v, want nothing until the edge reports", got)
+	}
+
+	cmd, changed, err := f.service.Report(ctx, f.siteID, domain.CommandReport{CommandID: id, Status: domain.CommandStatusAcknowledged, OccurredAt: time.Now()})
+	if err != nil || !changed || cmd.Status != domain.CommandStatusAcknowledged {
+		t.Fatalf("acknowledging an overdue queued command = %+v changed %t err %v", cmd, changed, err)
+	}
+	if got := f.outboxEvents(t, id); !reflect.DeepEqual(got, []string{"meter.command.acknowledged meter.command.acknowledged acknowledged"}) {
+		t.Fatalf("outcome events = %v, want only the acknowledgement", got)
+	}
+}
+
+func TestEdgeReportCannotOverturnPlatformExpiry(t *testing.T) {
 	f := newEdgeFixture(t)
 	ctx := context.Background()
 	id := f.insertCommand(t, f.meterID, domain.CommandReconnectMeter, 2*time.Hour, time.Hour)
@@ -212,9 +240,12 @@ func TestEdgeReportOverridesServerExpiryWithDeviceOutcome(t *testing.T) {
 	if got := f.status(t, id); got != domain.CommandStatusExpired {
 		t.Fatalf("status before report = %q, want expired", got)
 	}
-	cmd, changed, err := f.service.Report(ctx, f.siteID, domain.CommandReport{CommandID: id, Status: domain.CommandStatusAcknowledged, OccurredAt: time.Now()})
-	if err != nil || !changed || cmd.Status != domain.CommandStatusAcknowledged {
-		t.Fatalf("acknowledging an expired command = %+v changed %t err %v", cmd, changed, err)
+	_, _, err := f.service.Report(ctx, f.siteID, domain.CommandReport{CommandID: id, Status: domain.CommandStatusAcknowledged, OccurredAt: time.Now()})
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("acknowledging an expired command err = %v, want ErrConflict", err)
+	}
+	if got := f.outboxEvents(t, id); !reflect.DeepEqual(got, []string{"meter.command.failed meter.command.failed expired"}) {
+		t.Fatalf("outcome events = %v, want only the expiry", got)
 	}
 }
 

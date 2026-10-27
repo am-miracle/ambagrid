@@ -35,6 +35,23 @@ type CommandReport struct {
 	FailureReason string
 }
 
+type SiteCommand struct {
+	SiteID  string
+	Command MeterCommand
+}
+
+// CommandReconciliation keeps an unresolved delivery separate from a conflicting report.
+type CommandReconciliation struct {
+	SiteCommand
+	Site                     Site
+	LastReportAt             *time.Time
+	ConflictCount            int64
+	LatestConflict           *CommandReport
+	LatestConflictReceivedAt *time.Time
+	Age                      time.Duration
+	Overdue                  time.Duration
+}
+
 func (r CommandReport) Validate() error {
 	if err := ValidateCommandID(r.CommandID); err != nil {
 		return err
@@ -72,13 +89,8 @@ func (c MeterCommand) ClampOccurredAt(at, now time.Time) time.Time {
 	return at
 }
 
-// ApplyReport returns the command after an edge report. changed is false when
-// the report repeats or trails what is already recorded, so the edge can retry
-// a report safely. A report that contradicts a definite outcome is a conflict.
-//
-// Server-side expiry yields to the edge: the gateway may have started sending
-// before the deadline passed on the server's clock, and what the device did
-// is the outcome that matters.
+// ApplyReport ignores repeated or trailing reports and rejects conflicting outcomes.
+// The service retains conflicting evidence separately, including reports after legacy expiry.
 func (c MeterCommand) ApplyReport(r CommandReport) (MeterCommand, bool, error) {
 	at := r.OccurredAt.UTC()
 	conflict := func() (MeterCommand, bool, error) {
@@ -105,6 +117,7 @@ func (c MeterCommand) ApplyReport(r CommandReport) (MeterCommand, bool, error) {
 		if r.Status == CommandStatusExpired {
 			return c, false, nil
 		}
+		return conflict()
 	case CommandStatusRequested, CommandStatusQueued:
 	default:
 		return conflict()

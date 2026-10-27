@@ -90,7 +90,24 @@ type STSVendReportStore interface {
 }
 
 func ListUnresolvedSTSVends(ctx context.Context, store STSVendReportStore) ([]domain.STSVendRecord, error) {
-	return store.ListUnresolved(ctx)
+	records, err := store.ListUnresolved(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range records {
+		r := &records[i]
+		switch {
+		case r.NeedsBalanceReversal:
+			r.Status = domain.STSVendNeedsBalanceReversal
+		case r.SafeToRetry && r.RetryBlockedReason != nil:
+			r.Status = domain.STSVendRetryBlocked
+		case r.SafeToRetry:
+			r.Status = domain.STSVendRetryableUnsent
+		default:
+			r.Status = domain.STSVendOutcomeUncertain
+		}
+	}
+	return records, nil
 }
 
 func ListSTSReversalShortfalls(ctx context.Context, store STSVendReportStore) ([]domain.STSReversalShortfall, error) {
