@@ -39,6 +39,13 @@ type Store interface {
 type Config struct {
 	PollInterval   time.Duration
 	CommandTimeout time.Duration
+	// Retention is EDGE_COMMAND_RETENTION; zero skips the expiry check.
+	Retention time.Duration
+	Metrics   Metrics
+}
+
+type Metrics interface {
+	ExpiryBeyondRetention(exceeded bool)
 }
 
 type Executor interface {
@@ -53,6 +60,8 @@ type Runner struct {
 	executor Executor
 	store    Store
 	now      func() time.Time
+
+	expiryBeyondRetention bool
 }
 
 // New expects executor to supply durable at-most-once delivery, either through
@@ -88,6 +97,7 @@ func (r *Runner) SyncOnce(ctx context.Context) error {
 	pending, pollErr := r.platform.Poll(ctx)
 	var handleErr error
 	if pollErr == nil {
+		r.checkRetention(pending)
 		slices.SortStableFunc(pending, func(a, b Pending) int {
 			if c := a.RequestedAt.Compare(b.RequestedAt); c != 0 {
 				return c
@@ -177,6 +187,32 @@ func (r *Runner) superseded(ctx context.Context, cmd adapter.Command) (bool, str
 	}
 	newer := lastAt.After(cmd.RequestedAt) || lastAt.Equal(cmd.RequestedAt) && lastID > cmd.ID
 	return newer, lastID, nil
+}
+
+// checkRetention flags commands the platform may still deliver after their
+// ledger entry is pruned, when the edge would no longer know they already ran.
+func (r *Runner) checkRetention(pending []Pending) {
+	if r.cfg.Retention <= 0 || len(pending) == 0 {
+		return
+	}
+	now := r.now()
+	exceeded := false
+	for _, p := range pending {
+		remaining := p.deadline().Sub(now)
+		if remaining <= r.cfg.Retention {
+			continue
+		}
+		if !r.expiryBeyondRetention {
+			slog.Error("meter command expires after EDGE_COMMAND_RETENTION; lower API_METER_COMMAND_TTL or raise the retention",
+				"command_id", p.CommandID, "expires_in", remaining, "retention", r.cfg.Retention)
+		}
+		exceeded = true
+		break
+	}
+	r.expiryBeyondRetention = exceeded
+	if r.cfg.Metrics != nil {
+		r.cfg.Metrics.ExpiryBeyondRetention(exceeded)
+	}
 }
 
 func (p Pending) deadline() time.Time {

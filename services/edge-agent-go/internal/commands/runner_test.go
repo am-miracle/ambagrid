@@ -429,6 +429,35 @@ func TestClientCorrectsReportTimesForGatewayClockOffset(t *testing.T) {
 	}
 }
 
+type retentionMetrics struct{ exceeded []bool }
+
+func (m *retentionMetrics) ExpiryBeyondRetention(exceeded bool) {
+	m.exceeded = append(m.exceeded, exceeded)
+}
+
+func TestRunnerFlagsCommandsThatCanOutliveLedgerRetention(t *testing.T) {
+	platform, server := newPlatform(t, pending("cmd-long", "disconnect_meter", 0, 2*time.Hour))
+	h := newHarness(t, server)
+	metrics := &retentionMetrics{}
+	runner := commands.New(
+		commands.Config{CommandTimeout: time.Second, Retention: time.Hour, Metrics: metrics},
+		commands.NewHTTPClient(server.URL, siteKey, time.Second), adapter.NewLedger(h.store, h.meter), h.store,
+	)
+	if err := runner.SyncOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := platform.statuses("cmd-long"); !reflect.DeepEqual(got, []string{"sent", "acknowledged"}) {
+		t.Fatalf("reports = %v, want the command still run", got)
+	}
+	platform.add(pending("cmd-short", "reconnect_meter", 0, 30*time.Minute))
+	if err := runner.SyncOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(metrics.exceeded, []bool{true, false}) {
+		t.Fatalf("expiry beyond retention = %v, want flagged then cleared", metrics.exceeded)
+	}
+}
+
 // deadlineExecutor observes the public runner/executor boundary without a real
 // transport delay: the supplied deadline must never outlive platform expiry.
 type deadlineExecutor struct{ deadline time.Time }
@@ -449,5 +478,42 @@ func TestExecutionDeadlineCannotOutliveCommand(t *testing.T) {
 	}
 	if executor.deadline.IsZero() || executor.deadline.After(before.Add(2100*time.Millisecond)) {
 		t.Fatalf("execution deadline %s exceeds command expiry", executor.deadline)
+	}
+}
+
+func TestRunnerOrdersRelaysWithSubmillisecondTimestamp(t *testing.T) {
+	for _, tc := range []struct {
+		name, newerID, olderID string
+		difference             time.Duration
+		stale                  bool
+	}{
+		{"timestamp before ID", "cmd-a-on", "cmd-z-off", time.Nanosecond, true},
+		{"equal timestamp uses ID", "cmd-z-on", "cmd-a-off", 0, true},
+		{"later command still executes", "cmd-z-on", "cmd-a-off", -time.Nanosecond, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requested := time.Now().UTC().Add(-time.Minute).Truncate(time.Second).Add(123456789 * time.Nanosecond)
+			newer := pending(tc.newerID, "reconnect_meter", time.Minute, time.Hour)
+			newer.RequestedAt = requested.Add(tc.difference)
+			platform, server := newPlatform(t, newer)
+			h := newHarness(t, server)
+			h.sync(t)
+			older := pending(tc.olderID, "disconnect_meter", time.Minute, time.Hour)
+			older.RequestedAt = requested
+			platform.add(older)
+			h.sync(t)
+			wantReports := []string{"failed"}
+			wantSends := 1
+			if !tc.stale {
+				wantReports = []string{"sent", "acknowledged"}
+				wantSends = 2
+			}
+			if h.relayClosed(t) != tc.stale || len(h.meter.Device().Received()) != wantSends {
+				t.Fatalf("relay ordering failed: stale=%t, sends=%d", tc.stale, len(h.meter.Device().Received()))
+			}
+			if got := platform.statuses(tc.olderID); !reflect.DeepEqual(got, wantReports) {
+				t.Fatalf("command reports = %v, want %v", got, wantReports)
+			}
+		})
 	}
 }

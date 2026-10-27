@@ -8,7 +8,7 @@ authenticated gateway. No provider token-retrieval endpoint is assumed.
 
 ## One physical credit route per payment
 
-Apply all engine migrations, through `202610250004_sts_unsent_and_reversals.sql`.
+Apply all engine migrations, through `202610250005_sts_reversal_shortfall.sql`.
 Before accepting STS-funded payments, commission the meter's `smart_meters` row:
 set `credit_mode='sts'`, `sts_meter_number` to its registered DRN/PAN or IDRecord,
 `sts_installation` to the provisioned provider installation name, and `sts_currency`

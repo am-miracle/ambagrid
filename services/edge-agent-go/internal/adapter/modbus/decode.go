@@ -25,7 +25,7 @@ func Decode(m Map, regs Registers, device Device, at time.Time) (domain.Reading,
 	at = at.UTC()
 	reading := domain.Reading{
 		DeviceID: device.DeviceID, AssetType: m.DeviceType, TakenAt: at, LastSeenAt: at,
-		Metrics: &domain.ElectricalMetrics{}, InternalTemperatureMissing: true, BatterySOCMissing: true,
+		Metrics: &domain.ElectricalMetrics{},
 	}
 	payload := map[string]any{
 		"device_id": device.DeviceID, "device_type": m.DeviceType.DeviceTypeName(),
@@ -54,10 +54,10 @@ func Decode(m Map, regs Registers, device Device, at time.Time) (domain.Reading,
 		case FieldTotalKWh:
 			reading.Metrics.TotalKWh = &value
 		case FieldInternalTemperature:
-			reading.InternalTemperature, reading.InternalTemperatureMissing = value, false
+			reading.InternalTemperature = &value
 			payload["internal_temperature"] = value
 		case FieldBatterySOC:
-			reading.BatterySOCPct, reading.BatterySOCMissing = value, false
+			reading.BatterySOCPct = &value
 			payload["battery_soc_pct"] = value
 		case FieldSolarIrradiance:
 			reading.SolarIrradiance = value

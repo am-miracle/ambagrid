@@ -3,28 +3,24 @@ package domain
 import "time"
 
 // Reading is a vendor-neutral sample produced by a hardware adapter.
-// Payload holds the canonical AmbaGrid JSON that the adapter produced;
-// the collector preserves it unchanged in the queued event. LastSeenAt is when
-// the device itself last answered, which trails TakenAt when a gateway reports
-// a cached reading for a device it can no longer reach.
+// The collector preserves its canonical AmbaGrid JSON Payload unchanged.
 type Reading struct {
-	DeviceID   string
-	AssetType  AssetType
-	TakenAt    time.Time
+	DeviceID  string
+	AssetType AssetType
+	TakenAt   time.Time
+	// LastSeenAt is the device's last reply time; cached readings can trail TakenAt.
 	LastSeenAt time.Time
 	Payload    []byte
 	Metrics    *ElectricalMetrics
-	// Missing flags preserve unknown sensor readings without treating them as zero.
-	InternalTemperatureMissing bool
-	BatterySOCMissing          bool
-	InternalTemperature        float64
-	RelayClosed                bool
-	BatterySOCPct              float64
-	SolarIrradiance            float64
-	InverterFailed             bool
-	InverterHardFault          bool
-	TamperDetected             bool
-	SiteOutage                 *bool
+	// Nil sensor readings are unknown rather than zero.
+	InternalTemperature *float64
+	RelayClosed         bool
+	BatterySOCPct       *float64
+	SolarIrradiance     float64
+	InverterFailed      bool
+	InverterHardFault   bool
+	TamperDetected      bool
+	SiteOutage          *bool
 }
 
 type ElectricalMetrics struct {

@@ -35,15 +35,16 @@ func (s *Store) LoadCommand(ctx context.Context, commandID string) (adapter.Ledg
 		commandType, state    string
 		acceptedMS, updatedMS int64
 		requestedMS           sql.NullInt64
+		requestedSubMS        sql.NullInt64
 		completedMS           sql.NullInt64
 		result                []byte
 		lastError             sql.NullString
 	)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT command_id, device_id, command_type, request_hash, requested_at_ms, state, attempt_count,
+		SELECT command_id, device_id, command_type, request_hash, requested_at_ms, requested_at_subms_ns, state, attempt_count,
 		       accepted_at_ms, updated_at_ms, completed_at_ms, result, last_error
 		FROM command_ledger WHERE command_id = ?`, commandID).Scan(
-		&entry.CommandID, &entry.DeviceID, &commandType, &entry.RequestHash, &requestedMS, &state, &entry.Attempts,
+		&entry.CommandID, &entry.DeviceID, &commandType, &entry.RequestHash, &requestedMS, &requestedSubMS, &state, &entry.Attempts,
 		&acceptedMS, &updatedMS, &completedMS, &result, &lastError,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -57,7 +58,7 @@ func (s *Store) LoadCommand(ctx context.Context, commandID string) (adapter.Ledg
 	entry.AcceptedAt = time.UnixMilli(acceptedMS).UTC()
 	entry.UpdatedAt = time.UnixMilli(updatedMS).UTC()
 	if requestedMS.Valid {
-		entry.RequestedAt = time.UnixMilli(requestedMS.Int64).UTC()
+		entry.RequestedAt = time.UnixMilli(requestedMS.Int64).Add(time.Duration(requestedSubMS.Int64)).UTC()
 	}
 	if completedMS.Valid {
 		entry.CompletedAt = time.UnixMilli(completedMS.Int64).UTC()
@@ -74,16 +75,17 @@ func (s *Store) LoadCommand(ctx context.Context, commandID string) (adapter.Ledg
 }
 
 func (s *Store) BeginCommandAttempt(ctx context.Context, entry adapter.LedgerEntry, at time.Time) error {
+	requestedMS, requestedSubMS := commandRequestTimeParts(entry.RequestedAt)
 	atMS := at.UTC().UnixMilli()
 	return s.commandTx(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, `
 			INSERT INTO command_ledger(
-				command_id, device_id, command_type, request_hash, requested_at_ms, state, accepted_at_ms, updated_at_ms
-			) VALUES (?, ?, ?, ?, ?, 'in_flight', ?, ?)
+				command_id, device_id, command_type, request_hash, requested_at_ms, requested_at_subms_ns, state, accepted_at_ms, updated_at_ms
+			) VALUES (?, ?, ?, ?, ?, ?, 'in_flight', ?, ?)
 			ON CONFLICT(command_id) DO UPDATE
 			SET state = 'in_flight', attempt_count = attempt_count + 1, updated_at_ms = excluded.updated_at_ms
 			WHERE state IN ('in_flight', 'unknown') AND request_hash = excluded.request_hash`,
-			entry.CommandID, entry.DeviceID, string(entry.Type), entry.RequestHash, nullMillis(entry.RequestedAt), atMS, atMS,
+			entry.CommandID, entry.DeviceID, string(entry.Type), entry.RequestHash, requestedMS, requestedSubMS, atMS, atMS,
 		)
 		if err != nil {
 			return fmt.Errorf("begin command %q: %w", entry.CommandID, err)
@@ -91,7 +93,7 @@ func (s *Store) BeginCommandAttempt(ctx context.Context, entry adapter.LedgerEnt
 		if err := requireOneRow(result, fmt.Errorf("%w: command %q is already resolved or was recorded with different parameters", adapter.ErrInvalidCommand, entry.CommandID)); err != nil {
 			return err
 		}
-		return queueReport(ctx, tx, entry.CommandID, domain.ReportSent, "", at)
+		return queueReport(ctx, tx, entry.CommandID, domain.ReportSent, "", at, at)
 	})
 }
 
@@ -129,7 +131,7 @@ func (s *Store) CompleteCommand(ctx context.Context, commandID string, state ada
 		if result != nil && !result.AcknowledgedAt.IsZero() {
 			reportedAt = result.AcknowledgedAt
 		}
-		return queueReport(ctx, tx, commandID, report, lastError, reportedAt)
+		return queueReport(ctx, tx, commandID, report, lastError, reportedAt, at)
 	})
 }
 
@@ -154,16 +156,17 @@ func (s *Store) RefuseCommand(ctx context.Context, entry adapter.LedgerEntry, st
 	if status != domain.ReportFailed && status != domain.ReportExpired {
 		return false, fmt.Errorf("refuse command %q: %q is not a refusal", entry.CommandID, status)
 	}
+	requestedMS, requestedSubMS := commandRequestTimeParts(entry.RequestedAt)
 	atMS := at.UTC().UnixMilli()
 	refused := false
 	err := s.commandTx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO command_ledger(
-				command_id, device_id, command_type, request_hash, requested_at_ms, state,
+				command_id, device_id, command_type, request_hash, requested_at_ms, requested_at_subms_ns, state,
 				accepted_at_ms, updated_at_ms, completed_at_ms, last_error
-			) VALUES (?, ?, ?, ?, ?, 'rejected', ?, ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, 'rejected', ?, ?, ?, ?)
 			ON CONFLICT(command_id) DO NOTHING`,
-			entry.CommandID, entry.DeviceID, string(entry.Type), entry.RequestHash, nullMillis(entry.RequestedAt),
+			entry.CommandID, entry.DeviceID, string(entry.Type), entry.RequestHash, requestedMS, requestedSubMS,
 			atMS, atMS, atMS, reason,
 		)
 		if err != nil {
@@ -177,29 +180,27 @@ func (s *Store) RefuseCommand(ctx context.Context, entry adapter.LedgerEntry, st
 		if status == domain.ReportFailed {
 			reportReason = reason
 		}
-		return queueReport(ctx, tx, entry.CommandID, status, reportReason, at)
+		return queueReport(ctx, tx, entry.CommandID, status, reportReason, at, at)
 	})
 	return refused, err
 }
 
-// LastRelayCommand returns the newest relay command for deviceID that was or
-// may have been sent. Rejected commands are excluded because they never acted.
-// Pruning can drop old entries; command expiry keeps far older commands from
-// arriving, so the newest surviving entry still decides.
+// LastRelayCommand returns the newest surviving relay command that may have been sent.
+// Legacy request times sort at the end of their millisecond to prevent stale commands undoing them.
 func (s *Store) LastRelayCommand(ctx context.Context, deviceID string) (requestedAt time.Time, commandID string, found bool, err error) {
-	var requestedMS int64
+	var requestedMS, requestedSubMS int64
 	err = s.db.QueryRowContext(ctx, `
-		SELECT requested_at_ms, command_id FROM command_ledger
+		SELECT requested_at_ms, `+commandRequestedSubMSOrderSQL+`, command_id FROM command_ledger
 		WHERE device_id = ? AND command_type IN ('disconnect_meter', 'reconnect_meter')
 		  AND state <> 'rejected' AND requested_at_ms IS NOT NULL
-		ORDER BY requested_at_ms DESC, command_id DESC LIMIT 1`, deviceID).Scan(&requestedMS, &commandID)
+		ORDER BY requested_at_ms DESC, `+commandRequestedSubMSOrderSQL+` DESC, command_id DESC LIMIT 1`, deviceID).Scan(&requestedMS, &requestedSubMS, &commandID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return time.Time{}, "", false, nil
 	}
 	if err != nil {
 		return time.Time{}, "", false, fmt.Errorf("find last relay command for %q: %w", deviceID, err)
 	}
-	return time.UnixMilli(requestedMS).UTC(), commandID, true, nil
+	return time.UnixMilli(requestedMS).Add(time.Duration(requestedSubMS)).UTC(), commandID, true, nil
 }
 
 // DueCommandReports holds back a report while an earlier one for the same
@@ -329,14 +330,15 @@ func (s *Store) commandTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	return nil
 }
 
-func queueReport(ctx context.Context, tx *sql.Tx, commandID string, status domain.CommandReportStatus, reason string, at time.Time) error {
+// Event time may come from a device clock; delivery starts on the edge clock.
+func queueReport(ctx context.Context, tx *sql.Tx, commandID string, status domain.CommandReportStatus, reason string, occurredAt, readyAt time.Time) error {
 	if status == domain.ReportFailed && reason == "" {
 		reason = "rejected without a reason"
 	}
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO command_reports(command_id, status, occurred_at_ms, failure_reason, next_attempt_at_ms)
 		VALUES (?, ?, ?, ?, ?)`,
-		commandID, string(status), at.UTC().UnixMilli(), nullString(reason), at.UTC().UnixMilli(),
+		commandID, string(status), occurredAt.UTC().UnixMilli(), nullString(reason), readyAt.UTC().UnixMilli(),
 	)
 	if err != nil {
 		return fmt.Errorf("queue %s report for command %q: %w", status, commandID, err)
@@ -353,6 +355,11 @@ func requireOneRow(result sql.Result, unchanged error) error {
 		return unchanged
 	}
 	return nil
+}
+
+// commandRequestTimeParts preserves nanosecond precision alongside nullable milliseconds.
+func commandRequestTimeParts(t time.Time) (milliseconds any, submsNS int) {
+	return nullMillis(t), t.Nanosecond() % int(time.Millisecond)
 }
 
 func nullMillis(t time.Time) any {

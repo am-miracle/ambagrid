@@ -34,10 +34,8 @@ type TelemetryAdapter interface {
 	Read(context.Context) ([]domain.Reading, error)
 }
 
-// CommandAdapter only carries commands to the device; Ledger provides
-// at-most-once delivery. Implementations must call BeforeSend immediately
-// before transmitting and pass Command.ID as the vendor reference where the
-// protocol has one.
+// CommandAdapter transports commands; Ledger provides at-most-once delivery.
+// Call BeforeSend immediately before transmitting and use Command.ID as the vendor reference where supported.
 type CommandAdapter interface {
 	Execute(context.Context, Command) (CommandResult, error)
 	Capabilities() Capabilities

@@ -144,6 +144,20 @@ func (c *collector) collectCommands(ctx context.Context, ch chan<- prometheus.Me
 	ch <- prometheus.MustNewConstMetric(c.reportsAbandoned, prometheus.GaugeValue, float64(stats.AbandonedReports))
 }
 
+type CommandMetrics struct {
+	prometheus.Gauge
+}
+
+func NewCommandMetrics() *CommandMetrics {
+	return &CommandMetrics{
+		Gauge: prometheus.NewGauge(prometheus.GaugeOpts{Name: "ambagrid_edge_command_expiry_beyond_retention", Help: "1 when the last non-empty command poll held a command that can outlive EDGE_COMMAND_RETENTION, so a pruned ledger entry could let it run twice."}),
+	}
+}
+
+func (m *CommandMetrics) ExpiryBeyondRetention(exceeded bool) {
+	m.Set(map[bool]float64{false: 0, true: 1}[exceeded])
+}
+
 // AdapterMetrics observes hardware calls independently of queue availability.
 // Values reset on restart; zero success timestamps mean no successful call yet.
 type AdapterMetrics struct {

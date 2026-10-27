@@ -469,3 +469,139 @@ func TestCommandReportsLeaveInOrderPerCommand(t *testing.T) {
 		t.Fatalf("due after a:sent delivered = %v", got)
 	}
 }
+
+func TestRelayOrderingPreservesSubmillisecondPrecisionAcrossRestart(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "queue.db")
+	store := openCommandStore(t, path)
+	requested := commandAt.Add(123456789 * time.Nanosecond)
+	for _, tc := range []struct {
+		id     string
+		offset time.Duration
+	}{
+		{"z-earlier", 0},
+		{"a-later", time.Nanosecond},
+		{"b-later", time.Nanosecond},
+	} {
+		entry := commandEntry(tc.id)
+		entry.Type, entry.RequestedAt = adapter.CommandReconnect, requested.Add(tc.offset)
+		if err := store.BeginCommandAttempt(ctx, entry, commandAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store = openCommandStore(t, path)
+	defer store.Close()
+	entry := loadCommand(t, store, "a-later")
+	if !entry.RequestedAt.Equal(requested.Add(time.Nanosecond)) {
+		t.Fatalf("loaded request time = %s, want %s", entry.RequestedAt, requested.Add(time.Nanosecond))
+	}
+	at, id, found, err := store.LastRelayCommand(ctx, "meter-01")
+	if err != nil || !found || id != "b-later" || !at.Equal(requested.Add(time.Nanosecond)) {
+		t.Fatalf("last relay = %s at %s, found %t, err %v; want b-later at full precision", id, at, found, err)
+	}
+}
+
+func TestOpenMigratesVersionTenRelayOrdering(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "queue.db")
+	store := openCommandStore(t, path)
+	entry := commandEntry("legacy-relay")
+	entry.Type, entry.RequestedAt = adapter.CommandReconnect, commandAt.Add(123456789*time.Nanosecond)
+	if err := store.BeginCommandAttempt(ctx, entry, commandAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Recreate the v10 layout, including its already truncated request time.
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.ExecContext(ctx, `DROP INDEX command_ledger_relay_order;
+		ALTER TABLE command_ledger DROP COLUMN requested_at_subms_ns;
+		CREATE INDEX command_ledger_relay_order ON command_ledger(device_id, requested_at_ms, command_id)
+		WHERE command_type IN ('disconnect_meter', 'reconnect_meter') AND state <> 'rejected';
+		PRAGMA user_version = 10;`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store = openCommandStore(t, path)
+	defer store.Close()
+	legacy := loadCommand(t, store, entry.CommandID)
+	if legacy.State != adapter.CommandUnknown || !legacy.RequestedAt.Equal(entry.RequestedAt.Truncate(time.Millisecond)) {
+		t.Fatalf("migration lost legacy command: %+v", legacy)
+	}
+	at, id, found, err := store.LastRelayCommand(ctx, entry.DeviceID)
+	if err != nil || !found || id != entry.CommandID || !at.Equal(commandAt.Add(123999999*time.Nanosecond)) {
+		t.Fatalf("legacy relay bound = %s at %s, found %t, err %v", id, at, found, err)
+	}
+	if reports, err := store.DueCommandReports(ctx, commandAt, 10); err != nil || len(reports) != 1 || reports[0].CommandID != entry.CommandID {
+		t.Fatalf("migration lost pending report: %+v, %v", reports, err)
+	}
+	refused := commandEntry("refused-after-upgrade")
+	refused.Type, refused.RequestedAt = adapter.CommandDisconnect, entry.RequestedAt
+	if _, err := store.RefuseCommand(ctx, refused, domain.ReportFailed, "superseded", commandAt); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadCommand(t, store, refused.CommandID); !got.RequestedAt.Equal(refused.RequestedAt) {
+		t.Fatalf("new refusal lost request precision: %s", got.RequestedAt)
+	}
+}
+
+func TestAcknowledgementDeliveryDoesNotWaitForDeviceClock(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		ackAt time.Time
+	}{
+		{"future", commandAt.Add(24 * time.Hour)},
+		{"past", commandAt.Add(-24 * time.Hour)},
+		{"missing", time.Time{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "queue.db")
+			store := openCommandStore(t, path)
+			completedAt := commandAt.Add(time.Second)
+			if err := store.BeginCommandAttempt(ctx, commandEntry("clock-skew"), commandAt); err != nil {
+				t.Fatal(err)
+			}
+			result := adapter.CommandResult{CommandID: "clock-skew", AcknowledgedAt: tc.ackAt}
+			if err := store.CompleteCommand(ctx, result.CommandID, adapter.CommandApplied, &result, "", completedAt); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			store = openCommandStore(t, path)
+			defer store.Close()
+			sent, err := store.DueCommandReports(ctx, completedAt, 10)
+			if err != nil || len(sent) != 1 || sent[0].Status != domain.ReportSent {
+				t.Fatalf("sent report must precede acknowledgement: %+v, %v", sent, err)
+			}
+			if err := store.DeliveredCommandReport(ctx, sent[0].ID); err != nil {
+				t.Fatal(err)
+			}
+			if early, err := store.DueCommandReports(ctx, completedAt.Add(-time.Millisecond), 10); err != nil || len(early) != 0 {
+				t.Fatalf("acknowledgement scheduled before local completion: %+v, %v", early, err)
+			}
+			ack, err := store.DueCommandReports(ctx, completedAt, 10)
+			if err != nil || len(ack) != 1 || ack[0].Status != domain.ReportAcknowledged {
+				t.Fatalf("acknowledgement must be due at local completion: %+v, %v", ack, err)
+			}
+			wantEventAt := tc.ackAt
+			if wantEventAt.IsZero() {
+				wantEventAt = completedAt
+			}
+			if !ack[0].OccurredAt.Equal(wantEventAt) {
+				t.Fatalf("event time = %s, want %s", ack[0].OccurredAt, wantEventAt)
+			}
+		})
+	}
+}

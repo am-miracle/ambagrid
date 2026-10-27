@@ -59,11 +59,11 @@ func (r STSVendRequest) ValidateFunding() error {
 }
 func (v STSVend) Validate() error {
 	if len(v.Tokens) == 0 || len(v.Tokens) > 16 || v.VendedAt.IsZero() || v.Units < 0 || math.IsNaN(v.Units) || math.IsInf(v.Units, 0) || (v.UnitName != "kWh" && v.UnitName != "hWh") || !regexp.MustCompile(`^[0-9]{35}$`).MatchString(v.IDRecord) {
-		return fmt.Errorf("invalid recovered STS vend")
+		return fmt.Errorf("invalid STS vend")
 	}
 	for _, token := range v.Tokens {
 		if !regexp.MustCompile(`^[0-9]{20}$`).MatchString(token) {
-			return fmt.Errorf("invalid recovered STS token")
+			return fmt.Errorf("invalid STS token")
 		}
 	}
 	return nil

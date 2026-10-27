@@ -85,7 +85,7 @@ func normalize(f frame) (domain.Reading, error) {
 	r := domain.Reading{
 		DeviceID:            f.Device,
 		TakenAt:             time.UnixMilli(f.TsMs).UTC(),
-		InternalTemperature: float64(f.TempDC) / 10,
+		InternalTemperature: new(float64(f.TempDC) / 10),
 		RelayClosed:         f.Relay == 1,
 		TamperDetected:      f.Tamper == 1,
 		InverterFailed:      f.Fault == faultSoft,
@@ -109,7 +109,7 @@ func normalize(f frame) (domain.Reading, error) {
 	case kindBMS:
 		r.AssetType = domain.AssetBatteryBMS
 		if f.SoCPm != nil {
-			r.BatterySOCPct = float64(*f.SoCPm) / 10
+			r.BatterySOCPct = unscale(f.SoCPm, 10)
 		}
 	case kindInverter:
 		r.AssetType = domain.AssetSolarInverter
@@ -200,9 +200,9 @@ type canonicalPayload struct {
 	LastSeenUTC         int64                     `json:"last_seen_utc"`
 	SiteID              string                    `json:"site_id"`
 	Metrics             *domain.ElectricalMetrics `json:"metrics,omitempty"`
-	InternalTemperature float64                   `json:"internal_temperature"`
+	InternalTemperature *float64                  `json:"internal_temperature"`
 	RelayClosed         bool                      `json:"relay_closed"`
-	BatterySOCPct       float64                   `json:"battery_soc_pct"`
+	BatterySOCPct       *float64                  `json:"battery_soc_pct,omitempty"`
 	SolarIrradiance     float64                   `json:"solar_irradiance"`
 }
 

@@ -129,7 +129,7 @@ func TestBatteryOverheatIsQueuedAsCriticalFallback(t *testing.T) {
 	defer store.Close()
 	now := time.Unix(1730000000, 0).UTC()
 	source := fixedSource{readings: []domain.Reading{{
-		DeviceID: "batt-01", AssetType: domain.AssetBatteryBMS, TakenAt: now, InternalTemperature: 68.2,
+		DeviceID: "batt-01", AssetType: domain.AssetBatteryBMS, TakenAt: now, InternalTemperature: new(68.2),
 		Payload: testPayload("batt-01", "ng-kaji-01", now),
 	}}}
 	c, err := collector.New(collector.Config{SiteID: "ng-kaji-01", Region: "africa-west", Interval: time.Second, BatteryOverheatC: 55}, store, source)
@@ -283,7 +283,7 @@ func TestCriticalIncidentIsDurableBeforeRecordBecomesUploadable(t *testing.T) {
 	queue := &orderedQueue{}
 	now := time.Unix(1730000000, 0).UTC()
 	source := fixedSource{readings: []domain.Reading{{
-		DeviceID: "batt-01", AssetType: domain.AssetBatteryBMS, TakenAt: now, InternalTemperature: 68.2,
+		DeviceID: "batt-01", AssetType: domain.AssetBatteryBMS, TakenAt: now, InternalTemperature: new(68.2),
 		Payload: testPayload("batt-01", "site-01", now),
 	}}}
 	c, err := collector.New(collector.Config{
@@ -591,7 +591,7 @@ func TestUnknownBatteryTemperatureDoesNotResolveOverheat(t *testing.T) {
 	}
 	defer store.Close()
 	now := time.Now().UTC()
-	source := &mutableSource{readings: []domain.Reading{{DeviceID: "battery-01", AssetType: domain.AssetBatteryBMS, TakenAt: now, InternalTemperature: 68.2, Payload: testPayload("battery-01", "site-01", now)}}}
+	source := &mutableSource{readings: []domain.Reading{{DeviceID: "battery-01", AssetType: domain.AssetBatteryBMS, TakenAt: now, InternalTemperature: new(68.2), Payload: testPayload("battery-01", "site-01", now)}}}
 	c, err := collector.New(collector.Config{SiteID: "site-01", Region: "africa-west", Interval: time.Second, BatteryOverheatC: 55}, store, source)
 	if err != nil {
 		t.Fatal(err)
@@ -599,8 +599,7 @@ func TestUnknownBatteryTemperatureDoesNotResolveOverheat(t *testing.T) {
 	if err := c.CollectOnce(ctx); err != nil {
 		t.Fatal(err)
 	}
-	source.readings[0].InternalTemperature = 0
-	source.readings[0].InternalTemperatureMissing = true
+	source.readings[0].InternalTemperature = nil
 	if err := c.CollectOnce(ctx); err != nil {
 		t.Fatal(err)
 	}

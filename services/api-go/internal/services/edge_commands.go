@@ -42,7 +42,8 @@ func NewEdgeCommandService(repository repository.EdgeCommandRepository, topics O
 }
 
 // Poll expires the site's overdue undelivered commands, then returns its
-// pending ones oldest first, marking newly delivered ones queued.
+// pending ones with requested/queued ahead of sent, oldest first within each
+// group, marking newly delivered ones queued.
 func (s *EdgeCommandService) Poll(ctx context.Context, siteID string, limit int) ([]domain.EdgeCommand, error) {
 	if limit <= 0 {
 		limit = defaultEdgeCommandBatch

@@ -73,7 +73,6 @@ func (s *STSVendingService) Vend(ctx context.Context, request domain.STSVendRequ
 // Reconciliation is an operator action backed by provider evidence, never an
 // automatic retry or an inferred result from a duplicate HTTP error.
 type STSReconciliationStore interface {
-	ListUnresolved(context.Context) ([]domain.STSVendRecord, error)
 	Reconcile(context.Context, domain.STSReconciliation) error
 }
 
@@ -82,4 +81,18 @@ func ReconcileSTSVend(ctx context.Context, store STSReconciliationStore, r domai
 		return err
 	}
 	return store.Reconcile(ctx, r)
+}
+
+// STSVendReportStore reads reservations and reversals without contacting the provider.
+type STSVendReportStore interface {
+	ListUnresolved(context.Context) ([]domain.STSVendRecord, error)
+	ListReversalShortfalls(context.Context) ([]domain.STSReversalShortfall, error)
+}
+
+func ListUnresolvedSTSVends(ctx context.Context, store STSVendReportStore) ([]domain.STSVendRecord, error) {
+	return store.ListUnresolved(ctx)
+}
+
+func ListSTSReversalShortfalls(ctx context.Context, store STSVendReportStore) ([]domain.STSReversalShortfall, error) {
+	return store.ListReversalShortfalls(ctx)
 }

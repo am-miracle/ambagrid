@@ -44,8 +44,8 @@ func TestDecodeVictronBatteryRegisters(t *testing.T) {
 	if !near(r.Metrics.Voltage, 52.34) || !near(r.Metrics.Current, -12.3) {
 		t.Fatalf("metrics = %v V %v A", *r.Metrics.Voltage, *r.Metrics.Current)
 	}
-	if math.Abs(r.InternalTemperature-31.5) > 1e-9 || r.InternalTemperatureMissing || math.Abs(r.BatterySOCPct-72.5) > 1e-9 || r.BatterySOCMissing {
-		t.Fatalf("battery = %v C (missing %t), %v %% (missing %t)", r.InternalTemperature, r.InternalTemperatureMissing, r.BatterySOCPct, r.BatterySOCMissing)
+	if !near(r.InternalTemperature, 31.5) || !near(r.BatterySOCPct, 72.5) {
+		t.Fatalf("battery = %v C, %v %%", r.InternalTemperature, r.BatterySOCPct)
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(r.Payload, &payload); err != nil {
@@ -88,7 +88,7 @@ func TestDecodeKeepsUnavailableOptionalPointsMissing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Metrics.Current != nil || !r.InternalTemperatureMissing || !r.BatterySOCMissing || r.InternalTemperature != 0 {
+	if r.Metrics.Current != nil || r.InternalTemperature != nil || r.BatterySOCPct != nil {
 		t.Fatalf("missing values manufactured: %+v", r)
 	}
 	if strings.Contains(string(r.Payload), "internal_temperature") || strings.Contains(string(r.Payload), "battery_soc_pct") {

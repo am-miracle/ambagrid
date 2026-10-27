@@ -22,7 +22,7 @@ the edge learning that it acted.
 ## Decision
 
 `adapter.Ledger` wraps any `CommandAdapter` and keeps a durable record per
-command ID in the edge SQLite store (`command_ledger`, schema version 10).
+command ID in the edge SQLite store (`command_ledger`, schema version 11).
 Adapters only carry commands to the device; the ledger owns at-most-once
 delivery.
 
@@ -98,8 +98,11 @@ are never pruned: deleting one would silently turn "unknown" into "never
 happened".
 
 Retention must stay longer than the longest time upstream may retry one
-command ID. Upstream command expiry does not exist yet; when it is added, it
-must be set well below this retention.
+command ID, so `API_METER_COMMAND_TTL` (default 24 hours) must be set well
+below it. The two are configured in different services; the edge checks each
+polled command's remaining lifetime against its retention and, when one could
+outlive it, logs an error and sets
+`ambagrid_edge_command_expiry_beyond_retention` to 1. The command still runs.
 
 ## Operations
 
@@ -107,6 +110,9 @@ must be set well below this retention.
   `ambagrid_edge_commands_oldest_unresolved_seconds` report commands in
   `in_flight` or `unknown`; `/health` reports `unresolved_commands`. A value
   above zero that persists means a customer's credit may not have arrived.
+- `ambagrid_edge_command_expiry_beyond_retention` at 1 means a pruned ledger
+  entry could let a command run twice; lower `API_METER_COMMAND_TTL` or raise
+  `EDGE_COMMAND_RETENTION`. It reflects the last poll that returned commands.
 - Unresolved commands do not fail the health check: they need reconciliation,
   not a gateway restart.
 - `ErrTimeout` from the ledger is not a device protocol timeout; count those at
@@ -114,9 +120,10 @@ must be set well below this retention.
 
 ## Rollback
 
-Schema version 10 only adds a table, but an older binary refuses to open a
-newer database. Rolling back past this change means keeping the new binary or
-restoring a version 9 database.
+Schema version 11 adds fractional-millisecond request timestamps and updates
+its relay-ordering index. An older binary refuses to open a newer database;
+rolling back requires restoring a database backup from that binary's schema
+version.
 
 ## Delivery
 
@@ -126,6 +133,11 @@ api-go with the site's bearer key (`API_EDGE_API_KEYS` on the platform,
 suits NAT and intermittent cellular links; api-go already owns
 `meter_commands`, so it records each report and its audit event in one
 Postgres transaction. Endpoints are described in [the API reference](api.md).
+
+Each poll selects `requested` and `queued` commands before `sent` commands,
+oldest first within each group. Sent commands fill any remaining batch capacity,
+so unresolved outcomes cannot block later credits or relay commands. The edge
+runs the selected batch oldest first.
 
 ```text
 api-go                                 edge agent
@@ -147,7 +159,10 @@ outcome writes no report, so the platform keeps the command at `sent`, the
 state its reconciliation view looks for.
 
 A report waits while an earlier report for the same command is undelivered,
-so the platform hears `sent` before `acknowledged`. Transient failures back off
+so the platform hears `sent` before `acknowledged`. Initial delivery is scheduled
+from the edge's local transition time, independently of the device event time,
+so a device clock ahead of the edge cannot delay its acknowledgement report.
+Transient failures back off
 from 5 seconds to 10 minutes. A report the platform refuses for good (`400`,
 `404`, `409`) is kept as abandoned for reconciliation and counted in
 `ambagrid_edge_command_reports_abandoned`; `401` and `403` keep retrying,
@@ -172,7 +187,11 @@ command for that meter that was or may have been sent, ordered by
 `requested_at` then command ID. If that command is newer, the older one is
 refused as `failed: superseded by newer relay command <id>`. Commands within
 one poll run oldest first, so a disconnect and a later reconnect both apply, in
-order. Ledger pruning can remove old entries, but expiry stops commands that
+order. SQLite preserves the full request timestamp, including nanoseconds, so
+ordering survives restarts. Version 10 rows have already lost their fractional
+millisecond; after migration they conservatively supersede other commands in
+that same millisecond, even if a later command might otherwise have run.
+Ledger pruning can remove old entries, but expiry stops commands that
 old from arriving, so the newest surviving entry still decides.
 
 ### Credit

@@ -53,7 +53,7 @@ deploy/mqtt/test-acl.sh
 It creates a disposable TLS broker using the actual config/ACL and synthetic
 credentials, then checks authorized command/reply delivery, rejected anonymous
 access, cross-site command denial, and blocked forged replies. It removes its
-container and keys afterwards. Docker, OpenSSL, ripgrep, and Go are required.
+container and keys afterwards. Docker, OpenSSL, and Go are required.
 Changing production ACLs requires repeating these checks against that deployment
 with its own test identities. Rotate/revoke credentials using the broker's
 operational procedure; ACL and credential files are not managed by the edge.

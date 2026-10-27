@@ -37,13 +37,16 @@ func (s *stsVendSession) Reserve(ctx context.Context, request domain.STSVendRequ
 	if found {
 		if retryable {
 			_, err := s.conn.Exec(ctx, `UPDATE sts_vends SET safe_to_retry=false,last_error=NULL WHERE reference=$1`, request.Reference)
-			return nil, err == nil, err
+			if err != nil {
+				return nil, false, fmt.Errorf("reset STS vend for retry: %w", err)
+			}
+			return nil, true, nil
 		}
 		return saved, false, nil
 	}
 	tag, err := s.conn.Exec(ctx, `INSERT INTO sts_vends(reference,installation,meter_id,amount_minor,payment_id) VALUES($1,$2,$3,$4,$5::uuid) ON CONFLICT(reference) DO NOTHING`, request.Reference, s.installation, request.MeterID, request.AmountMinor, request.PaymentID)
 	if err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("insert STS vend reservation: %w", err)
 	}
 	if tag.RowsAffected() == 1 {
 		return nil, true, nil
@@ -63,7 +66,7 @@ func (s *stsVendSession) existing(ctx context.Context, request domain.STSVendReq
 		return nil, false, false, nil
 	}
 	if err != nil {
-		return nil, false, false, err
+		return nil, false, false, fmt.Errorf("read STS vend reservation: %w", err)
 	}
 	if installation != s.installation || meter != request.MeterID || amount != request.AmountMinor || payment == nil || *payment != request.PaymentID {
 		return nil, true, false, fmt.Errorf("%w: vending reference used with different parameters", domain.ErrConflict)
@@ -76,7 +79,7 @@ func (s *stsVendSession) existing(ctx context.Context, request domain.STSVendReq
 	}
 	var saved domain.STSVend
 	if err := json.Unmarshal(result, &saved); err != nil {
-		return nil, true, false, err
+		return nil, true, false, fmt.Errorf("decode stored STS vend result: %w", err)
 	}
 	return &saved, true, false, nil
 }
@@ -86,11 +89,11 @@ func (s *stsVendSession) Complete(ctx context.Context, reference string, result 
 	}
 	raw, err := json.Marshal(result)
 	if err != nil {
-		return err
+		return fmt.Errorf("encode STS vend result: %w", err)
 	}
 	tag, err := s.conn.Exec(ctx, `UPDATE sts_vends SET result=$2::jsonb,completed_at=now(),safe_to_retry=false,last_error=NULL WHERE reference=$1 AND installation=$3 AND result IS NULL AND not_issued_at IS NULL`, reference, string(raw), s.installation)
 	if err != nil {
-		return err
+		return fmt.Errorf("complete STS vend reservation: %w", err)
 	}
 	if tag.RowsAffected() != 1 {
 		return fmt.Errorf("vending reservation missing or already completed")
@@ -146,12 +149,12 @@ func (s *STSVendStore) Reconcile(ctx context.Context, r domain.STSReconciliation
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("begin STS reconciliation: %w", err)
 	}
 	defer tx.Rollback(ctx)
 	var owned bool
 	if err := tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended('sts-vend:'||$1,0))`, r.Reference).Scan(&owned); err != nil {
-		return err
+		return fmt.Errorf("lock STS vend for reconciliation: %w", err)
 	}
 	if !owned {
 		return fmt.Errorf("%w: vend is still active", domain.ErrConflict)
@@ -162,7 +165,7 @@ func (s *STSVendStore) Reconcile(ctx context.Context, r domain.STSReconciliation
 	var notIssued *time.Time
 	var paymentID *string
 	if err := tx.QueryRow(ctx, `SELECT meter_id,result,not_issued_at,payment_id::text FROM sts_vends WHERE reference=$1 AND installation=$2 FOR UPDATE`, r.Reference, s.installation).Scan(&meter, &existing, &notIssued, &paymentID); err != nil {
-		return err
+		return fmt.Errorf("read STS vend for reconciliation: %w", err)
 	}
 	if meter != r.MeterID || existing != nil {
 		return fmt.Errorf("%w: reservation already resolved or meter differs", domain.ErrConflict)
@@ -170,7 +173,7 @@ func (s *STSVendStore) Reconcile(ctx context.Context, r domain.STSReconciliation
 	if notIssued != nil {
 		var reversed bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM sts_credit_reversals WHERE reference=$1)`, r.Reference).Scan(&reversed); err != nil {
-			return err
+			return fmt.Errorf("check STS credit reversal: %w", err)
 		}
 		if !r.NotIssued || paymentID == nil || reversed {
 			return fmt.Errorf("%w: non-issuance already resolved", domain.ErrConflict)
@@ -181,10 +184,10 @@ func (s *STSVendStore) Reconcile(ctx context.Context, r domain.STSReconciliation
 		outcome = "recovered"
 		raw, err := json.Marshal(r.Result)
 		if err != nil {
-			return err
+			return fmt.Errorf("encode recovered STS vend result: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `UPDATE sts_vends SET result=$2::jsonb,completed_at=now(),safe_to_retry=false,last_error=NULL WHERE reference=$1`, r.Reference, string(raw)); err != nil {
-			return err
+			return fmt.Errorf("save recovered STS vend result: %w", err)
 		}
 	} else {
 		if paymentID != nil {
@@ -193,13 +196,16 @@ func (s *STSVendStore) Reconcile(ctx context.Context, r domain.STSReconciliation
 			}
 		}
 		if _, err := tx.Exec(ctx, `UPDATE sts_vends SET not_issued_at=COALESCE(not_issued_at,now()),safe_to_retry=false WHERE reference=$1`, r.Reference); err != nil {
-			return err
+			return fmt.Errorf("record STS vend non-issuance: %w", err)
 		}
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO sts_vend_reconciliations(reference,actor,evidence,outcome) VALUES($1,$2,$3,$4)`, r.Reference, r.Actor, r.Evidence, outcome); err != nil {
-		return err
+		return fmt.Errorf("record STS reconciliation audit: %w", err)
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit STS reconciliation: %w", err)
+	}
+	return nil
 }
 
 type stsVendSession struct {
@@ -212,7 +218,7 @@ type stsVendSession struct {
 func (s *STSVendStore) Open(ctx context.Context, reference string) (services.STSVendSession, error) {
 	conn, err := s.pool.Acquire(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("acquire STS vend connection: %w", err)
 	}
 	var acquired bool
 	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock(hashtextextended('sts-vend:'||$1,0))`, reference).Scan(&acquired); err != nil {
@@ -222,7 +228,7 @@ func (s *STSVendStore) Open(ctx context.Context, reference string) (services.STS
 		conn.Conn().Close(closeCtx)
 		cancel()
 		conn.Release()
-		return nil, err
+		return nil, fmt.Errorf("lock STS vend session: %w", err)
 	}
 	if !acquired {
 		conn.Release()
@@ -246,7 +252,7 @@ func (s *stsVendSession) RecordUnsent(ctx context.Context, reference, cause stri
 	}
 	tag, err := s.conn.Exec(ctx, `UPDATE sts_vends SET safe_to_retry=true,last_error=$2 WHERE reference=$1 AND installation=$3 AND result IS NULL AND not_issued_at IS NULL`, reference, cause, s.installation)
 	if err != nil {
-		return err
+		return fmt.Errorf("record unsent STS vend: %w", err)
 	}
 	if tag.RowsAffected() != 1 {
 		return fmt.Errorf("unsent reservation missing or resolved")

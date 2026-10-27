@@ -28,6 +28,8 @@ WHERE sm.meter_id = mc.meter_id
   AND mc.expires_at <= $2
 RETURNING ` + meterCommandColumns
 
+// Commands awaiting a send take priority so unresolved sent commands cannot
+// consume the whole batch. Spare capacity still redelivers sent commands.
 const listPendingEdgeCommandsSQL = `
 SELECT mc.command_id::text, mc.meter_id, sm.asset_id, mc.command_type,
     mc.status, mc.requested_at, mc.expires_at, mc.credit_kwh::float8
@@ -36,7 +38,7 @@ JOIN smart_meters sm ON sm.meter_id = mc.meter_id
 WHERE sm.site_id = $1
   AND mc.status IN ('requested', 'queued', 'sent')
   AND mc.expires_at > $2
-ORDER BY mc.requested_at, mc.command_id
+ORDER BY (mc.status = 'sent'), mc.requested_at, mc.command_id
 LIMIT $3`
 
 const markCommandsQueuedSQL = `

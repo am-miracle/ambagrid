@@ -76,3 +76,35 @@ func TestLostResponseAfterSendingIsNotSafeToRetry(t *testing.T) {
 		t.Fatalf("sent request was marked retryable: %v", err)
 	}
 }
+
+func TestVendUsesRecoverableResultValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name, id string
+		valid    bool
+	}{
+		{"digits", "12345678901234567890123456789012345", true},
+		{"letters", "abcdefghijklmnopqrstuvwxyz123456789", false},
+		{"short", "12345", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprintf(w, "numTokens=1\ntokenDec_1=11111111111111111111\nunitsActual=12.5\nunitName=kWh\nvendTimeUnix=1792929600\nidRecord=%s\n", tc.id)
+			}))
+			defer server.Close()
+			client, err := prismvend.New(server.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := client.Vend(context.Background(), domain.STSVendRequest{Reference: "credit-1", MeterID: "12345678901", AmountMinor: 5001})
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v, result=%+v, err=%v", tc.valid, result, err)
+			}
+			if err == nil {
+				recovery := domain.STSReconciliation{Reference: "credit-1", MeterID: "12345678901", Actor: "operator:test", Evidence: "provider verified", Result: &result}
+				if err := recovery.Validate(); err != nil {
+					t.Fatalf("accepted live result cannot be recovered: %v", err)
+				}
+			}
+		})
+	}
+}

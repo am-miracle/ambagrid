@@ -98,9 +98,13 @@ func run() (runErr error) {
 
 	}
 
+	commandMetrics := health.NewCommandMetrics()
 	if cfg.Commands.Enabled {
 		runner := commands.New(
-			commands.Config{PollInterval: cfg.Commands.PollInterval, CommandTimeout: cfg.Commands.Timeout},
+			commands.Config{
+				PollInterval: cfg.Commands.PollInterval, CommandTimeout: cfg.Commands.Timeout,
+				Retention: cfg.Commands.Retention, Metrics: commandMetrics,
+			},
 			commands.NewHTTPClient(cfg.Commands.Endpoint, cfg.Commands.APIKey, cfg.Commands.Timeout),
 			hardware.executor, durableQueue,
 		)
@@ -175,7 +179,7 @@ func run() (runErr error) {
 		Addr: cfg.HealthAddr,
 		Handler: health.NewHandler(durableQueue, domain.FallbackRateLimitPolicy{
 			MaxAttempts: cfg.SMS.MaxAttempts, HourlyLimit: cfg.SMS.HourlyLimit, DailyLimit: cfg.SMS.DailyLimit,
-		}, adapterMetrics),
+		}, adapterMetrics, commandMetrics),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	serverErrors := make(chan error, 1)

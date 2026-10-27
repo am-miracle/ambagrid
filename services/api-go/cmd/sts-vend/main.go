@@ -71,14 +71,14 @@ func run() error {
 		return fmt.Errorf("choose one operation")
 	}
 	if shortfalls {
-		records, err := store.ListReversalShortfalls(ctx)
+		records, err := services.ListSTSReversalShortfalls(ctx, store)
 		if err != nil {
 			return err
 		}
 		return json.NewEncoder(os.Stdout).Encode(records)
 	}
 	if unresolved {
-		records, err := store.ListUnresolved(ctx)
+		records, err := services.ListUnresolvedSTSVends(ctx, store)
 		if err != nil {
 			return err
 		}

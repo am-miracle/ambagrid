@@ -208,7 +208,7 @@ func TestAdapterReadsVictronBatteryOverTCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := readings[0]
-	if !near(r.Metrics.Voltage, 52.34) || !near(r.Metrics.Current, -12.3) || !r.InternalTemperatureMissing || math.Abs(r.BatterySOCPct-72.5) > 1e-9 {
+	if !near(r.Metrics.Voltage, 52.34) || !near(r.Metrics.Current, -12.3) || r.InternalTemperature != nil || !near(r.BatterySOCPct, 72.5) {
 		t.Fatalf("reading = %+v", r)
 	}
 }

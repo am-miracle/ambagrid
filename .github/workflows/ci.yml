@@ -97,6 +97,24 @@ jobs:
         working-directory: services/edge-agent-go
         run: go test -race -tags=integration -count=1 ./internal/adapter/simulator ./internal/adapter/mqtt ./internal/adapter/modbus -run 'Test(Telemetry|Command)Conformance'
 
+  mqtt-acl:
+    name: MQTT broker ACL
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache-dependency-path: services/edge-agent-go/go.sum
+
+      # A disposable TLS Mosquitto with the production config and ACL; the Go
+      # test skips without it, so the edge job alone never checks access rules.
+      - name: Test command broker access control
+        run: sh deploy/mqtt/test-acl.sh
+
   rust:
     name: Rust
     runs-on: ubuntu-latest

@@ -7,7 +7,11 @@ import (
 	"edge-agent-go/internal/domain"
 )
 
-const schemaVersion = 10
+const schemaVersion = 11
+
+// Legacy request times sort at the end of their millisecond. This expression
+// also defines the v11 index; keep it immutable to preserve migration behavior.
+const commandRequestedSubMSOrderSQL = "COALESCE(requested_at_subms_ns, 999999)"
 
 const schema = `
 CREATE TABLE IF NOT EXISTS edge_identity (
@@ -103,6 +107,7 @@ CREATE TABLE IF NOT EXISTS command_ledger (
     command_type    TEXT NOT NULL CHECK (command_type <> ''),
     request_hash    BLOB NOT NULL CHECK (length(request_hash) = 32),
     requested_at_ms INTEGER,
+    requested_at_subms_ns INTEGER CHECK (requested_at_subms_ns BETWEEN 0 AND 999999),
     state           TEXT NOT NULL CHECK (state IN ('in_flight', 'applied', 'rejected', 'unknown')),
     attempt_count   INTEGER NOT NULL DEFAULT 1 CHECK (attempt_count >= 1),
     accepted_at_ms  INTEGER NOT NULL,
@@ -121,7 +126,7 @@ CREATE INDEX IF NOT EXISTS command_ledger_unresolved
     ON command_ledger(accepted_at_ms) WHERE state IN ('in_flight', 'unknown');
 
 CREATE INDEX IF NOT EXISTS command_ledger_relay_order
-    ON command_ledger(device_id, requested_at_ms, command_id)
+    ON command_ledger(device_id, requested_at_ms, ` + commandRequestedSubMSOrderSQL + `, command_id)
     WHERE command_type IN ('disconnect_meter', 'reconnect_meter') AND state <> 'rejected';
 
 CREATE TABLE IF NOT EXISTS command_reports (
@@ -142,8 +147,8 @@ CREATE INDEX IF NOT EXISTS command_reports_due
 `
 
 // Incremental migrations are historical upgrade programs, not fragments of
-// the current schema. Keep their DDL self-contained and immutable even where it
-// duplicates schema above; changing an old step can break existing gateways.
+// the current schema. Keep their DDL and any shared SQL constants immutable
+// even where they duplicate schema above; changing an old step can break existing gateways.
 const migrateV1ToV2 = `
 ALTER TABLE queue_events ADD COLUMN asset_type TEXT NOT NULL DEFAULT 'smart_meter'
     CHECK (asset_type IN ('smart_meter', 'battery_bms', 'solar_inverter'));
@@ -311,6 +316,16 @@ CREATE INDEX command_reports_due
     ON command_reports(next_attempt_at_ms, id) WHERE abandoned_at_ms IS NULL;
 `
 
+// NULL fractions identify legacy rows whose original precision was lost.
+const migrateV10ToV11 = `
+ALTER TABLE command_ledger ADD COLUMN requested_at_subms_ns INTEGER
+    CHECK (requested_at_subms_ns BETWEEN 0 AND 999999);
+DROP INDEX command_ledger_relay_order;
+CREATE INDEX command_ledger_relay_order
+    ON command_ledger(device_id, requested_at_ms, ` + commandRequestedSubMSOrderSQL + `, command_id)
+    WHERE command_type IN ('disconnect_meter', 'reconnect_meter') AND state <> 'rejected';
+`
+
 func (s *Store) initialize(ctx context.Context) error {
 	var version int
 	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
@@ -369,6 +384,7 @@ func (s *Store) migrateSchema(ctx context.Context, version int) error {
 			{7, migrateV7ToV8, "migrate queue schema from version 7 to 8"},
 			{8, migrateV8ToV9, "migrate queue schema from version 8 to 9"},
 			{9, migrateV9ToV10, "migrate queue schema from version 9 to 10"},
+			{10, migrateV10ToV11, "migrate queue schema from version 10 to 11"},
 		}
 		for _, m := range incremental {
 			if version > m.from {

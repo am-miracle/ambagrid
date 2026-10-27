@@ -175,7 +175,8 @@ Go:
 - keep MQTT callbacks fast
 - do not block the Paho callback path on database or Kafka work
 - prefer context deadlines around network calls
-- `ingestion-go` owns telemetry schema conversion: it encodes AmbaGrid-shaped JSON into `MetricPayload` protobuf (`BuildRecord`). No other service reshapes device payloads
+- edge adapters own vendor protocol decoding: they translate device data such as Modbus registers into AmbaGrid-shaped JSON (see [hardware adapters](docs/hardware-adapters.md))
+- `ingestion-go` owns telemetry schema conversion: it encodes AmbaGrid-shaped JSON into `MetricPayload` protobuf (`BuildRecord`). No other service reshapes payloads after the edge
 - preserve the original bytes when parking a rejected payload in a dead-letter topic
 
 Rust:

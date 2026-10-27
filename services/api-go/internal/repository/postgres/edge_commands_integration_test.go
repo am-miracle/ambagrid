@@ -374,3 +374,45 @@ func TestEdgeReportTimesAreClampedToPlausibleBounds(t *testing.T) {
 		t.Fatalf("requested %s sent %s acknowledged %s; want requested <= sent <= acknowledged <= now", requested, sent, acked)
 	}
 }
+
+func TestEdgePollSentBacklogDoesNotBlockLaterDelivery(t *testing.T) {
+	f := newEdgeFixture(t)
+	ctx := context.Background()
+	// A full default batch has already reached devices but has no final outcome.
+	var sent []string
+	for i := range 50 {
+		id := f.insertCommand(t, f.meterID, domain.CommandDisconnectMeter, time.Duration(100-i)*time.Minute, 24*time.Hour)
+		if _, err := f.pool.Exec(ctx, "UPDATE meter_commands SET status='sent', sent_at=now() WHERE command_id=$1::uuid", id); err != nil {
+			t.Fatal(err)
+		}
+		sent = append(sent, id)
+	}
+	// A credit awaiting a send and a newly requested relay command must both
+	// reach the edge despite the older unresolved commands.
+	var credit string
+	if err := f.pool.QueryRow(ctx, `INSERT INTO meter_commands
+		(meter_id,command_type,status,requested_by,reason,requested_at,expires_at,credit_kwh)
+		VALUES ($1,'credit_meter','queued','test:edge','integration test',now()-interval '2 minutes',now()+interval '1 hour',10)
+		RETURNING command_id::text`, f.meterID).Scan(&credit); err != nil {
+		t.Fatal(err)
+	}
+	relay := f.insertCommand(t, f.meterID, domain.CommandReconnectMeter, time.Minute, time.Hour)
+	commands, err := f.service.Poll(ctx, f.siteID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(commands) != 50 || commands[0].CommandID != credit || commands[1].CommandID != relay {
+		t.Fatalf("poll returned %d commands; want %s and %s first in a full default batch", len(commands), credit, relay)
+	}
+	if commands[0].CreditKWh == nil || *commands[0].CreditKWh != 10 || commands[1].Status != domain.CommandStatusQueued || f.status(t, relay) != domain.CommandStatusQueued {
+		t.Fatalf("delivery lost amount or queued status: %+v", commands[:2])
+	}
+	for i, cmd := range commands[2:] {
+		if cmd.CommandID != sent[i] || cmd.Status != domain.CommandStatusSent {
+			t.Fatalf("retry %d = %+v; want oldest sent command %s", i, cmd, sent[i])
+		}
+	}
+	if again, err := f.service.Poll(ctx, f.siteID, 1); err != nil || len(again) != 1 || again[0].CommandID != credit {
+		t.Fatalf("poll with limit 1 = %+v, %v; want credit ahead of sent backlog", again, err)
+	}
+}

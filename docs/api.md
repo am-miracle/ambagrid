@@ -387,7 +387,9 @@ key>`, and the key decides the site. One transaction:
 1. marks the site's `requested` and `queued` commands past `expires_at` as
    `expired`, with a `system:command-expiry` audit event;
 2. returns up to `limit` (default 50, at most 200) commands in `requested`,
-   `queued`, or `sent` whose `expires_at` has not passed, oldest first;
+   `queued`, or `sent` whose `expires_at` has not passed. `requested` and
+   `queued` commands take priority over `sent` commands, with oldest-first
+   ordering within each group;
 3. marks the returned `requested` commands `queued`.
 
 `device_id` is the meter's `asset_id`, the identity the gateway uses.

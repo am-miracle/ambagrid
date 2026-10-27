@@ -6,11 +6,9 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -88,28 +86,21 @@ func (c *Client) Vend(ctx context.Context, request domain.STSVendRequest) (domai
 		return domain.STSVend{}, fmt.Errorf("invalid PrismVend token count")
 	}
 	result := domain.STSVend{UnitName: fields["unitName"], IDRecord: fields["idRecord"], ToIDRecord: fields["toIdRecord"]}
-	tokenPattern := regexp.MustCompile(`^[0-9]{20}$`)
 	for i := 1; i <= count; i++ {
 		token := fields[fmt.Sprintf("tokenDec_%d", i)]
-		if !tokenPattern.MatchString(token) {
-			return domain.STSVend{}, fmt.Errorf("invalid PrismVend token %d", i)
-		}
 		result.Tokens = append(result.Tokens, token)
 	}
 	result.Units, err = strconv.ParseFloat(fields["unitsActual"], 64)
-	if err != nil || math.IsNaN(result.Units) || math.IsInf(result.Units, 0) || result.Units < 0 {
+	if err != nil {
 		return domain.STSVend{}, fmt.Errorf("invalid PrismVend units")
-	}
-	if result.UnitName != "kWh" && result.UnitName != "hWh" {
-		return domain.STSVend{}, fmt.Errorf("unexpected electricity unit")
 	}
 	seconds, err := strconv.ParseInt(fields["vendTimeUnix"], 10, 64)
 	if err != nil || seconds <= 0 {
 		return domain.STSVend{}, fmt.Errorf("invalid PrismVend vend time")
 	}
 	result.VendedAt = time.Unix(seconds, 0).UTC()
-	if len(result.IDRecord) != 35 {
-		return domain.STSVend{}, fmt.Errorf("invalid PrismVend IDRecord")
+	if err := result.Validate(); err != nil {
+		return domain.STSVend{}, fmt.Errorf("validate PrismVend result: %w", err)
 	}
 	return result, nil
 }
