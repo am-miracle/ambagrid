@@ -194,29 +194,50 @@ platform code without silently contradicting previously published failures.
 
 ### Reconciliation and rollout
 
-`GET /v1/edge/commands/reconciliation` uses the site's edge bearer key and lists
-overdue `queued`/`sent` commands plus commands with conflicting reports. It
-shows site health, contact and report receipt times, command age, overdue age,
-and the latest conflict. All conflicting reports are retained in `audit_events`
-as `meter_command.report_conflict`; exact retries are deduplicated. Commands at
-sites that never return remain unresolved and visible instead of becoming
-assumed failures. See [the endpoint contract](api.md#get-v1edgecommandsreconciliation).
+`GET /v1/meter-commands/reconciliation` is an operator listing across all
+sites, optionally filtered by `site_id`, served behind the deployment gateway
+like `/v1/sites`. Each entry has a `reconciliation_reason`:
 
-Deploy this API version before updating edge agents. It needs no new database
-migration. Verify capture with a known conflicting report: expect `202`,
+- `overturned_expiry`: platform code before this fix expired the command and a
+  later edge report moved it on. Consumers have already received
+  `meter.command.failed` followed by the device's outcome.
+- `conflicting_report`: an edge report contradicted a settled outcome and was
+  retained in `audit_events` as `meter_command.report_conflict`; exact retries
+  are deduplicated. `legacy_expired_at` marks conflicts on pre-fix expiries,
+  the rows most likely to have been expired falsely.
+- `overdue_outcome_unknown`: an overdue `queued` or `sent` command. Commands at
+  sites that never return stay here instead of becoming assumed failures.
+
+Entries show site health, contact and report receipt times, command age and
+overdue age. See [the endpoint contract](api.md#get-v1meter-commandsreconciliation).
+
+Every expiry audit event now records `previous_status`. An expiry without it
+was written by pre-fix code, which also expired `queued` commands that may
+have been sent; that marker, not a deployment timestamp, identifies legacy
+expiries. Migration `202610270002_command_reconciliation_indexes` indexes the
+conflict and legacy-expiry audit events the listing starts from. The listing is
+correct without it, only slower, so the engine migration and the API can
+deploy in either order.
+
+Deploy this API version before updating edge agents; edge agents need no
+change. Verify capture with a known conflicting report: expect `202`,
 unchanged platform status, one conflict audit event, and no new outcome event.
 Do not reopen expired rows or resend hardware commands as a rollout repair.
 
-Inventory pre-rollout expirations using the deployment timestamp as a cutoff;
-their prior delivery state cannot reliably be recovered from status alone:
+Inventory every legacy expiry with its current state. Rows that have left
+`expired` already appear in the listing as `overturned_expiry`. Rows still
+`expired` may have been delivered or applied before the deadline. Their prior
+delivery state cannot be recovered from the platform alone:
 
 ```sql
-SELECT sm.site_id, mc.command_id, mc.meter_id, mc.requested_at,
-       mc.expires_at, mc.sent_at
-FROM meter_commands mc
-JOIN smart_meters sm ON sm.meter_id = mc.meter_id
-WHERE mc.status = 'expired' AND mc.requested_at < :'deployment_at'::timestamptz
-ORDER BY mc.requested_at, mc.command_id;
+SELECT a.site_id, mc.command_id, mc.meter_id, mc.command_type, mc.status,
+       mc.requested_at, mc.expires_at, a.occurred_at AS legacy_expired_at,
+       mc.sent_at, mc.acknowledged_at, mc.failure_reason
+FROM audit_events a
+JOIN meter_commands mc ON mc.command_id::text = a.subject_id
+WHERE a.subject_type = 'meter_command' AND a.action = 'meter_command.expired'
+  AND a.actor_id = 'system:command-expiry' AND NOT (a.metadata ? 'previous_status')
+ORDER BY (mc.status = 'expired'), a.occurred_at, mc.command_id;
 ```
 
 Compare these rows with edge ledger results and provider/device evidence. Reports

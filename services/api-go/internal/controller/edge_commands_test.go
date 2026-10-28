@@ -20,20 +20,13 @@ import (
 const testCommandID = "3f2b8c1e-5d4a-4e6b-9c7d-1a2b3c4d5e6f"
 
 type fakeEdgeCommands struct {
-	commands       []domain.EdgeCommand
-	reported       domain.MeterCommand
-	changed        bool
-	err            error
-	gotSite        string
-	gotLimit       int
-	gotReport      domain.CommandReport
-	reconciliation page.Page[domain.CommandReconciliation]
-	gotCursor      string
-}
-
-func (f *fakeEdgeCommands) ListReconciliation(_ context.Context, siteID string, limit int, cursor string) (page.Page[domain.CommandReconciliation], error) {
-	f.gotSite, f.gotLimit, f.gotCursor = siteID, limit, cursor
-	return f.reconciliation, f.err
+	commands  []domain.EdgeCommand
+	reported  domain.MeterCommand
+	changed   bool
+	err       error
+	gotSite   string
+	gotLimit  int
+	gotReport domain.CommandReport
 }
 
 func (f *fakeEdgeCommands) Poll(_ context.Context, siteID string, limit int) ([]domain.EdgeCommand, error) {
@@ -77,33 +70,65 @@ func TestEdgeCommandsRequireASiteKey(t *testing.T) {
 	}
 }
 
-func TestReconciliationRequiresSiteKeyAndScopesTheListing(t *testing.T) {
-	edge := &fakeEdgeCommands{reconciliation: page.Page[domain.CommandReconciliation]{
-		Limit: 10, NextCursor: "next", Items: []domain.CommandReconciliation{{
-			SiteCommand:   domain.SiteCommand{SiteID: "ng-kaji-01", Command: domain.MeterCommand{CommandID: testCommandID, Status: domain.CommandStatusExpired}},
-			Site:          domain.Site{HealthStatus: domain.SiteHealthOffline},
-			ConflictCount: 1, LatestConflict: &domain.CommandReport{Status: domain.CommandStatusSent},
-		}},
+type fakeReconciliation struct {
+	result    page.Page[domain.CommandReconciliation]
+	gotSite   *string
+	gotLimit  int
+	gotCursor string
+}
+
+func (f *fakeReconciliation) ListReconciliation(_ context.Context, siteID *string, limit int, cursor string) (page.Page[domain.CommandReconciliation], error) {
+	f.gotSite, f.gotLimit, f.gotCursor = siteID, limit, cursor
+	return f.result, nil
+}
+
+func TestReconciliationIsAnOperatorListingAcrossSites(t *testing.T) {
+	expiredAt := time.Date(2026, 10, 1, 14, 30, 0, 0, time.UTC)
+	reconciliation := &fakeReconciliation{result: page.Page[domain.CommandReconciliation]{
+		Limit: 10, NextCursor: "next", Items: []domain.CommandReconciliation{
+			{
+				SiteCommand:   domain.SiteCommand{SiteID: "ng-kaji-01", Command: domain.MeterCommand{CommandID: testCommandID, Status: domain.CommandStatusExpired}},
+				Site:          domain.Site{HealthStatus: domain.SiteHealthOffline},
+				ConflictCount: 1, LatestConflict: &domain.CommandReport{Status: domain.CommandStatusSent},
+			},
+			{
+				SiteCommand:     domain.SiteCommand{SiteID: "lagos-epe", Command: domain.MeterCommand{CommandID: testCommandID, Status: domain.CommandStatusAcknowledged}},
+				LegacyExpiredAt: &expiredAt,
+			},
+		},
 	}}
-	handler := newEdgeTestAPI(edge)
-	for _, key := range []string{"", "unknown"} {
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, edgeRequest(http.MethodGet, "/v1/edge/commands/reconciliation", key, ""))
-		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("key %q: status %d", key, rec.Code)
-		}
-	}
+	handler := API{
+		Logger:                slog.New(slog.NewTextHandler(io.Discard, nil)),
+		RequestTimeout:        time.Second,
+		EdgeAuth:              NewSiteKeys(map[string]string{"key-kaji": "ng-kaji-01"}),
+		EdgeCommands:          &fakeEdgeCommands{},
+		CommandReconciliation: reconciliation,
+	}.Handler()
+
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, edgeRequest(http.MethodGet, "/v1/edge/commands/reconciliation?limit=10&cursor=before&site_id=lagos-epe", "key-kaji", ""))
-	if rec.Code != http.StatusOK || edge.gotSite != "ng-kaji-01" || edge.gotLimit != 10 || edge.gotCursor != "before" {
-		t.Fatalf("status=%d site=%s limit=%d cursor=%s: %s", rec.Code, edge.gotSite, edge.gotLimit, edge.gotCursor, rec.Body.String())
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/meter-commands/reconciliation", nil))
+	if rec.Code != http.StatusOK || reconciliation.gotSite != nil {
+		t.Fatalf("fleet-wide: status=%d site=%v: %s", rec.Code, reconciliation.gotSite, rec.Body.String())
 	}
 	var body collectionBody[commandReconciliationDTO]
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body.Data) != 1 || body.Data[0].Reason != "conflicting_report" || body.Data[0].Status != "expired" || body.Data[0].SiteHealth != "offline" || body.Page.NextCursor != "next" {
+	if len(body.Data) != 2 || body.Data[0].Reason != "conflicting_report" || body.Data[0].Status != "expired" || body.Data[0].SiteHealth != "offline" ||
+		body.Data[1].Reason != "overturned_expiry" || body.Data[1].LegacyExpiredAt == nil || !body.Data[1].LegacyExpiredAt.Equal(expiredAt) || body.Page.NextCursor != "next" {
 		t.Fatalf("body = %+v", body)
+	}
+
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/meter-commands/reconciliation?site_id=lagos-epe&limit=10&cursor=before", nil))
+	if rec.Code != http.StatusOK || reconciliation.gotSite == nil || *reconciliation.gotSite != "lagos-epe" || reconciliation.gotLimit != 10 || reconciliation.gotCursor != "before" {
+		t.Fatalf("filtered: status=%d site=%v limit=%d cursor=%s", rec.Code, reconciliation.gotSite, reconciliation.gotLimit, reconciliation.gotCursor)
+	}
+
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, edgeRequest(http.MethodGet, "/v1/edge/commands/reconciliation", "key-kaji", ""))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("edge-key reconciliation route status = %d, want it removed", rec.Code)
 	}
 }
 

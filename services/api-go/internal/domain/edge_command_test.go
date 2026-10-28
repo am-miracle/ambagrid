@@ -130,3 +130,26 @@ func TestClampOccurredAtBoundsGatewayClock(t *testing.T) {
 		}
 	}
 }
+
+func TestReconciliationReasonPutsPublishedContradictionsFirst(t *testing.T) {
+	expiredAt := time.Date(2026, 10, 1, 14, 30, 0, 0, time.UTC)
+	for name, c := range map[string]struct {
+		item CommandReconciliation
+		want ReconciliationReason
+	}{
+		"overdue":  {CommandReconciliation{}, ReconciliationOutcomeUnknown},
+		"conflict": {CommandReconciliation{ConflictCount: 1}, ReconciliationConflictingReport},
+		"conflict after legacy expiry": {
+			CommandReconciliation{SiteCommand: SiteCommand{Command: MeterCommand{Status: CommandStatusExpired}}, LegacyExpiredAt: &expiredAt, ConflictCount: 1},
+			ReconciliationConflictingReport,
+		},
+		"overturned": {
+			CommandReconciliation{SiteCommand: SiteCommand{Command: MeterCommand{Status: CommandStatusAcknowledged}}, LegacyExpiredAt: &expiredAt, ConflictCount: 1},
+			ReconciliationOverturnedExpiry,
+		},
+	} {
+		if got := c.item.Reason(); got != c.want {
+			t.Errorf("%s: reason = %q, want %q", name, got, c.want)
+		}
+	}
+}

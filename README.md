@@ -10,6 +10,10 @@ AmbaGrid gives operators a live digital twin of their grid: solar panels, batter
 
 You need Docker Desktop and Go installed.
 
+For the full mapped fleet with real backend data and frontend mocks disabled,
+use the [local fleet setup](deploy/local-fleet/README.md). It supplies site
+coordinates and live collector/uploader streams for all 20 active demo sites.
+
 ```bash
 docker compose up -d --build
 go run scripts/virtual_meter.go

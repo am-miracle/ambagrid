@@ -43,7 +43,7 @@ func (r *reconciliationRepository) RunEdgeCommandTx(ctx context.Context, fn func
 	return r.commitErr
 }
 
-func (r *reconciliationRepository) ListCommandReconciliation(_ context.Context, _ string, _ time.Time, limit int, _ *page.TimeIDCursor) (page.Page[domain.CommandReconciliation], error) {
+func (r *reconciliationRepository) ListCommandReconciliation(_ context.Context, _ *string, _ time.Time, limit int, _ *page.TimeIDCursor) (page.Page[domain.CommandReconciliation], error) {
 	r.listCalls++
 	r.gotLimit = limit
 	return page.Page[domain.CommandReconciliation]{Items: r.items, Limit: limit}, nil
@@ -90,7 +90,7 @@ func TestReconciliationReportsAgeAndUsesSiteHealthRules(t *testing.T) {
 	}}}
 	s := NewEdgeCommandService(repo, OutcomeTopics{}, SiteHealthThresholds{OfflineAfter: time.Minute, EventStaleAfter: time.Minute})
 	s.now = func() time.Time { return now }
-	result, err := s.ListReconciliation(context.Background(), "site-01", 1000, "")
+	result, err := s.ListReconciliation(context.Background(), nil, 1000, "")
 	if err != nil || len(result.Items) != 1 {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -98,7 +98,7 @@ func TestReconciliationReportsAgeAndUsesSiteHealthRules(t *testing.T) {
 	if repo.gotLimit != maxEdgeCommandBatch || item.Age != 2*time.Hour || item.Overdue != time.Hour || item.Site.HealthStatus != domain.SiteHealthDelayed {
 		t.Fatalf("limit=%d item=%+v", repo.gotLimit, item)
 	}
-	_, err = s.ListReconciliation(context.Background(), "site-01", 0, "bad-cursor")
+	_, err = s.ListReconciliation(context.Background(), nil, 0, "bad-cursor")
 	if !errors.Is(err, page.ErrInvalidCursor) || repo.listCalls != 1 {
 		t.Fatalf("invalid cursor reached the repository: calls=%d err=%v", repo.listCalls, err)
 	}

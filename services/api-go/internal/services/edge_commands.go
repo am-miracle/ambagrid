@@ -141,14 +141,17 @@ func (s *EdgeCommandService) Report(ctx context.Context, siteID string, report d
 }
 
 func (s *EdgeCommandService) recordExpiry(ctx context.Context, tx repository.EdgeCommandTx, siteID string, cmd domain.MeterCommand, now time.Time) error {
-	metadata := map[string]any{"expires_at": cmd.ExpiresAt.UTC()}
+	// Reconciliation treats an expiry audit without previous_status as written by
+	// pre-fix code, which also expired queued commands.
+	metadata := map[string]any{"expires_at": cmd.ExpiresAt.UTC(), "previous_status": domain.CommandStatusRequested}
 	if err := tx.InsertAuditEvent(ctx, siteID, commandExpiryActor, "meter_command.expired", "meter_command", cmd.CommandID, metadata); err != nil {
 		return err
 	}
 	return s.publishOutcome(ctx, tx, cmd, siteID, commandExpiryActor, now)
 }
 
-func (s *EdgeCommandService) ListReconciliation(ctx context.Context, siteID string, limit int, cursor string) (page.Page[domain.CommandReconciliation], error) {
+// ListReconciliation lists every site's commands when siteID is nil.
+func (s *EdgeCommandService) ListReconciliation(ctx context.Context, siteID *string, limit int, cursor string) (page.Page[domain.CommandReconciliation], error) {
 	if limit <= 0 {
 		limit = defaultEdgeCommandBatch
 	}

@@ -40,6 +40,14 @@ type SiteCommand struct {
 	Command MeterCommand
 }
 
+type ReconciliationReason string
+
+const (
+	ReconciliationOverturnedExpiry  ReconciliationReason = "overturned_expiry"
+	ReconciliationConflictingReport ReconciliationReason = "conflicting_report"
+	ReconciliationOutcomeUnknown    ReconciliationReason = "overdue_outcome_unknown"
+)
+
 // CommandReconciliation keeps an unresolved delivery separate from a conflicting report.
 type CommandReconciliation struct {
 	SiteCommand
@@ -48,8 +56,25 @@ type CommandReconciliation struct {
 	ConflictCount            int64
 	LatestConflict           *CommandReport
 	LatestConflictReceivedAt *time.Time
-	Age                      time.Duration
-	Overdue                  time.Duration
+	// LegacyExpiredAt is when pre-fix platform code expired the command, which
+	// may then have been delivered or even applied.
+	LegacyExpiredAt *time.Time
+	Age             time.Duration
+	Overdue         time.Duration
+}
+
+// Reason ranks contradictions consumers have already received above evidence
+// the platform has only retained. A legacy expiry that a later report moved on
+// had published meter.command.failed before the device's outcome.
+func (r CommandReconciliation) Reason() ReconciliationReason {
+	switch {
+	case r.LegacyExpiredAt != nil && r.Command.Status != CommandStatusExpired:
+		return ReconciliationOverturnedExpiry
+	case r.ConflictCount > 0:
+		return ReconciliationConflictingReport
+	default:
+		return ReconciliationOutcomeUnknown
+	}
 }
 
 func (r CommandReport) Validate() error {

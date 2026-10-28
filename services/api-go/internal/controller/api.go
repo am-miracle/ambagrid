@@ -22,7 +22,10 @@ type API struct {
 	Heartbeats     HeartbeatService
 	SMSWebhook     SMSWebhookProvider
 	EdgeCommands   EdgeCommandService
-	EdgeAuth       SiteKeys
+	// CommandReconciliation is an operator listing, so it sits behind the
+	// deployment gateway like /v1/sites rather than behind site keys.
+	CommandReconciliation CommandReconciliationService
+	EdgeAuth              SiteKeys
 }
 
 type WebhookRoute struct {
@@ -57,9 +60,11 @@ func (a API) Handler() http.Handler {
 		a.handleRoute(mux, http.MethodPost, wh.Pattern, a.handleWebhookPayment(provider))
 	}
 	if a.EdgeCommands != nil {
-		a.handleRoute(mux, http.MethodGet, "/v1/edge/commands/reconciliation", a.handleListCommandReconciliation)
 		a.handleRoute(mux, http.MethodPost, "/v1/edge/commands/poll", a.handlePollEdgeCommands)
 		a.handleRoute(mux, http.MethodPost, "/v1/edge/commands/{command_id}/report", a.handleReportEdgeCommand)
+	}
+	if a.CommandReconciliation != nil {
+		a.handleRoute(mux, http.MethodGet, "/v1/meter-commands/reconciliation", a.handleListCommandReconciliation)
 	}
 	if a.Fallback != nil && a.SMSWebhook != nil {
 		a.handleRoute(mux, http.MethodPost, "/v1/sms/inbound", a.handleSMSFallback)

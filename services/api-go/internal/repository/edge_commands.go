@@ -10,7 +10,7 @@ import (
 
 type EdgeCommandRepository interface {
 	RunEdgeCommandTx(ctx context.Context, fn func(EdgeCommandTx) error) error
-	ListCommandReconciliation(context.Context, string, time.Time, int, *page.TimeIDCursor) (page.Page[domain.CommandReconciliation], error)
+	ListCommandReconciliation(ctx context.Context, siteID *string, now time.Time, limit int, after *page.TimeIDCursor) (page.Page[domain.CommandReconciliation], error)
 }
 
 type EdgeCommandTx interface {

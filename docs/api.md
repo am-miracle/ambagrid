@@ -385,7 +385,8 @@ Edge agents fetch their site's meter commands here. Enabled when
 key>`, and the key decides the site. One transaction:
 
 1. marks the site's `requested` commands past `expires_at` as `expired`, with
-   a `system:command-expiry` audit event;
+   a `system:command-expiry` audit event whose metadata records
+   `previous_status`;
 2. returns up to `limit` (default 50, at most 200) commands: `requested` and
    `sent` ones whose `expires_at` has not passed, and every `queued` one.
    `requested` and `queued` commands take priority over `sent` commands, with
@@ -456,22 +457,33 @@ plus reported status, failure reason, platform status, and receipt time. A
 `202` acknowledges durable receipt of evidence, not successful execution or a
 status correction. Existing edge agents already treat it as delivered.
 
-### `GET /v1/edge/commands/reconciliation`
+### `GET /v1/meter-commands/reconciliation`
 
-A read-only, site-scoped list authenticated by the same bearer key as polling.
-It includes overdue `queued` and `sent` commands and any command with retained
-conflicting reports. `limit` defaults to 50, with a maximum of 200; `cursor`
-continues in oldest-request-first order. The response uses the standard
-`data`, `page`, and `request_id` collection envelope.
+A read-only operator listing of meter commands that need reconciliation, across
+all sites. Like `/v1/sites`, it does not take an edge site key; deploy it
+behind the gateway that authenticates operators. `site_id` narrows it to one
+site. `limit` defaults to 50, with a maximum of 200; `cursor` continues in
+oldest-request-first order. The response uses the standard `data`, `page`,
+and `request_id` collection envelope.
+
+`reconciliation_reason` is, most urgent first:
+
+- `overturned_expiry`: expired by platform code before the expiry fix, then
+  moved on by an edge report, so `meter.command.failed` was followed by the
+  device's outcome;
+- `conflicting_report`: has retained reports that contradict its settled
+  outcome;
+- `overdue_outcome_unknown`: `queued` or `sent` past `expires_at`, with no
+  outcome yet.
 
 Each entry includes `command_id`, `meter_id`, `site_id`, `command_type`,
 platform `status`, `requested_at`, `expires_at`, optional `sent_at`,
 `age_seconds`, `overdue_seconds`, `last_contact_at`, `last_sms_heartbeat_at`,
 `site_health`, and `last_report_at` (platform receipt time). Site health uses
 the same HTTP/SMS rules and configured thresholds as `/v1/sites`.
-`reconciliation_reason` is `overdue_outcome_unknown` or `conflicting_report`.
 Conflicts include `conflict_count`, `latest_conflict` (reported `status`, raw
 `occurred_at`, and optional `failure_reason`) and `latest_conflict_received_at`.
+`legacy_expired_at` is present when pre-fix platform code expired the command.
 All conflicting evidence remains in `audit_events`, not only the latest report
 shown in this list. Listing never retries hardware or changes command status.
 
