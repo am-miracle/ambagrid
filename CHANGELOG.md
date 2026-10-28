@@ -47,6 +47,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **deps:** Patch ctutils constant-time advisory
 - Address hardware adapter and STS review feedback
 - Preserve command evidence and STS operator visibility
+- Address adapter and command delivery review findings
 
 ### Maintenance
 
