@@ -436,8 +436,11 @@ event from actor `edge:<site_id>`.
 { "status": "failed", "occurred_at": "2026-10-01T14:31:00Z", "failure_reason": "superseded by newer relay command ..." }
 ```
 
-`status` is `sent`, `acknowledged`, `failed` (requires `failure_reason`), or
-`expired`. Reports are idempotent: a repeat, or a `sent` arriving after the
+`status` is `sent`, `acknowledged`, `failed`, or `expired`. Failed reports
+require a nonblank `failure_reason` of at most 500 bytes, measured in UTF-8
+bytes rather than characters. Other statuses require it to be absent or empty.
+
+Reports are idempotent: a repeat, or a `sent` arriving after the
 outcome, returns `200` with `"changed": false`. A report contradicting a
 definite outcome, including a report after legacy platform expiry, is retained
 as a `meter_command.report_conflict` audit event. Only after that transaction
@@ -462,9 +465,10 @@ status correction. Existing edge agents already treat it as delivered.
 A read-only operator listing of meter commands that need reconciliation, across
 all sites. Like `/v1/sites`, it does not take an edge site key; deploy it
 behind the gateway that authenticates operators. `site_id` narrows it to one
-site. `limit` defaults to 50, with a maximum of 200; `cursor` continues in
-oldest-request-first order. The response uses the standard `data`, `page`,
-and `request_id` collection envelope.
+site. `limit` and `cursor` follow [Pagination](#pagination), so a `limit`
+over the maximum is a 400; `cursor` continues in oldest-request-first order.
+The response uses the standard `data`, `page`, and `request_id` collection
+envelope.
 
 `reconciliation_reason` is, most urgent first:
 

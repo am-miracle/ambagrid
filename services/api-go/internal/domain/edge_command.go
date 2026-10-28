@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const maxFailureReasonLength = 500
+const maxFailureReasonBytes = 500
 
 var ErrInvalidReport = errors.New("invalid command report")
 
@@ -21,13 +21,10 @@ type EdgeCommand struct {
 	Status      MeterCommandStatus
 	RequestedAt time.Time
 	ExpiresAt   time.Time
-	// ExpiresIn is measured on the platform clock at delivery, so the edge can
-	// enforce expiry without trusting its own wall clock.
-	ExpiresIn time.Duration
-	CreditKWh *float64
+	ExpiresIn   time.Duration
+	CreditKWh   *float64
 }
 
-// CommandReport is an edge agent's account of what happened to a command.
 type CommandReport struct {
 	CommandID     string
 	Status        MeterCommandStatus
@@ -63,9 +60,8 @@ type CommandReconciliation struct {
 	Overdue         time.Duration
 }
 
-// Reason ranks contradictions consumers have already received above evidence
-// the platform has only retained. A legacy expiry that a later report moved on
-// had published meter.command.failed before the device's outcome.
+// Reason prioritizes overturned legacy expiries because consumers already
+// received meter.command.failed, ahead of retained conflicts and overdue commands.
 func (r CommandReconciliation) Reason() ReconciliationReason {
 	switch {
 	case r.LegacyExpiredAt != nil && r.Command.Status != CommandStatusExpired:
@@ -90,8 +86,8 @@ func (r CommandReport) Validate() error {
 		if strings.TrimSpace(r.FailureReason) == "" {
 			return fmt.Errorf("%w: failed commands need a failure_reason", ErrInvalidReport)
 		}
-		if len(r.FailureReason) > maxFailureReasonLength {
-			return fmt.Errorf("%w: failure_reason must not exceed %d bytes", ErrInvalidReport, maxFailureReasonLength)
+		if len(r.FailureReason) > maxFailureReasonBytes {
+			return fmt.Errorf("%w: failure_reason must not exceed %d bytes", ErrInvalidReport, maxFailureReasonBytes)
 		}
 	default:
 		return fmt.Errorf("%w: status %q cannot be reported by an edge agent", ErrInvalidReport, r.Status)

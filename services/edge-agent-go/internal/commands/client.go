@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"edge-agent-go/internal/domain"
 )
@@ -22,7 +23,10 @@ var ErrReportRefused = errors.New("platform refused the command report")
 
 const maxResponseBytes = 1 << 20
 
-// Pending is a platform command waiting for this site's edge agent.
+// Keep in sync with api-go/internal/domain and the fake platform in runner_test.go;
+// exceeding this limit abandons the report and leaves the platform at sent.
+const maxFailureReasonBytes = 500
+
 type Pending struct {
 	CommandID   string    `json:"command_id"`
 	MeterID     string    `json:"meter_id"`
@@ -33,13 +37,11 @@ type Pending struct {
 	ExpiresAt   time.Time `json:"expires_at"`
 	ExpiresInMS *int64    `json:"expires_in_ms"`
 	CreditKWh   float64   `json:"credit_kwh,omitempty"`
-	// Deadline is when the edge must stop trying, on its monotonic clock. It is
-	// taken from ExpiresInMS when the platform sends it, so a wrong or jumping
-	// gateway wall clock cannot refuse a live command or accept a late one.
+	// Deadline uses ExpiresInMS on the monotonic clock when supplied, so wall
+	// clock errors or jumps cannot expire a live command or accept a late one.
 	Deadline time.Time `json:"-"`
 }
 
-// HTTPClient talks to the api-go edge command endpoints with the site key.
 type HTTPClient struct {
 	baseURL    string
 	apiKey     string
@@ -86,9 +88,8 @@ func (c *HTTPClient) Poll(ctx context.Context) ([]Pending, error) {
 	return body.Data, nil
 }
 
-// observeClock estimates how far this gateway's wall clock is from the
-// platform's, from the Date header of a response received between sent and
-// received.
+// observeClock estimates the platform clock offset from its Date header,
+// using the request midpoint to account for round-trip time.
 func (c *HTTPClient) observeClock(sent, received time.Time, date string) {
 	server, err := http.ParseTime(date)
 	roundTrip := received.Sub(sent)
@@ -112,7 +113,7 @@ func (c *HTTPClient) Report(ctx context.Context, report domain.CommandReport) er
 		Status        domain.CommandReportStatus `json:"status"`
 		OccurredAt    time.Time                  `json:"occurred_at"`
 		FailureReason string                     `json:"failure_reason,omitempty"`
-	}{report.Status, report.OccurredAt.Add(c.ClockOffset()).UTC(), report.FailureReason})
+	}{report.Status, report.OccurredAt.Add(c.ClockOffset()).UTC(), wireFailureReason(report)})
 	if err != nil {
 		return fmt.Errorf("encode command report: %w", err)
 	}
@@ -121,6 +122,28 @@ func (c *HTTPClient) Report(ctx context.Context, report domain.CommandReport) er
 		return fmt.Errorf("report command %q %s: %w", report.CommandID, report.Status, err)
 	}
 	return nil
+}
+
+// wireFailureReason bounds only what is sent; the ledger keeps the device's
+// full message. It is deterministic so retries carry identical evidence.
+func wireFailureReason(report domain.CommandReport) string {
+	if report.Status != domain.ReportFailed {
+		return report.FailureReason
+	}
+	// JSON encoding would replace each invalid byte with a 3-byte U+FFFD.
+	reason := strings.ToValidUTF8(report.FailureReason, "\uFFFD")
+	if strings.TrimSpace(reason) == "" {
+		return "rejected without a reason"
+	}
+	if len(reason) <= maxFailureReasonBytes {
+		return reason
+	}
+	const marker = "…"
+	cut := maxFailureReasonBytes - len(marker)
+	for cut > 0 && !utf8.RuneStart(reason[cut]) {
+		cut--
+	}
+	return reason[:cut] + marker
 }
 
 func (c *HTTPClient) post(ctx context.Context, endpoint string, payload []byte, out any) (http.Header, error) {

@@ -100,7 +100,7 @@ func (c *TCPClient) ReadRegisters(ctx context.Context, unit byte, function Funct
 		// A timeout may leave grid-x caching a stream our cancellation
 		// callback has closed. Reset it before the next read reconnects.
 		_ = c.handler.Close()
-		if caller.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		if adapter.ProtocolDeadlineExceeded(caller, ctx) {
 			return nil, fmt.Errorf("%w: %w", adapter.ErrProtocolTimeout, err)
 		}
 		return nil, classify(caller, err)

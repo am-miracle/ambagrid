@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"edge-agent-go/internal/adapter"
 	"edge-agent-go/internal/adapter/simulator"
@@ -21,6 +22,9 @@ import (
 )
 
 const siteKey = "key-kaji"
+
+// Keep in sync with api-go/internal/domain; this fake enforces the wire contract.
+const maxFailureReasonBytes = 500
 
 type wireReport struct {
 	CommandID     string
@@ -76,6 +80,11 @@ func (p *fakePlatform) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	var report wireReport
 	if err := json.NewDecoder(r.Body).Decode(&report); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	// api-go's CommandReport.Validate: a refused report is abandoned for good.
+	if report.Status == "failed" && (strings.TrimSpace(report.FailureReason) == "" || len(report.FailureReason) > maxFailureReasonBytes) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -552,5 +561,56 @@ func TestRunnerOrdersRelaysWithSubmillisecondTimestamp(t *testing.T) {
 				t.Fatalf("command reports = %v, want %v", got, wantReports)
 			}
 		})
+	}
+}
+
+func TestRunnerReportsLongDeviceRejectionWithinThePlatformLimit(t *testing.T) {
+	platform, server := newPlatform(t, pending("cmd-locked", "disconnect_meter", time.Minute, time.Hour))
+	h := newHarness(t, server)
+	message := strings.Repeat("meter cover open; ", 120)
+	h.meter.Device().Reject([]byte(`{"ok": false, "code": "E_METER_LOCKED", "msg": "` + message + `"}`))
+	h.sync(t)
+
+	if got := platform.statuses("cmd-locked"); !reflect.DeepEqual(got, []string{"sent", "failed"}) {
+		t.Fatalf("reports = %v, want the rejection delivered rather than abandoned", got)
+	}
+	entry, _, err := h.store.LoadCommand(context.Background(), "cmd-locked")
+	if err != nil || !strings.Contains(entry.LastError, message) {
+		t.Fatalf("ledger lost the full device message: %q err %v", entry.LastError, err)
+	}
+}
+
+func TestClientBoundsFailureReasonsToWhatThePlatformAccepts(t *testing.T) {
+	platform, server := newPlatform(t)
+	client := commands.NewHTTPClient(server.URL, siteKey, time.Second)
+	for name, reason := range map[string]string{
+		"short":     "E_METER_LOCKED: meter cover open",
+		"ascii":     strings.Repeat("x", 2000),
+		"multibyte": strings.Repeat("é", 400),
+		"invalid":   strings.Repeat("\xff", 600),
+		"blank":     "   ",
+	} {
+		for range 2 {
+			if err := client.Report(context.Background(), domain.CommandReport{CommandID: "cmd-" + name, Status: domain.ReportFailed, OccurredAt: time.Now(), FailureReason: reason}); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+		}
+		platform.mu.Lock()
+		var got []string
+		for _, r := range platform.reports {
+			if r.CommandID == "cmd-"+name {
+				got = append(got, r.FailureReason)
+			}
+		}
+		platform.mu.Unlock()
+		if len(got) != 2 || got[0] != got[1] {
+			t.Fatalf("%s: reasons %q, want the same bounded reason on every retry", name, got)
+		}
+		if !utf8.ValidString(got[0]) || len(got[0]) > maxFailureReasonBytes || strings.TrimSpace(got[0]) == "" {
+			t.Fatalf("%s: reason %q (%d bytes) breaks the platform limit", name, got[0], len(got[0]))
+		}
+		if name == "short" && got[0] != reason {
+			t.Fatalf("short reason changed to %q", got[0])
+		}
 	}
 }

@@ -169,6 +169,10 @@ from 5 seconds to 10 minutes. A report the platform refuses for good (`400`,
 `404`, `409`) is kept as abandoned for reconciliation and counted in
 `ambagrid_edge_command_reports_abandoned`; `401` and `403` keep retrying,
 because a wrong key is an operator fix after which the reports still matter.
+A `failed` report carries the device's message bounded to the platform's
+500-byte limit, cut on a UTF-8 boundary and marked `…`, so a verbose device
+cannot get a definite rejection refused and abandoned. The ledger's
+`last_error` keeps the full message.
 
 ### Expiry
 
@@ -305,10 +309,21 @@ wrong gateway cannot record impossible times.
 [Broker authentication, TLS and topic ACLs](mqtt-command-security.md) are a
 production precondition; the development broker is insufficient.
 
-`EDGE_COMMAND_ADAPTER` selects the simulator or the MQTT adapter
-(`internal/adapter/mqtt`), which speaks the protocol in
-[hardware adapters](hardware-adapters.md#mqtt-command-protocol) and reads the
-device's capability declaration from `EDGE_MQTT_CAPABILITIES_FILE`. A device
+Set `EDGE_DEVICES_FILE` to a
+[per-device inventory](hardware-adapters.md#per-device-configuration).
+Each device selects its command adapter with `command` (`simulator` or `mqtt`);
+MQTT devices supply their own `capabilities_file`. Commands for devices without
+a configured command adapter are refused. Each configured route uses the durable
+ledger before reaching the device. Inventory selection cannot be mixed with
+`EDGE_SIMULATOR_ENABLED=true`, `EDGE_MODBUS_ADDRESS`, `EDGE_COMMAND_ADAPTER`, or
+`EDGE_MQTT_CAPABILITIES_FILE`.
+
+Without an inventory, the legacy environment-only setup remains supported:
+`EDGE_COMMAND_ADAPTER` selects the simulator or MQTT, and MQTT reads its
+capability declaration from `EDGE_MQTT_CAPABILITIES_FILE`.
+`EDGE_COMMANDS_ENABLED` controls platform polling in both modes. MQTT connection
+settings remain in `EDGE_MQTT_*`; the adapter speaks the
+[MQTT command protocol](hardware-adapters.md#mqtt-command-protocol). A device
 declaring `outcome_query` lets the ledger settle an unknown outcome by asking it.
 
 ## Not yet covered

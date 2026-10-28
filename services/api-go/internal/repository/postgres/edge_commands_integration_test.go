@@ -63,7 +63,7 @@ func newEdgeFixture(t *testing.T) edgeFixture {
 		clean("DELETE FROM assets WHERE asset_id = ANY($1)", []string{f.assetID, otherAsset})
 		clean("DELETE FROM sites WHERE site_id = ANY($1)", []string{f.siteID, f.other})
 	})
-	f.service = services.NewEdgeCommandService(NewEdgeCommandStore(pool, 5*time.Second), services.OutcomeTopics{}, services.SiteHealthThresholds{OfflineAfter: 5 * time.Minute, EventStaleAfter: 5 * time.Minute})
+	f.service = services.NewEdgeCommandService(NewEdgeCommandStore(pool, 5*time.Second), services.OutcomeTopics{}, services.SiteHealthThresholds{OfflineAfter: 5 * time.Minute, EventStaleAfter: 5 * time.Minute}, services.PageLimits{DefaultSize: 50, MaxSize: 200})
 	return f
 }
 

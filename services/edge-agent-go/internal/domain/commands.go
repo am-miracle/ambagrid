@@ -20,7 +20,6 @@ const (
 	ReportExpired      CommandReportStatus = "expired"
 )
 
-// CommandReport is one queued account of what happened to a platform command.
 type CommandReport struct {
 	ID            int64
 	CommandID     string

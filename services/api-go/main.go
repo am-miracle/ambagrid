@@ -80,7 +80,7 @@ func main() {
 		Acknowledged: cfg.CommandAcknowledgedTopic, Failed: cfg.CommandFailedTopic,
 	}, services.SiteHealthThresholds{
 		OfflineAfter: cfg.SiteOfflineAfter, EventStaleAfter: cfg.SiteEventStaleAfter,
-	})
+	}, limits)
 	workerCtx, stopWorker := context.WithCancel(ctx)
 	workerDone := make(chan struct{})
 	go func() {

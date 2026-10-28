@@ -1,6 +1,5 @@
-// sts-vend issues a currency-valued STS purchase through a provisioned PrismVend
-// installation. It prints ordered tokens for manual delivery; it does not mark
-// a meter command acknowledged or alter the platform's kWh balances.
+// sts-vend issues funded STS purchases for manual token delivery and reconciles
+// outcomes; confirmed non-issuance reverses the associated platform credit.
 package main
 
 import (

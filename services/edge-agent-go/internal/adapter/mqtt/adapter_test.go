@@ -404,3 +404,77 @@ func TestLocalSendHookDeadlineIsNotAProtocolTimeout(t *testing.T) {
 		t.Fatal("published despite failed local persistence")
 	}
 }
+
+func TestReplyWithoutExplicitOutcomeLeavesCommandUnknown(t *testing.T) {
+	for name, c := range map[string]struct {
+		reply string
+		want  adapter.CommandState
+	}{
+		"empty object":   {`{}`, adapter.CommandUnknown},
+		"null":           {`null`, adapter.CommandUnknown},
+		"null ok":        {`{"ok": null, "code": "E_X"}`, adapter.CommandUnknown},
+		"explicit false": {`{"ok": false, "code": "E_METER_LOCKED", "msg": "meter cover open"}`, adapter.CommandRejected},
+	} {
+		t.Run(name, func(t *testing.T) {
+			broker := &memoryBroker{}
+			device := newMeterDevice(t, broker)
+			device.Reject([]byte(c.reply))
+			store := ledgerStore(t)
+			ledger := adapter.NewLedger(store, newAdapter(t, broker, meterCaps))
+
+			_, err := execute(ledger, adapter.Command{ID: "cmd-0101", Type: adapter.CommandDisconnect, DeviceID: "meter-01"})
+			if rejected := errors.Is(err, adapter.ErrDeviceRejected); rejected != (c.want == adapter.CommandRejected) {
+				t.Fatalf("error = %v, want rejected %t", err, c.want == adapter.CommandRejected)
+			}
+			entry, found, err := store.LoadCommand(context.Background(), "cmd-0101")
+			if err != nil || !found || entry.State != c.want {
+				t.Fatalf("ledger entry = %+v found %t err %v, want state %s", entry, found, err, c.want)
+			}
+		})
+	}
+}
+
+func TestOutcomeReplyValidation(t *testing.T) {
+	for name, c := range map[string]struct {
+		reply   string
+		invalid bool
+		applied bool
+	}{
+		"empty object":    {reply: `{}`, invalid: true},
+		"null":            {reply: `null`, invalid: true},
+		"missing ok":      {reply: `{"applied": true}`, invalid: true},
+		"null ok":         {reply: `{"ok": null, "applied": true}`, invalid: true},
+		"query rejected":  {reply: `{"ok": false, "applied": true}`, invalid: true},
+		"missing applied": {reply: `{"ok": true}`, invalid: true},
+		"null applied":    {reply: `{"ok": true, "applied": null}`, invalid: true},
+		"not applied":     {reply: `{"ok": true, "applied": false}`},
+		"applied":         {reply: `{"ok": true, "applied": true}`, applied: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			broker := &memoryBroker{}
+			if err := broker.Subscribe(context.Background(), testTopics(t).Command("+"), func(msg mqtt.Message) {
+				_ = broker.Publish(context.Background(), mqtt.Message{
+					Topic: msg.ResponseTopic, Payload: []byte(c.reply), CorrelationData: msg.CorrelationData,
+				}, nil)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			caps := meterCaps
+			caps.Capabilities.OutcomeQuery = true
+			a := newAdapter(t, broker, caps).(adapter.Reconciler)
+			result, applied, err := a.Outcome(context.Background(), adapter.Command{ID: "cmd-1", DeviceID: "meter-01", Type: adapter.CommandDisconnect})
+			if c.invalid {
+				if !errors.Is(err, adapter.ErrInvalidResponse) || errors.Is(err, adapter.ErrDeviceRejected) || applied {
+					t.Fatalf("outcome = %+v, %t, %v; want invalid response without command rejection", result, applied, err)
+				}
+				return
+			}
+			if err != nil || applied != c.applied {
+				t.Fatalf("outcome = %+v, %t, %v; want applied %t", result, applied, err, c.applied)
+			}
+			if applied && result.CommandID != "cmd-1" {
+				t.Fatalf("result command ID = %q, want cmd-1", result.CommandID)
+			}
+		})
+	}
+}

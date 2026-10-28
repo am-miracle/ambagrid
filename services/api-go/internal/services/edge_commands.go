@@ -28,6 +28,7 @@ type EdgeCommandService struct {
 	topics     OutcomeTopics
 	now        func() time.Time
 	thresholds SiteHealthThresholds
+	limits     PageLimits
 }
 
 // OutcomeTopics are the deployment topics for settled command outcomes.
@@ -36,14 +37,14 @@ type OutcomeTopics struct {
 	Failed       string
 }
 
-func NewEdgeCommandService(repository repository.EdgeCommandRepository, topics OutcomeTopics, thresholds SiteHealthThresholds) *EdgeCommandService {
+func NewEdgeCommandService(repository repository.EdgeCommandRepository, topics OutcomeTopics, thresholds SiteHealthThresholds, limits PageLimits) *EdgeCommandService {
 	if topics.Acknowledged == "" {
 		topics.Acknowledged = "meter.command.acknowledged"
 	}
 	if topics.Failed == "" {
 		topics.Failed = "meter.command.failed"
 	}
-	return &EdgeCommandService{repository: repository, topics: topics, now: time.Now, thresholds: thresholds}
+	return &EdgeCommandService{repository: repository, topics: topics, now: time.Now, thresholds: thresholds, limits: limits}
 }
 
 // Poll expires the site's overdue undelivered commands, then returns its
@@ -152,10 +153,10 @@ func (s *EdgeCommandService) recordExpiry(ctx context.Context, tx repository.Edg
 
 // ListReconciliation lists every site's commands when siteID is nil.
 func (s *EdgeCommandService) ListReconciliation(ctx context.Context, siteID *string, limit int, cursor string) (page.Page[domain.CommandReconciliation], error) {
-	if limit <= 0 {
-		limit = defaultEdgeCommandBatch
+	limit, err := s.limits.Resolve(limit)
+	if err != nil {
+		return page.Page[domain.CommandReconciliation]{}, err
 	}
-	limit = min(limit, maxEdgeCommandBatch)
 	after, err := page.DecodeTimeIDCursor(cursor, domain.ValidateCommandID)
 	if err != nil {
 		return page.Page[domain.CommandReconciliation]{}, err

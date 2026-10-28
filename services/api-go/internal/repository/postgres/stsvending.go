@@ -25,10 +25,10 @@ func NewSTSVendStore(pool *pgxpool.Pool, installation string) *STSVendStore {
 }
 func (s *stsVendSession) Reserve(ctx context.Context, request domain.STSVendRequest) (*domain.STSVend, bool, error) {
 	if request.Reference != s.reference {
-		return nil, false, fmt.Errorf("reservation differs from owned reference")
+		return nil, false, errors.New("reservation differs from owned reference")
 	}
 	if err := request.ValidateFunding(); err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("validate STS vend reservation funding: %w", err)
 	}
 	saved, found, retryable, err := s.existing(ctx, request)
 	if err != nil {
@@ -146,9 +146,10 @@ func (s *STSVendStore) ListUnresolved(ctx context.Context) ([]domain.STSVendReco
 	}
 	return records, nil
 }
+
 func (s *STSVendStore) Reconcile(ctx context.Context, r domain.STSReconciliation) error {
 	if err := r.Validate(); err != nil {
-		return err
+		return fmt.Errorf("validate STS reconciliation: %w", err)
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

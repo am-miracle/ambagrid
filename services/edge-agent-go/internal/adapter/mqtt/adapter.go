@@ -58,7 +58,7 @@ type request struct {
 }
 
 type reply struct {
-	OK        bool   `json:"ok"`
+	OK        *bool  `json:"ok"`
 	TsMs      int64  `json:"ts_ms,omitempty"`
 	Relay     *int   `json:"relay,omitempty"`
 	BalanceWh *int64 `json:"balance_wh,omitempty"`
@@ -146,7 +146,7 @@ func (a *Adapter) Execute(ctx context.Context, cmd adapter.Command) (adapter.Com
 	if err != nil {
 		return adapter.CommandResult{}, err
 	}
-	if !got.OK {
+	if !*got.OK {
 		return adapter.CommandResult{}, fmt.Errorf("%w: %s: %s", adapter.ErrDeviceRejected, got.Code, got.Message)
 	}
 	return a.result(cmd.ID, got), nil
@@ -164,7 +164,7 @@ func (r reconcilingAdapter) Outcome(ctx context.Context, cmd adapter.Command) (a
 	if err != nil {
 		return adapter.CommandResult{}, false, err
 	}
-	if !got.OK || got.Applied == nil {
+	if !*got.OK || got.Applied == nil {
 		return adapter.CommandResult{}, false, fmt.Errorf("%w: outcome query for %q answered %s: %s", adapter.ErrInvalidResponse, cmd.ID, got.Code, got.Message)
 	}
 	if !*got.Applied {
@@ -203,16 +203,19 @@ func (a *Adapter) exchange(ctx context.Context, deviceID, correlation string, re
 	}
 	msg := Message{Topic: a.cfg.Topics.Command(deviceID), Payload: payload, ResponseTopic: replyTopic, CorrelationData: []byte(correlation)}
 	if err := a.transport.Publish(ctx, msg, beforeSend); err != nil {
-		if handedOff.Load() && caller.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		if handedOff.Load() && adapter.ProtocolDeadlineExceeded(caller, ctx) {
 			return reply{}, fmt.Errorf("%w: %w", adapter.ErrProtocolTimeout, err)
 		}
 		return reply{}, adapter.ContextError(fmt.Errorf("publish %s to %s: %w", req.Op, msg.Topic, err))
 	}
 	select {
 	case got := <-replies:
+		if got.OK == nil {
+			return reply{}, fmt.Errorf("%w: reply to %q has no ok outcome", adapter.ErrInvalidResponse, correlation)
+		}
 		return got, nil
 	case <-ctx.Done():
-		if handedOff.Load() && caller.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		if handedOff.Load() && adapter.ProtocolDeadlineExceeded(caller, ctx) {
 			return reply{}, fmt.Errorf("%w: %w", adapter.ErrProtocolTimeout, ctx.Err())
 		}
 		return reply{}, adapter.ContextError(ctx.Err())

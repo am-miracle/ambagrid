@@ -168,6 +168,8 @@ A credit carries either `wh` or an STS `token`. The device publishes its reply t
 {"ok": false, "code": "E_METER_LOCKED", "msg": "meter cover open"}
 ```
 
+`ok` must be present. Only an explicit `"ok": false` records the command as rejected, which the ledger treats as definitely not applied. A reply without `ok`, such as `{}` or `null`, leaves the outcome unknown.
+
 A reply is only accepted on the reply topic of the device the request went to: the command ID is guessable, so the topic, which broker access rules restrict to that device, says who answered. A PUBACK only means the broker has the request; the gateway waits up to `EDGE_MQTT_RESPONSE_TIMEOUT` (default 30s) for the device's reply. A device declaring `outcome_query` also answers `{"op": "outcome", "device": "meter-01", "target": "cmd-0101"}`, sent with its own correlation value, with `{"ok": true, "applied": true}` plus its status fields. Device IDs containing `/`, `+`, or `#` are refused. Fixtures for the suite are in `services/edge-agent-go/internal/adapter/testdata/mqtt/`.
 
 `paho/extensions/rpc` is deliberately not used: its `Request` replaces the correlation data with a timestamp, so retries would not be idempotent, and it answers on one shared `{client_id}/responses` topic that access rules cannot scope per device.

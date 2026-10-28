@@ -139,6 +139,12 @@ func (c Capabilities) Supports(cmd Command) error {
 	return nil
 }
 
+// ProtocolDeadlineExceeded checks for exchange expiry while the caller is active.
+// Callers must confirm protocol work began before returning ErrProtocolTimeout.
+func ProtocolDeadlineExceeded(caller, exchange context.Context) bool {
+	return caller.Err() == nil && errors.Is(exchange.Err(), context.DeadlineExceeded)
+}
+
 // ContextError keeps context.Canceled distinct from deadline expiry, which
 // becomes ErrTimeout while still matching context.DeadlineExceeded.
 func ContextError(err error) error {

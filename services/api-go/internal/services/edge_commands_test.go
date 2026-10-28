@@ -65,7 +65,7 @@ func TestConflictingReportRetainsOriginalEvidenceBeforeAccepting(t *testing.T) {
 			} else if failure == "commit" {
 				repo.commitErr = storageErr
 			}
-			s := NewEdgeCommandService(repo, OutcomeTopics{}, SiteHealthThresholds{})
+			s := NewEdgeCommandService(repo, OutcomeTopics{}, SiteHealthThresholds{}, PageLimits{DefaultSize: 50, MaxSize: 200})
 			s.now = func() time.Time { return now }
 			cmd, changed, err := s.Report(context.Background(), "site-01", report)
 			if tx.retained == nil || !tx.retained.OccurredAt.Equal(report.OccurredAt) {
@@ -88,14 +88,17 @@ func TestReconciliationReportsAgeAndUsesSiteHealthRules(t *testing.T) {
 		SiteCommand: domain.SiteCommand{Command: domain.MeterCommand{RequestedAt: now.Add(-2 * time.Hour), ExpiresAt: now.Add(-time.Hour)}},
 		Site:        domain.Site{SMSHeartbeatExpiresAt: new(now.Add(time.Hour))},
 	}}}
-	s := NewEdgeCommandService(repo, OutcomeTopics{}, SiteHealthThresholds{OfflineAfter: time.Minute, EventStaleAfter: time.Minute})
+	s := NewEdgeCommandService(repo, OutcomeTopics{}, SiteHealthThresholds{OfflineAfter: time.Minute, EventStaleAfter: time.Minute}, PageLimits{DefaultSize: 25, MaxSize: 200})
 	s.now = func() time.Time { return now }
-	result, err := s.ListReconciliation(context.Background(), nil, 1000, "")
+	if _, err := s.ListReconciliation(context.Background(), nil, 201, ""); !errors.Is(err, ErrInvalidRequest) || repo.listCalls != 0 {
+		t.Fatalf("oversized limit: calls=%d err=%v; want ErrInvalidRequest before the repository", repo.listCalls, err)
+	}
+	result, err := s.ListReconciliation(context.Background(), nil, 0, "")
 	if err != nil || len(result.Items) != 1 {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	item := result.Items[0]
-	if repo.gotLimit != maxEdgeCommandBatch || item.Age != 2*time.Hour || item.Overdue != time.Hour || item.Site.HealthStatus != domain.SiteHealthDelayed {
+	if repo.gotLimit != 25 || item.Age != 2*time.Hour || item.Overdue != time.Hour || item.Site.HealthStatus != domain.SiteHealthDelayed {
 		t.Fatalf("limit=%d item=%+v", repo.gotLimit, item)
 	}
 	_, err = s.ListReconciliation(context.Background(), nil, 0, "bad-cursor")
