@@ -49,6 +49,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - Preserve command evidence and STS operator visibility
 - Address adapter and command delivery review findings
 - **ui:** Show battery overheat temperature sparklines
+- **ui:** Anchor alert sparklines to incident open time
 
 ### Maintenance
 
