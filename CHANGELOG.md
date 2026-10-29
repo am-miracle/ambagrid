@@ -34,6 +34,7 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - Add ontology and roadmap docs
 - Regenerate changelog
 - **adapters:** Document MQTT v5 migration and validation
+- Simplify hardware and command delivery guides
 
 ### Fixed
 
