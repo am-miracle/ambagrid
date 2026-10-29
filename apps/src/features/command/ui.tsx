@@ -45,11 +45,13 @@ export interface Series {
 export function Sparkline({
 	series,
 	now,
+	alertOpenedAt,
 	height = 96,
 	color = STATUS_COLOR.critical,
 }: {
 	series: Series;
 	now: number;
+	alertOpenedAt: number;
 	height?: number;
 	color?: string;
 }) {
@@ -79,8 +81,8 @@ export function Sparkline({
 		.join(" ");
 	const area = `${d} L${sx(pts[pts.length - 1][0]).toFixed(2)} ${H} L${sx(pts[0][0]).toFixed(2)} ${H} Z`;
 	const threshold = series.threshold;
-	const breach =
-		threshold !== undefined ? pts.find((p) => p[1] >= threshold) : undefined;
+	const showOpenMarker =
+		alertOpenedAt >= x0 && alertOpenedAt <= Math.min(x1, now);
 	const last = pts[pts.length - 1];
 
 	return (
@@ -118,10 +120,10 @@ export function Sparkline({
 					strokeWidth="1.4"
 					vectorEffect="non-scaling-stroke"
 				/>
-				{breach && (
+				{showOpenMarker && (
 					<line
-						x1={sx(breach[0])}
-						x2={sx(breach[0])}
+						x1={sx(alertOpenedAt)}
+						x2={sx(alertOpenedAt)}
 						y1="0"
 						y2={H}
 						stroke={color}
@@ -147,9 +149,7 @@ export function Sparkline({
 			</div>
 			{threshold !== undefined && (
 				<div className="text-[11px] text-warning mt-0.75 leading-[1.4]">
-					{breach
-						? `Reached the ${threshold}${series.unit} limit at ${formatClock(breach[0])}`
-						: `Below the ${threshold}${series.unit} limit`}
+					{`Alert opened at ${formatClock(alertOpenedAt)} · ${threshold}${series.unit} limit`}
 				</div>
 			)}
 		</div>

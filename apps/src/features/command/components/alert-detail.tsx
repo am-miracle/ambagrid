@@ -176,6 +176,7 @@ export function AlertDetail({
 					<Sparkline
 						series={series}
 						now={at}
+						alertOpenedAt={openedAt(alert)}
 						height={112}
 						color={STATUS_COLOR[severityStatus(alert.severity)]}
 					/>
