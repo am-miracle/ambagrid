@@ -613,6 +613,7 @@ export function CommandSurface() {
 						<Sparkline
 							series={series}
 							now={at}
+							alertOpenedAt={openedAt(alertObj)}
 							height={78}
 							color={STATUS_COLOR[severityStatus(alertObj.severity)]}
 						/>

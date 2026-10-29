@@ -13,14 +13,17 @@ const LEAD_MS = 2 * 60 * 60 * 1000;
 const TAIL_MS = 30 * 60 * 1000;
 const INTERVALS: ReadingInterval[] = ["1m", "5m", "15m", "1h"];
 
-// Only internal_temperature alerts map to a metric the API can chart; other
-// kinds render without a series rather than a guessed one.
+// Temperature alerts, including battery fallback alerts, share the same metric.
+// Other kinds render without a series rather than a guessed one.
 export function useAlertSeries(
 	alert: Alert | null,
 	assetType: AssetType | undefined,
 	now: number,
 ): Series | null {
-	const charted = alert?.kind === "internal_temperature" && assetType;
+	const charted =
+		assetType &&
+		(alert?.kind === "internal_temperature" ||
+			(alert?.kind === "battery_overheat" && assetType === "battery_bms"));
 	// Round to the minute so the query key is stable between 1s clock ticks.
 	const minute = Math.floor(now / 60_000) * 60_000;
 
