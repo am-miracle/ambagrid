@@ -144,11 +144,29 @@ func (s *PaymentService) applyPayment(ctx context.Context, command domain.ApplyP
 		}
 
 		var meterCommand *domain.MeterCommand
+		var newCommand *domain.NewMeterCommand
+		switch {
+		case assignment.CreditMode == domain.CreditModeSTS:
+		// A funded STS vend is the only physical delivery path for this payment.
+		case assignment.CreditMode == domain.CreditModeMeter:
+			// The meter keeps its own balance, so every credit must reach it; the
+			// meter reconnects itself once it holds credit.
+			kwh, creditID := credit.KWhGranted, credit.CreditID
+			newCommand = &domain.NewMeterCommand{
+				MeterID: assignment.MeterID, Type: domain.CommandCreditMeter,
+				RequestedBy: "provider:" + command.Provider, Reason: "payment credited to meter",
+				CreditKWh: &kwh, CreditID: &creditID,
+			}
 		// Reconnect only on an empty-to-positive transition; later top-ups must not
 		// enqueue duplicate commands for a meter that is already being restored.
-		needsReconnect := !assignment.RelayClosed && priorKWh == 0 && balance.RemainingKWh > 0
-		if needsReconnect {
-			cmd, err := tx.InsertMeterCommand(ctx, assignment.MeterID, domain.CommandReconnectMeter, "provider:"+command.Provider, "balance recharged from zero")
+		case !assignment.RelayClosed && priorKWh == 0 && balance.RemainingKWh > 0:
+			newCommand = &domain.NewMeterCommand{
+				MeterID: assignment.MeterID, Type: domain.CommandReconnectMeter,
+				RequestedBy: "provider:" + command.Provider, Reason: "balance recharged from zero",
+			}
+		}
+		if newCommand != nil {
+			cmd, err := tx.InsertMeterCommand(ctx, *newCommand)
 			if err != nil {
 				return domain.ApplyPaymentResult{}, err
 			}

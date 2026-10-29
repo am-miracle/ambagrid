@@ -111,3 +111,158 @@ func TestFromEnvValidatesSMSHeartbeat(t *testing.T) {
 		})
 	}
 }
+
+func TestFromEnvConfiguresCommandLedgerRetention(t *testing.T) {
+	t.Setenv("EDGE_SITE_ID", "ng-kaji-01")
+	t.Setenv("EDGE_GATEWAY_ID", "gateway-01")
+	cfg, err := config.FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Commands.Retention != 30*24*time.Hour || cfg.Commands.PruneInterval != time.Hour {
+		t.Fatalf("default command config = %+v", cfg.Commands)
+	}
+
+	t.Setenv("EDGE_COMMAND_RETENTION", "168h")
+	t.Setenv("EDGE_COMMAND_PRUNE_INTERVAL", "10m")
+	if cfg, err = config.FromEnv(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Commands.Retention != 168*time.Hour || cfg.Commands.PruneInterval != 10*time.Minute {
+		t.Fatalf("configured command config = %+v", cfg.Commands)
+	}
+
+	t.Setenv("EDGE_COMMAND_RETENTION", "0s")
+	if _, err := config.FromEnv(); err == nil {
+		t.Fatal("accepted a zero command retention")
+	}
+}
+
+func TestFromEnvConfiguresCommandDelivery(t *testing.T) {
+	t.Setenv("EDGE_SITE_ID", "ng-kaji-01")
+	t.Setenv("EDGE_GATEWAY_ID", "gateway-01")
+	t.Setenv("EDGE_COMMANDS_ENABLED", "true")
+	if _, err := config.FromEnv(); err == nil {
+		t.Fatal("enabled command delivery without an endpoint")
+	}
+
+	t.Setenv("EDGE_COMMANDS_ENDPOINT", "http://api:8081")
+	t.Setenv("EDGE_UPLOADER_API_KEY", "key-kaji")
+	if _, err := config.FromEnv(); err == nil {
+		t.Fatal("chose the simulator command adapter without the simulator running")
+	}
+
+	t.Setenv("EDGE_SIMULATOR_ENABLED", "true")
+	cfg, err := config.FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := cfg.Commands
+	if !c.Enabled || c.Endpoint != "http://api:8081" || c.APIKey != "key-kaji" || c.PollInterval != 15*time.Second || c.Timeout != 30*time.Second {
+		t.Fatalf("command delivery config = %+v", c)
+	}
+	t.Setenv("EDGE_COMMANDS_API_KEY", "key-commands")
+	if cfg, err = config.FromEnv(); err != nil || cfg.Commands.APIKey != "key-commands" {
+		t.Fatalf("command key = %q, %v", cfg.Commands.APIKey, err)
+	}
+}
+
+func TestFromEnvConfiguresMQTTCommandAdapter(t *testing.T) {
+	t.Setenv("EDGE_SITE_ID", "ng-kaji-01")
+	t.Setenv("EDGE_GATEWAY_ID", "gateway-01")
+	t.Setenv("EDGE_COMMANDS_ENABLED", "true")
+	t.Setenv("EDGE_COMMANDS_ENDPOINT", "http://api:8081")
+	t.Setenv("EDGE_COMMANDS_API_KEY", "key-kaji")
+	t.Setenv("EDGE_COMMAND_ADAPTER", "mqtt")
+	if _, err := config.FromEnv(); err == nil {
+		t.Fatal("accepted the mqtt adapter without a broker")
+	}
+	t.Setenv("EDGE_MQTT_BROKER", "tcp://localhost:1883")
+	t.Setenv("EDGE_MQTT_CAPABILITIES_FILE", "/etc/ambagrid/meter.yaml")
+	if _, err := config.FromEnv(); err == nil {
+		t.Fatal("accepted anonymous plaintext command MQTT by default")
+	}
+	t.Setenv("EDGE_MQTT_ALLOW_INSECURE", "true")
+	cfg, err := config.FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := cfg.Commands.MQTT
+	if cfg.Commands.Adapter != "mqtt" || m.Broker != "tcp://localhost:1883" || m.ClientID != "ambagrid-edge-gateway-01" ||
+		m.CommandTopic != "site/{site_id}/meter/{device_id}/cmd" || m.ReplyTopic != "site/{site_id}/meter/{device_id}/cmd/reply" || m.ResponseTimeout != 30*time.Second {
+		t.Fatalf("mqtt config = %+v", cfg.Commands)
+	}
+	t.Setenv("EDGE_MQTT_COMMAND_TOPIC", "ambagrid/{site_id}/{device_id}/command")
+	t.Setenv("EDGE_MQTT_REPLY_TOPIC", "ambagrid/{site_id}/{device_id}/reply")
+	t.Setenv("EDGE_MQTT_RESPONSE_TIMEOUT", "5s")
+	if cfg, err = config.FromEnv(); err != nil {
+		t.Fatal(err)
+	}
+	if m := cfg.Commands.MQTT; m.CommandTopic != "ambagrid/{site_id}/{device_id}/command" || m.ReplyTopic != "ambagrid/{site_id}/{device_id}/reply" || m.ResponseTimeout != 5*time.Second {
+		t.Fatalf("configured topics = %+v", m)
+	}
+	t.Setenv("EDGE_COMMAND_ADAPTER", "modbus")
+	if _, err := config.FromEnv(); err == nil {
+		t.Fatal("accepted an unknown command adapter")
+	}
+}
+
+func TestModbusRequiresDeviceIdentityAndRegisterMap(t *testing.T) {
+	t.Setenv("EDGE_SITE_ID", "test-site")
+	t.Setenv("EDGE_GATEWAY_ID", "test-gateway")
+	t.Setenv("EDGE_MODBUS_ADDRESS", "192.0.2.1:502")
+	if _, err := config.FromEnv(); err == nil {
+		t.Fatal("accepted a Modbus device without unit, device ID or register map")
+	}
+	t.Setenv("EDGE_MODBUS_UNIT_ID", "225")
+	t.Setenv("EDGE_MODBUS_DEVICE_ID", "battery-01")
+	t.Setenv("EDGE_MODBUS_MAP_FILE", "/etc/ambagrid/victron-battery.yaml")
+	cfg, err := config.FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := cfg.Modbus
+	if m.Address != "192.0.2.1:502" || m.UnitID != 225 || m.DeviceID != "battery-01" || m.MapFile != "/etc/ambagrid/victron-battery.yaml" || m.Timeout != 5*time.Second {
+		t.Fatalf("modbus config = %+v", m)
+	}
+	for _, bad := range []string{"256", "-1"} {
+		t.Setenv("EDGE_MODBUS_UNIT_ID", bad)
+		if _, err := config.FromEnv(); err == nil {
+			t.Errorf("accepted unit ID %s", bad)
+		}
+	}
+	t.Setenv("EDGE_MODBUS_UNIT_ID", "225")
+	t.Setenv("EDGE_MODBUS_ADDRESS", "no-port")
+	if _, err := config.FromEnv(); err == nil {
+		t.Error("accepted an address without a port")
+	}
+}
+
+func TestProductionMQTTRequiresTLSAndCredentials(t *testing.T) {
+	t.Setenv("EDGE_SITE_ID", "site-01")
+	t.Setenv("EDGE_GATEWAY_ID", "gateway-01")
+	t.Setenv("EDGE_COMMANDS_ENABLED", "true")
+	t.Setenv("EDGE_COMMANDS_ENDPOINT", "http://api:8081")
+	t.Setenv("EDGE_COMMANDS_API_KEY", "test-key")
+	t.Setenv("EDGE_COMMAND_ADAPTER", "mqtt")
+	t.Setenv("EDGE_MQTT_BROKER", "ssl://broker.example:8883")
+	t.Setenv("EDGE_MQTT_CAPABILITIES_FILE", "/etc/ambagrid/meter.yaml")
+	t.Setenv("EDGE_MQTT_USERNAME", "gateway-site-01")
+	t.Setenv("EDGE_MQTT_PASSWORD", "test-password")
+	t.Setenv("EDGE_MQTT_CA_FILE", "/etc/ambagrid/ca.crt")
+	for _, broker := range []string{"ssl://broker.example:8883", "mqtts://broker.example:8883", "tls://broker.example:8883"} {
+		t.Setenv("EDGE_MQTT_BROKER", broker)
+		if _, err := config.FromEnv(); err != nil {
+			t.Errorf("rejected TLS broker %s: %v", broker, err)
+		}
+	}
+	t.Setenv("EDGE_MQTT_BROKER", "mqtt://broker.example:1883")
+	if _, err := config.FromEnv(); err == nil {
+		t.Fatal("accepted a plaintext production broker")
+	}
+	t.Setenv("EDGE_MQTT_BROKER", "ssl://broker.example:8883")
+	t.Setenv("EDGE_MQTT_USERNAME", "")
+	if _, err := config.FromEnv(); err == nil {
+		t.Fatal("accepted anonymous production broker")
+	}
+}

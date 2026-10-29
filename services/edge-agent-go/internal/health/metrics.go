@@ -24,6 +24,12 @@ type collector struct {
 	statsAvailable         *prometheus.Desc
 	fallbackRateLimited    *prometheus.Desc
 	fallbackStatsAvailable *prometheus.Desc
+	commandSource          CommandStatsSource
+	commandsUnresolved     *prometheus.Desc
+	commandsOldest         *prometheus.Desc
+	commandStatsAvailable  *prometheus.Desc
+	reportsPending         *prometheus.Desc
+	reportsAbandoned       *prometheus.Desc
 }
 
 // newCollector builds one Prometheus collector for queue health and, when the
@@ -43,11 +49,19 @@ func newCollector(source StatsSource, fallbackPolicy domain.FallbackRateLimitPol
 		statsAvailable:         prometheus.NewDesc("ambagrid_edge_queue_stats_available", "Whether queue statistics could be read for this scrape.", nil, nil),
 		fallbackRateLimited:    prometheus.NewDesc("ambagrid_edge_fallback_rate_limited_incidents", "Active fallback incidents currently blocked by an SMS attempt limit.", []string{"reason"}, nil),
 		fallbackStatsAvailable: prometheus.NewDesc("ambagrid_edge_fallback_stats_available", "Whether fallback rate-limit statistics could be read for this scrape.", nil, nil),
+		commandsUnresolved:     prometheus.NewDesc("ambagrid_edge_commands_unresolved", "Meter commands sent to a device whose outcome has not been confirmed.", nil, nil),
+		commandsOldest:         prometheus.NewDesc("ambagrid_edge_commands_oldest_unresolved_seconds", "Age in seconds of the oldest unresolved meter command.", nil, nil),
+		commandStatsAvailable:  prometheus.NewDesc("ambagrid_edge_command_stats_available", "Whether command ledger statistics could be read for this scrape.", nil, nil),
+		reportsPending:         prometheus.NewDesc("ambagrid_edge_command_reports_pending", "Command outcome reports not yet accepted by the platform.", nil, nil),
+		reportsAbandoned:       prometheus.NewDesc("ambagrid_edge_command_reports_abandoned", "Command outcome reports the platform refused and that will not be retried.", nil, nil),
 	}
 	// Queue implementations that do not persist fallback state still expose
 	// queue metrics; fallback_stats_available reports that reduced capability.
 	if fallbackSource, ok := source.(FallbackStatsSource); ok {
 		c.fallbackSource = fallbackSource
+	}
+	if commandSource, ok := source.(CommandStatsSource); ok {
+		c.commandSource = commandSource
 	}
 	return c
 }
@@ -65,6 +79,11 @@ func (c *collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.statsAvailable
 	ch <- c.fallbackRateLimited
 	ch <- c.fallbackStatsAvailable
+	ch <- c.commandsUnresolved
+	ch <- c.commandsOldest
+	ch <- c.commandStatsAvailable
+	ch <- c.reportsPending
+	ch <- c.reportsAbandoned
 }
 
 // Collect reads one bounded snapshot so a stalled local store cannot block a
@@ -87,6 +106,7 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(c.filesystemFree, prometheus.GaugeValue, float64(stats.FilesystemFreeBytes))
 	ch <- prometheus.MustNewConstMetric(c.oldestSeconds, prometheus.GaugeValue, stats.OldestAge.Seconds())
 	ch <- prometheus.MustNewConstMetric(c.state, prometheus.GaugeValue, 1, string(stats.State))
+	c.collectCommands(ctx, ch)
 
 	// Fallback collection is independent of queue collection. Its availability
 	// metric distinguishes a healthy zero from an unavailable data source.
@@ -105,4 +125,68 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(c.fallbackRateLimited, prometheus.GaugeValue, float64(fallbackStats.IncidentAttemptLimit), "incident_attempt_limit")
 	ch <- prometheus.MustNewConstMetric(c.fallbackRateLimited, prometheus.GaugeValue, float64(fallbackStats.SiteHourlyLimit), "site_hourly_limit")
 	ch <- prometheus.MustNewConstMetric(c.fallbackRateLimited, prometheus.GaugeValue, float64(fallbackStats.SiteDailyLimit), "site_daily_limit")
+}
+
+func (c *collector) collectCommands(ctx context.Context, ch chan<- prometheus.Metric) {
+	if c.commandSource == nil {
+		ch <- prometheus.MustNewConstMetric(c.commandStatsAvailable, prometheus.GaugeValue, 0)
+		return
+	}
+	stats, err := c.commandSource.CommandLedgerStats(ctx, time.Now().UTC())
+	if err != nil {
+		ch <- prometheus.MustNewConstMetric(c.commandStatsAvailable, prometheus.GaugeValue, 0)
+		return
+	}
+	ch <- prometheus.MustNewConstMetric(c.commandStatsAvailable, prometheus.GaugeValue, 1)
+	ch <- prometheus.MustNewConstMetric(c.commandsUnresolved, prometheus.GaugeValue, float64(stats.Unresolved))
+	ch <- prometheus.MustNewConstMetric(c.commandsOldest, prometheus.GaugeValue, stats.OldestUnresolvedAge.Seconds())
+	ch <- prometheus.MustNewConstMetric(c.reportsPending, prometheus.GaugeValue, float64(stats.PendingReports))
+	ch <- prometheus.MustNewConstMetric(c.reportsAbandoned, prometheus.GaugeValue, float64(stats.AbandonedReports))
+}
+
+type CommandMetrics struct {
+	prometheus.Gauge
+}
+
+func NewCommandMetrics() *CommandMetrics {
+	return &CommandMetrics{
+		Gauge: prometheus.NewGauge(prometheus.GaugeOpts{Name: "ambagrid_edge_command_expiry_beyond_retention", Help: "1 when the last non-empty command poll held a command that can outlive EDGE_COMMAND_RETENTION, so a pruned ledger entry could let it run twice."}),
+	}
+}
+
+func (m *CommandMetrics) ExpiryBeyondRetention(exceeded bool) {
+	m.Set(map[bool]float64{false: 0, true: 1}[exceeded])
+}
+
+// AdapterMetrics observes hardware calls independently of queue availability.
+// Values reset on restart; zero success timestamps mean no successful call yet.
+type AdapterMetrics struct {
+	lastRead, lastCommand                            *prometheus.GaugeVec
+	readErrors, commandErrors, timeouts, unsupported *prometheus.CounterVec
+}
+
+func NewAdapterMetrics() *AdapterMetrics {
+	labels := []string{"adapter", "device_id"}
+	return &AdapterMetrics{
+		lastRead:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "ambagrid_edge_adapter_last_successful_read_timestamp_seconds", Help: "Unix time of the last successful hardware read; zero until success."}, labels),
+		lastCommand:   prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "ambagrid_edge_adapter_last_successful_command_timestamp_seconds", Help: "Unix time of the last successful hardware command; zero until success."}, labels),
+		readErrors:    prometheus.NewCounterVec(prometheus.CounterOpts{Name: "ambagrid_edge_adapter_read_errors_total", Help: "Failed hardware read calls, including cancellation."}, labels),
+		commandErrors: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "ambagrid_edge_adapter_command_errors_total", Help: "Failed hardware command calls, including cancellation."}, labels),
+		timeouts:      prometheus.NewCounterVec(prometheus.CounterOpts{Name: "ambagrid_edge_adapter_protocol_timeouts_total", Help: "Device protocol timeouts; excludes caller deadlines and queued waits."}, append(labels, "operation")),
+		unsupported:   prometheus.NewCounterVec(prometheus.CounterOpts{Name: "ambagrid_edge_adapter_unsupported_total", Help: "Unsupported telemetry fields or commands, including fields omitted from partial reads."}, append(labels, "operation")),
+	}
+}
+
+func (m *AdapterMetrics) collectors() []prometheus.Collector {
+	return []prometheus.Collector{m.lastRead, m.lastCommand, m.readErrors, m.commandErrors, m.timeouts, m.unsupported}
+}
+func (m *AdapterMetrics) Describe(ch chan<- *prometheus.Desc) {
+	for _, c := range m.collectors() {
+		c.Describe(ch)
+	}
+}
+func (m *AdapterMetrics) Collect(ch chan<- prometheus.Metric) {
+	for _, c := range m.collectors() {
+		c.Collect(ch)
+	}
 }

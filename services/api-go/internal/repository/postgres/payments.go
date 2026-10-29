@@ -42,9 +42,7 @@ FROM credit_balances
 WHERE assignment_id = $1::uuid`
 
 const findMeterCommandByPaymentSQL = `
-SELECT mc.command_id::text, mc.meter_id, mc.command_type, mc.status,
-    mc.requested_by, mc.reason, mc.requested_at, mc.sent_at,
-    mc.acknowledged_at, mc.failure_reason
+SELECT ` + meterCommandColumns + `
 FROM meter_commands mc
 JOIN audit_events ae ON ae.metadata->>'meter_command_id' = mc.command_id::text
 WHERE ae.subject_type = 'payment' AND ae.subject_id = $1`
@@ -53,14 +51,15 @@ WHERE ae.subject_type = 'payment' AND ae.subject_id = $1`
 // avoid issuing speculative reconnects for every newly onboarded meter.
 const findActiveAssignmentSQL = `
 SELECT ma.assignment_id::text, ma.site_id, ma.meter_id,
-    COALESCE(sms.relay_closed, true)
+    COALESCE(sms.relay_closed, true), sm.credit_mode
 FROM meter_assignments ma
 JOIN smart_meters sm ON sm.meter_id = ma.meter_id
 LEFT JOIN smart_meter_state sms ON sms.asset_id = sm.asset_id
 WHERE ma.customer_id = $1
   AND ma.ended_at IS NULL
 ORDER BY ma.started_at DESC
-LIMIT 1`
+LIMIT 1
+FOR SHARE OF ma, sm`
 
 const findActiveTariffSQL = `
 SELECT tariff_plan_id, price_per_kwh, currency, minor_units_per_major
@@ -94,12 +93,11 @@ SELECT remaining_kwh FROM credit_balances
 WHERE assignment_id = $1::uuid`
 
 const insertMeterCommandSQL = `
-INSERT INTO meter_commands (
-    meter_id, command_type, status, requested_by, reason
+INSERT INTO meter_commands AS mc (
+    meter_id, command_type, status, requested_by, reason, expires_at, credit_kwh, credit_id
 )
-VALUES ($1, $2, 'requested', $3, $4)
-RETURNING command_id::text, meter_id, command_type, status,
-    requested_by, reason, requested_at, sent_at, acknowledged_at, failure_reason`
+VALUES ($1, $2, 'requested', $3, $4, now() + make_interval(secs => $5), $6, $7::uuid)
+RETURNING ` + meterCommandColumns
 
 const insertAuditEventSQL = `
 INSERT INTO audit_events (
@@ -114,12 +112,13 @@ SELECT
     COALESCE(cb.remaining_kwh, 0),
     COALESCE(cb.remaining_money_value_minor_units, 0),
     COUNT(DISTINCT p.payment_id),
-    COALESCE(SUM(ec.kwh_granted), 0),
+    COALESCE((SELECT SUM(ec.kwh_granted-COALESCE(scr.kwh,0))
+        FROM energy_credits ec LEFT JOIN sts_credit_reversals scr USING(credit_id)
+        WHERE ec.assignment_id=ma.assignment_id),0),
     MAX(p.confirmed_at),
     COALESCE(cb.updated_at, ma.started_at)
 FROM meter_assignments ma
 LEFT JOIN credit_balances cb ON cb.assignment_id = ma.assignment_id
-LEFT JOIN energy_credits ec ON ec.assignment_id = ma.assignment_id
 LEFT JOIN payments p ON p.customer_id = ma.customer_id AND p.status = 'confirmed'
 WHERE ma.ended_at IS NULL
 GROUP BY ma.customer_id, ma.assignment_id, cb.remaining_kwh,
@@ -127,10 +126,8 @@ GROUP BY ma.customer_id, ma.assignment_id, cb.remaining_kwh,
 ORDER BY COALESCE(cb.updated_at, ma.started_at) DESC`
 
 const listMeterCommandsSQL = `
-SELECT command_id::text, meter_id, command_type, status,
-    requested_by, reason, requested_at, sent_at,
-    acknowledged_at, failure_reason
-FROM meter_commands
+SELECT ` + meterCommandColumns + `
+FROM meter_commands mc
 ORDER BY requested_at DESC
 LIMIT 100`
 
@@ -191,13 +188,9 @@ func (s *Store) ListMeterCommands(ctx context.Context) ([]domain.MeterCommand, e
 
 	var commands []domain.MeterCommand
 	for rows.Next() {
-		var cmd domain.MeterCommand
-		if err := rows.Scan(
-			&cmd.CommandID, &cmd.MeterID, &cmd.CommandType, &cmd.Status,
-			&cmd.RequestedBy, &cmd.Reason, &cmd.RequestedAt,
-			&cmd.SentAt, &cmd.AcknowledgedAt, &cmd.FailureReason,
-		); err != nil {
-			return nil, fmt.Errorf("scan meter command: %w", err)
+		cmd, err := scanMeterCommand(rows)
+		if err != nil {
+			return nil, err
 		}
 		commands = append(commands, cmd)
 	}
@@ -252,8 +245,9 @@ func (s *Store) ListAuditEvents(ctx context.Context, customerID string) ([]domai
 }
 
 type paymentTx struct {
-	tx           pgx.Tx
-	outboxTopics OutboxTopics
+	tx              pgx.Tx
+	outboxTopics    OutboxTopics
+	meterCommandTTL time.Duration
 }
 
 func (s *Store) RunPaymentTx(ctx context.Context, fn func(services.PaymentTx) (domain.ApplyPaymentResult, error)) (domain.ApplyPaymentResult, error) {
@@ -266,7 +260,7 @@ func (s *Store) RunPaymentTx(ctx context.Context, fn func(services.PaymentTx) (d
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	ptx := &paymentTx{tx: tx, outboxTopics: s.outboxTopics}
+	ptx := &paymentTx{tx: tx, outboxTopics: s.outboxTopics, meterCommandTTL: s.meterCommandTTL}
 	result, err := fn(ptx)
 	if err != nil {
 		return domain.ApplyPaymentResult{}, err
@@ -361,19 +355,7 @@ func (p *paymentTx) ReplayPriorResult(ctx context.Context, payment domain.Paymen
 	}
 
 	var meterCommand *domain.MeterCommand
-	var cmd domain.MeterCommand
-	err = p.tx.QueryRow(ctx, findMeterCommandByPaymentSQL, payment.PaymentID).Scan(
-		&cmd.CommandID,
-		&cmd.MeterID,
-		&cmd.CommandType,
-		&cmd.Status,
-		&cmd.RequestedBy,
-		&cmd.Reason,
-		&cmd.RequestedAt,
-		&cmd.SentAt,
-		&cmd.AcknowledgedAt,
-		&cmd.FailureReason,
-	)
+	cmd, err := scanMeterCommand(p.tx.QueryRow(ctx, findMeterCommandByPaymentSQL, payment.PaymentID))
 	if err == nil {
 		meterCommand = &cmd
 	} else if !errors.Is(err, pgx.ErrNoRows) {
@@ -390,7 +372,7 @@ func (p *paymentTx) ReplayPriorResult(ctx context.Context, payment domain.Paymen
 
 func (p *paymentTx) FindActiveAssignment(ctx context.Context, customerID string) (domain.MeterAssignment, error) {
 	var a domain.MeterAssignment
-	err := p.tx.QueryRow(ctx, findActiveAssignmentSQL, customerID).Scan(&a.AssignmentID, &a.SiteID, &a.MeterID, &a.RelayClosed)
+	err := p.tx.QueryRow(ctx, findActiveAssignmentSQL, customerID).Scan(&a.AssignmentID, &a.SiteID, &a.MeterID, &a.RelayClosed, &a.CreditMode)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.MeterAssignment{}, fmt.Errorf("%w: customer %q has no active meter assignment", domain.ErrNotFound, customerID)
 	}
@@ -469,26 +451,14 @@ func (p *paymentTx) UpsertCreditBalance(ctx context.Context, assignmentID string
 	return balance, nil
 }
 
-func (p *paymentTx) InsertMeterCommand(ctx context.Context, meterID string, commandType domain.MeterCommandType, requestedBy, reason string) (domain.MeterCommand, error) {
-	var cmd domain.MeterCommand
-	err := p.tx.QueryRow(ctx, insertMeterCommandSQL,
-		meterID, commandType, requestedBy, reason,
-	).Scan(
-		&cmd.CommandID,
-		&cmd.MeterID,
-		&cmd.CommandType,
-		&cmd.Status,
-		&cmd.RequestedBy,
-		&cmd.Reason,
-		&cmd.RequestedAt,
-		&cmd.SentAt,
-		&cmd.AcknowledgedAt,
-		&cmd.FailureReason,
-	)
+func (p *paymentTx) InsertMeterCommand(ctx context.Context, cmd domain.NewMeterCommand) (domain.MeterCommand, error) {
+	inserted, err := scanMeterCommand(p.tx.QueryRow(ctx, insertMeterCommandSQL,
+		cmd.MeterID, cmd.Type, cmd.RequestedBy, cmd.Reason, p.meterCommandTTL.Seconds(), cmd.CreditKWh, cmd.CreditID,
+	))
 	if err != nil {
 		return domain.MeterCommand{}, fmt.Errorf("insert meter command: %w", err)
 	}
-	return cmd, nil
+	return inserted, nil
 }
 
 func (p *paymentTx) InsertMeterCommandEvent(ctx context.Context, cmd domain.MeterCommand, siteID, assignmentID string) error {
@@ -502,6 +472,9 @@ func (p *paymentTx) InsertMeterCommandEvent(ctx context.Context, cmd domain.Mete
 		"site_id":       siteID,
 		"assignment_id": assignmentID,
 		"requested_at":  cmd.RequestedAt,
+		"expires_at":    cmd.ExpiresAt,
+		"credit_kwh":    cmd.CreditKWh,
+		"credit_id":     cmd.CreditID,
 	})
 	if err != nil {
 		return fmt.Errorf("marshal meter command event: %w", err)

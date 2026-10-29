@@ -12,11 +12,17 @@ The service follows the same domain-and-adapter boundaries as the other AmbaGrid
 services:
 
 - `internal/config` owns environment configuration.
-- `internal/adapter/simulator` simulates meter, battery, and inverter hardware.
+- `internal/adapter` owns hardware contracts, capabilities, typed errors and
+  [the durable command ledger](../../docs/command-ledger.md).
+- Its `mqtt`, `modbus` and `simulator` packages implement MQTT v5 commands,
+  mapped Modbus telemetry and simulated hardware. `adaptertest` and `devicetest`
+  provide shared conformance tests and device controls.
+- `internal/commands` polls api-go, executes commands through the ledger and
+  reports outcomes.
 - `internal/collector` validates, envelopes, and persists adapter readings without reshaping their payloads.
 - `internal/domain` owns queue events, records, state, statistics, and errors.
 - `internal/repository/sqlite` owns the durable adapter, with schema setup,
-  queries, mutations, and capacity policy in separate files.
+  queries, mutations, capacity policy, and the command ledger in separate files.
 - `internal/uploader` drains the queue in sequence order and POSTs batches to
   the ingestion service; retries with exponential backoff on failure.
 - `internal/health` owns the HTTP health endpoint and Prometheus collector.
@@ -77,6 +83,23 @@ gateways default to a 256 MiB filesystem reserve.
 | `EDGE_COLLECTOR_INTERVAL` | `5s` | Interval between simulated collection cycles. |
 | `EDGE_REGION` | `africa-west` | Region used in normalized MQTT topic envelopes. |
 | `EDGE_HEALTH_ADDR` | `:2112` | Local health HTTP listen address. |
+| `EDGE_COMMAND_RETENTION` | `720h` | How long resolved meter commands stay in the ledger. Must outlast the longest upstream retry of one command ID. |
+| `EDGE_COMMAND_PRUNE_INTERVAL` | `1h` | Interval between ledger pruning passes. Unresolved commands are never pruned. |
+| `EDGE_COMMANDS_ENABLED` | `false` | Fetch meter commands from api-go and run them through the command ledger. |
+| `EDGE_COMMAND_ADAPTER` | `simulator` | `simulator` (requires `EDGE_SIMULATOR_ENABLED`) or `mqtt`. |
+| `EDGE_MQTT_BROKER` | required for `mqtt` | TLS broker URL, e.g. `ssl://broker:8883` or `mqtts://broker:8883`. |
+| `EDGE_MQTT_CAPABILITIES_FILE` | required for `mqtt` | YAML capability declaration of the meters behind the broker. |
+| `EDGE_MQTT_COMMAND_TOPIC` | `site/{site_id}/meter/{device_id}/cmd` | Command topic template; `{device_id}` must fill a whole level. |
+| `EDGE_MQTT_REPLY_TOPIC` | `site/{site_id}/meter/{device_id}/cmd/reply` | Per-device reply topic template, sent as each request's `ResponseTopic`. |
+| `EDGE_MQTT_RESPONSE_TIMEOUT` | `30s` | How long to wait for a device's reply; a PUBACK alone is not an answer. |
+| `EDGE_MQTT_CLIENT_ID` | `ambagrid-edge-{gateway_id}` | Must be unique on the broker. |
+| `EDGE_MQTT_USERNAME`, `EDGE_MQTT_PASSWORD` | empty | Required broker credentials unless insecure development is explicitly enabled. |
+| `EDGE_MQTT_ALLOW_INSECURE` | `false` | Allow plaintext or anonymous command transport for isolated development. |
+| `EDGE_MQTT_CA_FILE` | empty | Required certificate authority for TLS. |
+| `EDGE_COMMANDS_ENDPOINT` | required | Base URL of api-go, e.g. `http://api:8081`. |
+| `EDGE_COMMANDS_API_KEY` | `EDGE_UPLOADER_API_KEY` | Site key for api-go's `API_EDGE_API_KEYS`. |
+| `EDGE_COMMANDS_POLL_INTERVAL` | `15s` | Interval between command polls and report deliveries. |
+| `EDGE_COMMANDS_TIMEOUT` | `30s` | Bound on each api-go request and each command's device exchange. |
 | `EDGE_UPLOADER_ENABLED` | `false` | Start the uploader that drains the queue to the ingestion service. |
 | `EDGE_UPLOADER_ENDPOINT` | required | Full URL of the ingestion HTTP endpoint, e.g. `http://ingest:8090/v1/ingest`. |
 | `EDGE_UPLOADER_API_KEY` | required | Bearer token the ingestion service uses to identify this site. |
@@ -173,3 +196,21 @@ Critical battery overheat, inverter failure, tamper, and site outage events are
 stored as durable incidents. After three failed uploads or two minutes without
 a successful upload, the edge agent sends a single-segment versioned SMS. A
 successful normal replay removes the incident from the fallback candidate set.
+
+Production command MQTT requires [TLS and broker topic ACLs](../../docs/mqtt-command-security.md).
+Run `deploy/mqtt/test-acl.sh` from the repository root to exercise a disposable
+TLS broker with the production policy. The anonymous development broker is not
+suitable for hardware commands in production.
+
+## Hardware configuration
+
+See the hardware guide for [per-device configuration](../../docs/hardware-adapters.md#per-device-configuration),
+[adapter health metrics](../../docs/hardware-adapters.md#adapter-health), and
+[Modbus register maps](../../docs/hardware-adapters.md#modbus-register-maps),
+including the Victron Cerbo GX battery map.
+
+## Integration tests
+
+`go test -tags=integration ./...` also runs the MQTT adapter's conformance suite
+over autopaho against an in-process MQTT v5 broker, and the Modbus client
+against an in-process Modbus TCP server, so neither needs external services.

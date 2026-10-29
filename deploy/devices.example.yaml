@@ -1,0 +1,12 @@
+# Paths are relative to this inventory. Credentials stay in environment settings.
+devices:
+  - id: meter-01
+    command: mqtt
+    capabilities_file: mqtt/meter-capabilities.example.yaml
+  - id: battery-01
+    telemetry: modbus
+    modbus:
+      address: 192.0.2.1:502
+      unit_id: 225
+      map_file: modbus/victron-battery.yaml
+      timeout: 5s

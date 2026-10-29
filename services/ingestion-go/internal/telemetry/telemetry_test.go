@@ -134,6 +134,7 @@ func TestBuildRecord(t *testing.T) {
 		"device_id": "met-0101",
 		"device_type": "DEVICE_TYPE_SMART_METER",
 		"timestamp_utc": 1745500000,
+		"last_seen_utc": 1745499940,
 		"site_id": "ng-kaji-01",
 		"metrics": {"voltage": 231.0}
 	}`)
@@ -170,6 +171,9 @@ func TestBuildRecord(t *testing.T) {
 	}
 	if decoded.GetTimestampUtc() != 1745500000 {
 		t.Fatalf("decoded TimestampUtc = %v, want %v", decoded.GetTimestampUtc(), int64(1745500000))
+	}
+	if decoded.LastSeenUtc == nil || decoded.GetLastSeenUtc() != 1745499940 {
+		t.Fatalf("decoded LastSeenUtc = %v, want %v", decoded.LastSeenUtc, int64(1745499940))
 	}
 	if decoded.GetSiteId() != "ng-kaji-01" {
 		t.Fatalf("decoded SiteId = %q, want %q", decoded.GetSiteId(), "ng-kaji-01")
@@ -285,4 +289,18 @@ func headersByKey(headers []kgo.RecordHeader) map[string]string {
 		got[header.Key] = string(header.Value)
 	}
 	return got
+}
+
+func TestOmittedBatterySensorsPreserveAbsence(t *testing.T) {
+	record, err := BuildRecord("telemetry.ingested", "africa-west/site-01/battery/battery-01/telemetry", []byte(`{"device_id":"battery-01","device_type":"DEVICE_TYPE_BATTERY_BMS","site_id":"site-01","timestamp_utc":1792924800,"metrics":{"voltage":52.34}}`), MessageMetadata{}, TopicConstraints{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload telemetrypb.MetricPayload
+	if err := proto.Unmarshal(record.Value, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.InternalTemperature != nil || payload.BatterySocPct != nil {
+		t.Fatal("missing battery sensors converted to zero")
+	}
 }

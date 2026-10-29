@@ -131,6 +131,8 @@ pub enum OutboxEventType {
     PaymentConfirmed,
     CreditIssued,
     MeterCommandRequested,
+    MeterCommandAcknowledged,
+    MeterCommandFailed,
     Unsupported(String),
 }
 
@@ -142,6 +144,8 @@ impl OutboxEventType {
             "payment.confirmed" => Self::PaymentConfirmed,
             "credit.issued" => Self::CreditIssued,
             "meter.command.requested" => Self::MeterCommandRequested,
+            "meter.command.acknowledged" => Self::MeterCommandAcknowledged,
+            "meter.command.failed" => Self::MeterCommandFailed,
             _ => Self::Unsupported(value),
         }
     }
@@ -153,6 +157,8 @@ impl OutboxEventType {
             Self::PaymentConfirmed => "payment.confirmed",
             Self::CreditIssued => "credit.issued",
             Self::MeterCommandRequested => "meter.command.requested",
+            Self::MeterCommandAcknowledged => "meter.command.acknowledged",
+            Self::MeterCommandFailed => "meter.command.failed",
             Self::Unsupported(value) => value,
         }
     }

@@ -378,6 +378,110 @@ normalizes the provider payload, then calls the idempotent `ApplyPayment`
 action. Repeated provider references return the existing result without
 issuing credit twice.
 
+### `POST /v1/edge/commands/poll`
+
+Returns commands for the site identified by `Authorization: Bearer <site key>`.
+Requires `API_EDGE_API_KEYS`. In one transaction, the endpoint:
+
+1. marks the site's `requested` commands past `expires_at` as `expired`, with
+   a `system:command-expiry` audit event whose metadata records
+   `previous_status`;
+2. returns up to `limit` (default 50, at most 200) commands: `requested` and
+   `sent` ones whose `expires_at` has not passed, and every `queued` one.
+   `requested` and `queued` commands take priority over `sent` commands, with
+   oldest-first ordering within each group;
+3. marks the returned `requested` commands `queued`.
+
+`device_id` is the meter's `asset_id`. `expires_in_ms` is the remaining lifetime
+measured on the platform clock; `credit_kwh` appears on `credit_meter` commands.
+
+Expiry depends on delivery state:
+
+- `requested`: the platform expires overdue commands because they never reached the edge.
+- `queued`: overdue commands remain pollable with `expires_in_ms <= 0`. The edge
+  reports `expired` if unsent, or the device outcome if already sent.
+- `sent`: overdue commands are neither returned nor expired; they await reconciliation.
+
+A worker also expires overdue `requested` commands at startup and every minute,
+in batches of 200 across all sites, even without edge keys or polling. Expiry,
+audit and outcome publication commit together, without racing delivery.
+
+```json
+{
+  "data": [
+    {
+      "command_id": "3f2b8c1e-5d4a-4e6b-9c7d-1a2b3c4d5e6f",
+      "meter_id": "met-0101",
+      "device_id": "meter-01",
+      "command_type": "reconnect_meter",
+      "status": "queued",
+      "requested_at": "2026-10-01T14:30:00Z",
+      "expires_at": "2026-10-02T14:30:00Z",
+      "expires_in_ms": 86340000
+    }
+  ],
+  "request_id": "..."
+}
+```
+
+### `POST /v1/edge/commands/{command_id}/report`
+
+Records what happened to one command, with a `meter_command.<status>` audit
+event from actor `edge:<site_id>`.
+
+```json
+{ "status": "failed", "occurred_at": "2026-10-01T14:31:00Z", "failure_reason": "superseded by newer relay command ..." }
+```
+
+`status` is `sent`, `acknowledged`, `failed`, or `expired`. Failed reports
+require a nonblank `failure_reason` of at most 500 bytes, measured in UTF-8
+bytes rather than characters. Other statuses require it to be absent or empty.
+
+Reports are idempotent. A repeat, or `sent` arriving after an outcome, returns
+`200` with `"changed": false`. Another site's command returns `404`.
+
+A conflicting report is saved once as `meter_command.report_conflict`. After
+saving, the API returns `202`, `"changed": false` and
+`"reconciliation_required": true`. Platform status stays unchanged and no new
+outcome event is published. A storage failure returns an error so the edge retries.
+
+Normal reports clamp `occurred_at` between `requested_at` and platform time.
+Settled outcomes publish `meter.command.acknowledged` or `meter.command.failed`
+through the outbox in the same transaction. Conflicting evidence retains the
+raw timestamp, reported status, failure reason, platform status and receipt time.
+A `202` confirms evidence was saved; it does not confirm execution or correct status.
+
+### `GET /v1/meter-commands/reconciliation`
+
+A read-only operator listing of meter commands that need reconciliation, across
+all sites. Like `/v1/sites`, it does not take an edge site key; deploy it
+behind the gateway that authenticates operators. `site_id` narrows it to one
+site. `limit` and `cursor` follow [Pagination](#pagination), so a `limit`
+over the maximum is a 400; `cursor` continues in oldest-request-first order.
+The response uses the standard `data`, `page`, and `request_id` collection
+envelope.
+
+`reconciliation_reason` is, most urgent first:
+
+- `overturned_expiry`: expired by platform code before the expiry fix, then
+  moved on by an edge report, so `meter.command.failed` was followed by the
+  device's outcome;
+- `conflicting_report`: has retained reports that contradict its settled
+  outcome;
+- `overdue_outcome_unknown`: `queued` or `sent` past `expires_at`, with no
+  outcome yet.
+
+Each entry includes `command_id`, `meter_id`, `site_id`, `command_type`,
+platform `status`, `requested_at`, `expires_at`, optional `sent_at`,
+`age_seconds`, `overdue_seconds`, `last_contact_at`, `last_sms_heartbeat_at`,
+`site_health`, and `last_report_at` (platform receipt time). Site health uses
+the same HTTP/SMS rules and configured thresholds as `/v1/sites`.
+Conflicts include `conflict_count`, `latest_conflict` (reported `status`, raw
+`occurred_at`, and optional `failure_reason`) and `latest_conflict_received_at`.
+`legacy_expired_at` is present when pre-fix platform code expired the command.
+All conflicting evidence remains in `audit_events`, not only the latest report
+shown in this list. Listing never retries hardware or changes command status.
+
 ### `GET /healthz` and `GET /readyz`
 
 `/healthz` is liveness and never touches the database — restarting a replica
@@ -411,6 +515,10 @@ is unreachable, so the replica leaves the load balancer instead.
 | `PAYMENT_CONFIRMED_TOPIC` | `payment.confirmed` | confirmed-payment outbox topic |
 | `CREDIT_ISSUED_TOPIC` | `credit.issued` | issued-credit outbox topic |
 | `METER_COMMAND_REQUESTED_TOPIC` | `meter.command.requested` | requested-command outbox topic |
+| `API_EDGE_API_KEYS` | disabled | `site:key` pairs, comma-separated, enabling the edge command endpoints; the same format as `INGEST_HTTP_API_KEYS` |
+| `METER_COMMAND_ACKNOWLEDGED_TOPIC` | `meter.command.acknowledged` | acknowledged-command outbox topic |
+| `METER_COMMAND_FAILED_TOPIC` | `meter.command.failed` | failed- and expired-command outbox topic |
+| `API_METER_COMMAND_TTL` | `24h` | how long a new meter command stays deliverable; keep it below the edge's `EDGE_COMMAND_RETENTION` |
 
 `DB_STATEMENT_TIMEOUT` must be at least `1ms`, and `DB_QUERY_TIMEOUT` must be
 lower than `DB_STATEMENT_TIMEOUT`. The client-side timeout should fire first;
@@ -446,7 +554,8 @@ and pins the connection that cancelling it was meant to free.
 
 ## Not Here Yet
 
-- **Built-in authentication.** There is none. Run it behind a gateway that
+- **Built-in authentication.** There is none apart from the site keys on the
+  edge command endpoints. Run it behind a gateway that
   terminates TLS, authenticates callers, and injects `X-Actor-Id` for
   operator commands; do not expose it to the internet as is.
 - **Customer, balance, and command read APIs.** These ontology objects have

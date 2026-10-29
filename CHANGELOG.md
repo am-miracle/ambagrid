@@ -22,41 +22,33 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - Add authenticated staging telemetry worker (#17)
 - Add prepaid payment processing (#18)
 - Add revenue operations dashboard (#19)
-- **edge:** Add durable telemetry collection
-- **ingestion:** Add HTTP ingestion endpoint for edge agents
-- **edge:** Add ordered uploader with retry and dedup
-- **telemetry:** Add replay metadata to ingestion pipeline
-- **site-health:** Track gateway dashboard states
-- **alerts:** Add critical SMS fallback
-- **edge:** Persist dedup state and surface fleet health
-- **edge:** Harden durable telemetry sync
-- **edge:** Add SMS liveness heartbeats
-- **ui:** Show SMS heartbeat age on site card
-
-### Changed
-
-- **alerts:** Move SMS fallback request rules out of the repository
-- **edge:** Drop unused upload retryable flag
+- **edge:** Add durable telemetry and critical fallback (#21)
+- **adapters:** Deliver durable commands and add Victron and STS integrations
+- **edge:** Use MQTT v5 requests and mapped Modbus telemetry
+- **edge:** Add adapter health metrics and per-device wiring
+- Add live local fleet and expand command reconciliation
 
 ### Documentation
 
 - Add open source project foundations
 - Add ontology and roadmap docs
 - Regenerate changelog
-- Explain edge durability and fallback locking invariants
+- **adapters:** Document MQTT v5 migration and validation
+- Simplify hardware and command delivery guides
 
 ### Fixed
 
 - **outbox:** Publish alert events durably (#12)
 - **engine:** Make outbox dependencies explicit (#14)
-- **ingestion:** Make dedup and Kafka publish atomic, drop Postgres dependency
-- **edge:** Harden fallback and replay idempotency
-- **edge:** Harden replay and fallback handling
-- **edge:** Complete replay and fallback hardening
-- **edge:** Close durable fallback integrity gaps
-- **edge:** Complete durable sync integration
-- **edge:** Derive SMS heartbeat deadline from declared interval
-- **engine:** Log site health offset store failures
+- **adapters:** Enforce funded STS delivery and production MQTT isolation
+- **adapters:** Preserve vending results and reverse undelivered credits
+- **edge:** Record commands applied without the send hook
+- **sts:** Reverse what the balance holds and record shortfalls
+- **adapters:** Retain applied results through storage outages
+- **deps:** Patch ctutils constant-time advisory
+- Address hardware adapter and STS review feedback
+- Preserve command evidence and STS operator visibility
+- Address adapter and command delivery review findings
 
 ### Maintenance
 
@@ -67,4 +59,8 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - Harden ingestion bridge package split
 
 Move ingestion bridge internals into dedicated packages with focused config, telemetry, stats, and bridge tests. Validate MQTT topic filters before deriving constraints, cover queue shutdown/resubscribe behavior, and document simulator payload fields. Harden the virtual meter simulator state model and add tests for generated readings.
+
+### Testing
+
+- **api:** Tolerate database clock skew in the expiry bound
 

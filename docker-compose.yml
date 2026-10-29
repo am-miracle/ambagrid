@@ -4,8 +4,8 @@ services:
     image: eclipse-mosquitto:2.0
     container_name: ambagrid-mqtt
     ports:
-      - "1883:1883"   # Standard unencrypted MQTT port
-      - "9001:9001"   # MQTT over WebSockets (optional for web clients)
+      - "127.0.0.1:1883:1883"   # Standard unencrypted MQTT port
+      - "127.0.0.1:9001:9001"   # MQTT over WebSockets (optional for web clients)
     volumes:
       - mqtt_config:/mosquitto/config
       - mqtt_data:/mosquitto/data
@@ -79,6 +79,8 @@ services:
         rpk topic create payment.confirmed -p 1 --brokers redpanda:29092 || true
         rpk topic create credit.issued -p 1 --brokers redpanda:29092 || true
         rpk topic create meter.command.requested -p 1 --brokers redpanda:29092 || true
+        rpk topic create meter.command.acknowledged -p 1 --brokers redpanda:29092 || true
+        rpk topic create meter.command.failed -p 1 --brokers redpanda:29092 || true
         rpk topic list --brokers redpanda:29092
     depends_on:
       - redpanda
@@ -212,6 +214,8 @@ services:
       PAYMENT_CONFIRMED_TOPIC: payment.confirmed
       CREDIT_ISSUED_TOPIC: credit.issued
       METER_COMMAND_REQUESTED_TOPIC: meter.command.requested
+      METER_COMMAND_ACKNOWLEDGED_TOPIC: meter.command.acknowledged
+      METER_COMMAND_FAILED_TOPIC: meter.command.failed
       API_DEV_MODE: "true"
     ports:
       - "8081:8081"   # http://localhost:8081/v1/sites

@@ -533,6 +533,7 @@ payment.failed
 credit.issued
 meter.command.requested
 meter.command.acknowledged
+meter.command.failed
 alert.opened
 alert.resolved
 ```

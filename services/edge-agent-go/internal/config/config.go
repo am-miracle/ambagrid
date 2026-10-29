@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"math"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -23,14 +24,50 @@ const (
 	defaultCollectorEnabled       = false
 	defaultCollectorInterval      = 5 * time.Second
 	defaultRegion                 = "africa-west"
+	// Must outlast the longest time upstream may retry one command ID, or a
+	// late retry would find no record and apply the command again.
+	defaultCommandRetention     = 30 * 24 * time.Hour
+	defaultCommandPruneInterval = time.Hour
 )
 
 type Config struct {
-	Queue      QueueConfig
-	Collector  CollectorConfig
-	Uploader   UploaderConfig
-	SMS        SMSConfig
-	HealthAddr string
+	DevicesFile string
+	Devices     []DeviceConfig
+	Queue       QueueConfig
+	Collector   CollectorConfig
+	Modbus      ModbusConfig
+	Uploader    UploaderConfig
+	SMS         SMSConfig
+	Commands    CommandConfig
+	HealthAddr  string
+}
+
+type CommandConfig struct {
+	Retention     time.Duration
+	PruneInterval time.Duration
+
+	Enabled      bool
+	Endpoint     string
+	APIKey       string
+	PollInterval time.Duration
+	Timeout      time.Duration
+	// Adapter is "simulator" or "mqtt".
+	Adapter string
+	MQTT    MQTTConfig
+}
+
+type MQTTConfig struct {
+	AllowInsecure    bool
+	Broker           string
+	ClientID         string
+	Username         string
+	Password         string
+	CAFile           string
+	CapabilitiesFile string
+	// CommandTopic and ReplyTopic are templates with {site_id} and {device_id}.
+	CommandTopic    string
+	ReplyTopic      string
+	ResponseTimeout time.Duration
 }
 
 type SMSConfig struct {
@@ -51,6 +88,16 @@ type SMSConfig struct {
 	HeartbeatEnabled    bool
 	HeartbeatInterval   time.Duration
 	HeartbeatDailyLimit int
+}
+
+// ModbusConfig reads one Modbus device over TCP. MapFile describes its
+// registers, so a new device model needs a map rather than a code change.
+type ModbusConfig struct {
+	Address  string
+	UnitID   byte
+	DeviceID string
+	MapFile  string
+	Timeout  time.Duration
 }
 
 type CollectorConfig struct {
@@ -121,6 +168,34 @@ func FromEnv() (Config, error) {
 		return Config{}, err
 	}
 	purgeInterval, err := envDuration("EDGE_QUEUE_PURGE_INTERVAL", 5*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	commandRetention, err := envDuration("EDGE_COMMAND_RETENTION", defaultCommandRetention)
+	if err != nil {
+		return Config{}, err
+	}
+	commandPruneInterval, err := envDuration("EDGE_COMMAND_PRUNE_INTERVAL", defaultCommandPruneInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	allowInsecureMQTT, err := envBool("EDGE_MQTT_ALLOW_INSECURE", false)
+	if err != nil {
+		return Config{}, err
+	}
+	mqttResponseTimeout, err := envDuration("EDGE_MQTT_RESPONSE_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	commandsEnabled, err := envBool("EDGE_COMMANDS_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	commandPollInterval, err := envDuration("EDGE_COMMANDS_POLL_INTERVAL", 15*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	commandTimeout, err := envDuration("EDGE_COMMANDS_TIMEOUT", 30*time.Second)
 	if err != nil {
 		return Config{}, err
 	}
@@ -226,7 +301,28 @@ func FromEnv() (Config, error) {
 		return Config{}, err
 	}
 
+	modbusAddress := envString("EDGE_MODBUS_ADDRESS", "")
+	modbusUnit, err := envInt("EDGE_MODBUS_UNIT_ID", -1)
+	if err != nil {
+		return Config{}, err
+	}
+	modbusTimeout, err := envDuration("EDGE_MODBUS_TIMEOUT", 5*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	modbusDevice := envString("EDGE_MODBUS_DEVICE_ID", "")
+	modbusMap := envString("EDGE_MODBUS_MAP_FILE", "")
+	if modbusAddress != "" {
+		if _, _, err := net.SplitHostPort(modbusAddress); err != nil {
+			return Config{}, fmt.Errorf("EDGE_MODBUS_ADDRESS must be host:port: %w", err)
+		}
+		if modbusUnit < 0 || modbusUnit > 255 || modbusDevice == "" || modbusMap == "" {
+			return Config{}, fmt.Errorf("EDGE_MODBUS_ADDRESS requires EDGE_MODBUS_UNIT_ID (0..255), EDGE_MODBUS_DEVICE_ID and EDGE_MODBUS_MAP_FILE")
+		}
+	}
+
 	cfg := Config{
+		Modbus: ModbusConfig{Address: modbusAddress, UnitID: byte(modbusUnit), DeviceID: modbusDevice, MapFile: modbusMap, Timeout: modbusTimeout},
 		Queue: QueueConfig{
 			Path:                   envString("EDGE_QUEUE_PATH", defaultQueuePath),
 			SiteID:                 siteID,
@@ -264,6 +360,25 @@ func FromEnv() (Config, error) {
 			RetryInterval: smsRetryInterval, SendTimeout: smsSendTimeout, BatteryOverheatC: batteryOverheatC, Debounce: smsDebounce,
 			HeartbeatEnabled: heartbeatEnabled, HeartbeatInterval: heartbeatInterval, HeartbeatDailyLimit: heartbeatDailyLimit,
 		},
+		Commands: CommandConfig{
+			Retention: commandRetention, PruneInterval: commandPruneInterval,
+			Enabled: commandsEnabled, Endpoint: envString("EDGE_COMMANDS_ENDPOINT", ""),
+			// One site key authenticates both telemetry upload and command delivery.
+			APIKey:       envString("EDGE_COMMANDS_API_KEY", os.Getenv("EDGE_UPLOADER_API_KEY")),
+			PollInterval: commandPollInterval, Timeout: commandTimeout,
+			Adapter: envString("EDGE_COMMAND_ADAPTER", "simulator"),
+			MQTT: MQTTConfig{AllowInsecure: allowInsecureMQTT,
+				Broker:           envString("EDGE_MQTT_BROKER", ""),
+				ClientID:         envString("EDGE_MQTT_CLIENT_ID", "ambagrid-edge-"+gatewayID),
+				Username:         envString("EDGE_MQTT_USERNAME", ""),
+				Password:         os.Getenv("EDGE_MQTT_PASSWORD"),
+				CAFile:           envString("EDGE_MQTT_CA_FILE", ""),
+				CapabilitiesFile: envString("EDGE_MQTT_CAPABILITIES_FILE", ""),
+				CommandTopic:     envString("EDGE_MQTT_COMMAND_TOPIC", "site/{site_id}/meter/{device_id}/cmd"),
+				ReplyTopic:       envString("EDGE_MQTT_REPLY_TOPIC", "site/{site_id}/meter/{device_id}/cmd/reply"),
+				ResponseTimeout:  mqttResponseTimeout,
+			},
+		},
 		HealthAddr: envString("EDGE_HEALTH_ADDR", defaultHealthAddr),
 	}
 
@@ -273,6 +388,52 @@ func FromEnv() (Config, error) {
 		}
 		if cfg.Uploader.APIKey == "" {
 			return Config{}, fmt.Errorf("EDGE_UPLOADER_API_KEY must be set when uploader is enabled")
+		}
+	}
+	if cfg.Commands.Enabled {
+		if cfg.Commands.Endpoint == "" || cfg.Commands.APIKey == "" {
+			return Config{}, fmt.Errorf("EDGE_COMMANDS_ENDPOINT and EDGE_COMMANDS_API_KEY must be set when command delivery is enabled")
+		}
+	}
+	cfg.DevicesFile = envString("EDGE_DEVICES_FILE", "")
+	if cfg.DevicesFile != "" {
+		if cfg.Collector.Enabled || cfg.Modbus.Address != "" || os.Getenv("EDGE_COMMAND_ADAPTER") != "" || cfg.Commands.MQTT.CapabilitiesFile != "" {
+			return Config{}, fmt.Errorf("EDGE_DEVICES_FILE replaces EDGE_SIMULATOR_ENABLED, EDGE_MODBUS_ADDRESS, EDGE_COMMAND_ADAPTER and EDGE_MQTT_CAPABILITIES_FILE")
+		}
+		cfg.Devices, err = loadDevices(cfg.DevicesFile)
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if cfg.Commands.Enabled {
+		selected := []string{cfg.Commands.Adapter}
+		if cfg.DevicesFile != "" {
+			selected = nil
+			for _, d := range cfg.Devices {
+				if d.Command != "" {
+					selected = append(selected, d.Command)
+				}
+			}
+			if len(selected) == 0 {
+				return Config{}, fmt.Errorf("command delivery enabled but inventory has no command adapters")
+			}
+		}
+		for _, selection := range selected {
+			switch selection {
+			case "simulator":
+				if cfg.DevicesFile == "" && !cfg.Collector.Enabled {
+					return Config{}, fmt.Errorf("EDGE_COMMAND_ADAPTER=simulator requires EDGE_SIMULATOR_ENABLED")
+				}
+			case "mqtt":
+				if !cfg.Commands.MQTT.AllowInsecure && (!tlsBroker(cfg.Commands.MQTT.Broker) || cfg.Commands.MQTT.Username == "" || cfg.Commands.MQTT.Password == "" || cfg.Commands.MQTT.CAFile == "") {
+					return Config{}, fmt.Errorf("production command MQTT requires a TLS broker URL (ssl://, tls://, mqtts://), credentials and a CA; EDGE_MQTT_ALLOW_INSECURE is for isolated development only")
+				}
+				if cfg.Commands.MQTT.Broker == "" || (cfg.DevicesFile == "" && cfg.Commands.MQTT.CapabilitiesFile == "") {
+					return Config{}, fmt.Errorf("EDGE_COMMAND_ADAPTER=mqtt requires EDGE_MQTT_BROKER and EDGE_MQTT_CAPABILITIES_FILE")
+				}
+			default:
+				return Config{}, fmt.Errorf("EDGE_COMMAND_ADAPTER must be simulator or mqtt, got %q", cfg.Commands.Adapter)
+			}
 		}
 	}
 	if cfg.SMS.Enabled && cfg.SMS.Destination == "" {
@@ -378,4 +539,14 @@ func envInt64(key string, fallback int64) (int64, error) {
 		return 0, fmt.Errorf("%s must be an integer: %w", key, err)
 	}
 	return value, nil
+}
+
+// tlsBroker reports whether the broker URL uses a scheme autopaho connects to over TLS.
+func tlsBroker(broker string) bool {
+	scheme, _, ok := strings.Cut(broker, "://")
+	switch scheme {
+	case "ssl", "tls", "mqtts", "mqtt+ssl", "tcps", "wss":
+		return ok
+	}
+	return false
 }

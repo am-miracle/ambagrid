@@ -4,29 +4,18 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"api-go/internal/domain"
 	"api-go/internal/repository"
 )
 
 func TestFallbackTxLifecycleInPostgres(t *testing.T) {
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("requires DATABASE_URL and engine migrations")
-	}
-
+	pool := integrationPool(t)
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, databaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
 
 	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {
@@ -46,13 +35,14 @@ func TestFallbackTxLifecycleInPostgres(t *testing.T) {
 	mustExec("INSERT INTO sites (site_id, name) VALUES ($1, 'Fallback integration test')", siteID)
 	mustExec("INSERT INTO assets (asset_id, site_id, asset_type, last_seen_at) VALUES ($1, $2, 'battery_bms', now())", assetID, siteID)
 
+	clean := cleaner(t, pool)
 	t.Cleanup(func() {
-		_, _ = pool.Exec(ctx, "DELETE FROM sms_fallback_receipts WHERE event_key = $1", eventKey)
-		_, _ = pool.Exec(ctx, "DELETE FROM sms_fallback_events WHERE event_key = $1", eventKey)
-		_, _ = pool.Exec(ctx, "DELETE FROM command_event_outbox WHERE aggregate_id IN (SELECT alert_id::text FROM alerts WHERE site_id = $1)", siteID)
-		_, _ = pool.Exec(ctx, "DELETE FROM alerts WHERE site_id = $1", siteID)
-		_, _ = pool.Exec(ctx, "DELETE FROM assets WHERE asset_id = $1", assetID)
-		_, _ = pool.Exec(ctx, "DELETE FROM sites WHERE site_id = $1", siteID)
+		clean("DELETE FROM sms_fallback_receipts WHERE event_key = $1", eventKey)
+		clean("DELETE FROM sms_fallback_events WHERE event_key = $1", eventKey)
+		clean("DELETE FROM command_event_outbox WHERE aggregate_id IN (SELECT alert_id::text FROM alerts WHERE site_id = $1)", siteID)
+		clean("DELETE FROM alerts WHERE site_id = $1", siteID)
+		clean("DELETE FROM assets WHERE asset_id = $1", assetID)
+		clean("DELETE FROM sites WHERE site_id = $1", siteID)
 	})
 
 	store := NewFallbackStore(pool)

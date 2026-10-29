@@ -24,6 +24,17 @@ const (
 	CommandRequestMeterStatus MeterCommandType = "request_meter_status"
 )
 
+// CreditMode says where a meter's prepaid balance lives.
+type CreditMode string
+
+const (
+	// CreditModePlatform meters are relay-controlled against the balance AmbaGrid holds.
+	CreditModePlatform CreditMode = "platform"
+	// CreditModeMeter meters keep their own balance and receive each credit as a command.
+	CreditModeMeter CreditMode = "meter"
+	CreditModeSTS   CreditMode = "sts"
+)
+
 type MeterCommandStatus string
 
 const (
@@ -85,9 +96,21 @@ type MeterCommand struct {
 	RequestedBy    string
 	Reason         string
 	RequestedAt    time.Time
+	ExpiresAt      time.Time
 	SentAt         *time.Time
 	AcknowledgedAt *time.Time
 	FailureReason  *string
+	CreditKWh      *float64
+	CreditID       *string
+}
+
+type NewMeterCommand struct {
+	MeterID     string
+	Type        MeterCommandType
+	RequestedBy string
+	Reason      string
+	CreditKWh   *float64
+	CreditID    *string
 }
 
 type AuditEvent struct {
@@ -113,6 +136,7 @@ type MeterAssignment struct {
 	SiteID       string
 	MeterID      string
 	RelayClosed  bool
+	CreditMode   CreditMode
 }
 
 type CustomerSummary struct {

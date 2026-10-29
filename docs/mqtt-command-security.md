@@ -1,0 +1,56 @@
+# Production command broker access control
+
+Production MQTT commands require authentication, TLS and topic ACLs. The
+[official Mosquitto configuration reference](https://mosquitto.org/man/mosquitto-conf-5.html)
+defines authenticated user ACLs and deny-by-default behavior when `acl_file` is set.
+The included configuration targets the pinned Mosquitto 2.0 image.
+
+`deploy/mqtt/compose.yml` runs a dedicated TLS command broker on port 8883 with
+anonymous access disabled. The main Compose broker is for local development only.
+
+Before starting the production broker:
+
+1. Replace the example users/topics in `deploy/mqtt/commands.acl` with the exact
+   commissioned identities and site prefixes. Remove the example second tenant
+   and the telemetry test identity, which deliberately has no command-broker grants.
+2. Provision `deploy/mqtt/secrets/server.crt` and `server.key`. The certificate
+   must cover the broker's real DNS name and include the intermediate chain.
+3. Create `deploy/mqtt/secrets/passwords` with `mosquitto_passwd`. Use separate,
+   strong credentials for each gateway and each device. Do not share credentials
+   across sites or combine a telemetry publisher with a command identity.
+4. Ensure the container's Mosquitto user (UID/GID 1883 in this image) can read the
+   mounted secrets; restrict the directory and private files to that user/group.
+   These files are gitignored. Back them up through the deployment's secret store.
+5. Start with `docker compose -f deploy/mqtt/compose.yml up -d`.
+
+For example, `mosquitto_passwd -c /path/to/passwords gateway-ng-kaji-01` creates
+the file and prompts for the first password; omit `-c` when adding each device.
+Never use `-c` on an existing production file, because it overwrites other users.
+
+The ACL grants each gateway write access only to its site's command requests and
+read access only to that site's replies. Each device reads its own command topic
+and writes its own reply topic. Everything else is denied, including forged
+replies, sibling-device topics, cross-site commands, and unrelated telemetry users.
+Authorization uses authenticated **username**, not the caller-controlled client ID.
+Do not replace the explicit users with global pattern permissions that would
+also apply to unrelated users.
+
+Configure the edge with `EDGE_MQTT_BROKER=ssl://broker.example:8883` (or another
+TLS scheme such as `mqtts://`),
+`EDGE_MQTT_USERNAME`, `EDGE_MQTT_PASSWORD`, and `EDGE_MQTT_CA_FILE`. The edge
+refuses plaintext/anonymous command connections by default. The explicit
+`EDGE_MQTT_ALLOW_INSECURE=true` escape hatch is for isolated development only.
+The client cannot prove a remote broker's ACL is correct; commissioning must test
+that deployed policy. Configure device credentials and CA verification similarly.
+
+Run the real-broker regression check from the repository root:
+
+```sh
+deploy/mqtt/test-acl.sh
+```
+
+Requires Docker, OpenSSL and Go. The script creates a disposable TLS broker,
+checks authorized traffic and denies anonymous access, cross-site commands,
+forged replies and telemetry-user command access, then removes its container
+and keys. Repeat these checks against production after ACL changes, using test
+identities. Manage ACLs and credential rotation on the broker.

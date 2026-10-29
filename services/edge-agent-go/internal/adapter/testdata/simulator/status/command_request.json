@@ -1,0 +1,5 @@
+{
+  "command_id": "cmd-status-0101",
+  "command_type": "request_meter_status",
+  "device_id": "meter-01"
+}

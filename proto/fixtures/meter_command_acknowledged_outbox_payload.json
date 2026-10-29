@@ -1,0 +1,11 @@
+{
+  "command_id": "cmd-0102",
+  "meter_id": "met-0101",
+  "site_id": "site-0101",
+  "command_type": "credit_meter",
+  "status": "acknowledged",
+  "reported_by": "edge:site-0101",
+  "failure_reason": null,
+  "occurred_at": "2026-10-01T14:31:00Z",
+  "credit_kwh": 20.0
+}

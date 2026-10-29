@@ -37,6 +37,7 @@ func assignmentRow(assignmentID, siteID, meterID string, relayClosed bool) pgx.R
 		*dest[1].(*string) = siteID
 		*dest[2].(*string) = meterID
 		*dest[3].(*bool) = relayClosed
+		*dest[4].(*domain.CreditMode) = domain.CreditModePlatform
 		return nil
 	})
 }
@@ -98,9 +99,12 @@ func meterCommandRow(meterID string) pgx.Row {
 		*dest[4].(*string) = "provider:dev"
 		*dest[5].(*string) = "balance recharged from zero"
 		*dest[6].(*time.Time) = requestedAt
-		*dest[7].(**time.Time) = nil
+		*dest[7].(*time.Time) = requestedAt.Add(24 * time.Hour)
 		*dest[8].(**time.Time) = nil
-		*dest[9].(**string) = nil
+		*dest[9].(**time.Time) = nil
+		*dest[10].(**string) = nil
+		*dest[11].(**float64) = nil
+		*dest[12].(**string) = nil
 		return nil
 	})
 }
@@ -182,7 +186,10 @@ func applyPaymentCallback(command domain.ApplyPaymentCommand) func(services.Paym
 		var meterCommand *domain.MeterCommand
 		needsReconnect := !assignment.RelayClosed && priorKWh == 0 && balance.RemainingKWh > 0
 		if needsReconnect {
-			cmd, err := tx.InsertMeterCommand(ctx, assignment.MeterID, domain.CommandReconnectMeter, "provider:"+command.Provider, "balance recharged from zero")
+			cmd, err := tx.InsertMeterCommand(ctx, domain.NewMeterCommand{
+				MeterID: assignment.MeterID, Type: domain.CommandReconnectMeter,
+				RequestedBy: "provider:" + command.Provider, Reason: "balance recharged from zero",
+			})
 			if err != nil {
 				return domain.ApplyPaymentResult{}, err
 			}

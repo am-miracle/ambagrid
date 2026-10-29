@@ -1,0 +1,11 @@
+{
+  "command_id": "cmd-0103",
+  "meter_id": "met-0101",
+  "site_id": "site-0101",
+  "command_type": "disconnect_meter",
+  "status": "failed",
+  "reported_by": "edge:site-0101",
+  "failure_reason": "superseded by newer relay command cmd-0104",
+  "occurred_at": "2026-10-01T14:32:00Z",
+  "credit_kwh": null
+}

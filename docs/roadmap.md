@@ -160,14 +160,15 @@ Critical alert fallback design
 
 ### Milestone 4: Hardware Adapter Contract
 
-Expected result:
+Implemented: shared adapter contracts, simulator and MQTT commands, mapped
+Modbus telemetry, durable command delivery and reconciliation, per-device
+configuration, health metrics, and conformance tests. See
+[hardware adapters](hardware-adapters.md) for the implementation and setup.
+[Funded manual STS vending and audited recovery](sts-vending.md) are also implemented.
 
-```text
-Simulated meter adapter
-MQTT command adapter
-Modbus adapter shape
-Adapter conformance tests
-```
+Physical hardware commissioning, broader vendor maps, SunSpec discovery, firmware
+mismatch detection, adapter-health alert rules, and automatic payment-to-token
+dispatch remain future work.
 
 ## What Not To Build Yet
 

@@ -20,6 +20,9 @@ type Store struct {
 }
 
 func Open(ctx context.Context, cfg Config) (*Store, error) {
+	if cfg.FilesystemFreeBytes == nil {
+		cfg.FilesystemFreeBytes = filesystemFreeBytes
+	}
 	if cfg.MaxEventBytes == 0 {
 		cfg.MaxEventBytes = min(int64(1<<20), cfg.MaxStorageBytes*5/100)
 	}
