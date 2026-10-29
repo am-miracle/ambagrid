@@ -4,17 +4,14 @@ This optional Compose overlay populates the real local database and streams
 generated device readings through HTTP ingestion, Redpanda, and the engine.
 Keep `VITE_USE_MOCKS=false` in `apps/.env`.
 
-Site names, operators, regions, and coordinates come directly from
-`apps/src/mocks/fixtures/sites.json`. The 20 active sites appear on the map.
-Ajaokuta remains commissioning with no coordinates, as in that fixture.
+The map uses site metadata from `apps/src/mocks/fixtures/sites.json`: 20 active
+sites plus Ajaokuta, which remains commissioning without coordinates.
 
-Lagos Epe keeps the standalone `edge-agent-go` service with one meter, battery,
-and inverter for outage testing. It reuses the `outage_edge_queue` volume and
-`local-outage-gateway-01` identity from the local outage test so event sequences
-continue across restarts. `fleet-simulator` runs the other 19 sites,
-each with ten meters, a battery, an inverter, and its own durable SQLite queue.
-Generated readings refresh every five seconds; real upload heartbeats drive
-site health. These are local test readings, not field measurements.
+Lagos Epe runs `edge-agent-go` with one meter, battery and inverter for outage
+tests. Its `outage_edge_queue` volume and `local-outage-gateway-01` identity
+preserve event sequences across restarts. `fleet-simulator` runs the other 19
+sites, each with ten meters, a battery, an inverter and a durable SQLite queue.
+Simulated readings refresh every five seconds; upload heartbeats drive site health.
 
 ## Start
 

@@ -1,14 +1,12 @@
 # Production command broker access control
 
-Authentication, encryption and topic authorization are preconditions for enabling
-MQTT hardware commands. Adapter conformance alone does not establish them. The
+Production MQTT commands require authentication, TLS and topic ACLs. The
 [official Mosquitto configuration reference](https://mosquitto.org/man/mosquitto-conf-5.html)
 defines authenticated user ACLs and deny-by-default behavior when `acl_file` is set.
 The included configuration targets the pinned Mosquitto 2.0 image.
 
-`deploy/mqtt/compose.yml` runs a dedicated TLS command broker on 8883 with anonymous
-access disabled. It does not inherit the anonymous development broker. The main
-Compose broker is for local development; its published ports bind to loopback.
+`deploy/mqtt/compose.yml` runs a dedicated TLS command broker on port 8883 with
+anonymous access disabled. The main Compose broker is for local development only.
 
 Before starting the production broker:
 
@@ -51,11 +49,8 @@ Run the real-broker regression check from the repository root:
 deploy/mqtt/test-acl.sh
 ```
 
-It creates a disposable TLS broker using the actual config/ACL and synthetic
-credentials, then checks authorized command/reply delivery, rejected anonymous
-access, cross-site command denial, and blocked forged replies. An authenticated
-telemetry identity is tested for denied command/reply reads and writes. It removes its
-container and keys afterwards. Docker, OpenSSL, and Go are required.
-Changing production ACLs requires repeating these checks against that deployment
-with its own test identities. Rotate/revoke credentials using the broker's
-operational procedure; ACL and credential files are not managed by the edge.
+Requires Docker, OpenSSL and Go. The script creates a disposable TLS broker,
+checks authorized traffic and denies anonymous access, cross-site commands,
+forged replies and telemetry-user command access, then removes its container
+and keys. Repeat these checks against production after ACL changes, using test
+identities. Manage ACLs and credential rotation on the broker.

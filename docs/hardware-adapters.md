@@ -135,13 +135,15 @@ capabilities:
 
 `outcome_query` declares that the device can answer whether it applied a given command reference, which lets an unknown outcome be settled without resending.
 
-Unknown keys are rejected when the declaration is loaded, so a misspelled capability fails at startup instead of reading as `false`.
+Unknown capability keys fail startup.
 
 ## MQTT Command Protocol
 
 Production use requires [broker access control](mqtt-command-security.md).
 
-The MQTT command adapter (`EDGE_COMMAND_ADAPTER=mqtt`) talks to any device or bridge that speaks this protocol, version 2. It uses MQTT v5 request/response: payloads are JSON at QoS 1, not retained, and the request's `ResponseTopic` and `CorrelationData` properties carry the routing. Version 1 (the command ID as `"ref"` in the payload, MQTT 3.1.1) is no longer spoken.
+The MQTT command adapter (`EDGE_COMMAND_ADAPTER=mqtt`) uses protocol v2:
+MQTT v5 request/response with JSON payloads at QoS 1 and no retained messages.
+MQTT 3.1.1 protocol v1 is unsupported.
 
 A prepaid-credit MQTT device must declare `idempotent_refs: true` and durably
 apply each correlation value once, including broker-level redelivery. The adapter refuses
@@ -172,8 +174,6 @@ A credit carries either `wh` or an STS `token`. The device publishes its reply t
 
 A reply is only accepted on the reply topic of the device the request went to: the command ID is guessable, so the topic, which broker access rules restrict to that device, says who answered. A PUBACK only means the broker has the request; the gateway waits up to `EDGE_MQTT_RESPONSE_TIMEOUT` (default 30s) for the device's reply. A device declaring `outcome_query` also answers `{"op": "outcome", "device": "meter-01", "target": "cmd-0101"}`, sent with its own correlation value, with `{"ok": true, "applied": true}` plus its status fields. Device IDs containing `/`, `+`, or `#` are refused. Fixtures for the suite are in `services/edge-agent-go/internal/adapter/testdata/mqtt/`.
 
-`paho/extensions/rpc` is deliberately not used: its `Request` replaces the correlation data with a timestamp, so retries would not be idempotent, and it answers on one shared `{client_id}/responses` topic that access rules cannot scope per device.
-
 ## Adapter Health
 
 The edge exports the following Prometheus series on `/metrics`, independently of
@@ -196,22 +196,7 @@ and do not increment the unsupported counter. Explicit inventory routes use
 their configured device ID; the legacy site-wide command route uses `all`.
 Command IDs and error text are never metric labels.
 
-Operators need to know when an adapter is failing.
-
-Track:
-
-- last successful read
-- last successful command
-- read error rate
-- command failure rate
-- unsupported fields
-- firmware mismatch (planned; not implemented)
-- protocol timeout
-
-Adapter failures should create alerts when they affect operations or revenue.
-
-The metrics above supply the implemented health signals. Firmware mismatch
-detection and adapter-health alert rules are not yet implemented.
+Firmware mismatch detection and adapter-health alert rules are not yet implemented.
 
 ## Per-device configuration
 
@@ -273,22 +258,16 @@ Required fixtures:
 
 This lets contributors add hardware support without needing physical devices for every change.
 
-## First Build Target
-
-Build the adapter contract before building a large driver library.
-
-First targets:
-
-- simulated meter adapter
-- MQTT command adapter
-- Modbus read adapter shape
-- adapter conformance tests
-
-The core should stay stable while hardware support grows around it.
-
 ## Modbus register maps
 
-The Modbus read adapter (`internal/adapter/modbus`) reads any device described by a YAML register map, so a new device model needs a map and fixtures rather than a driver. Set `EDGE_MODBUS_ADDRESS` (`host:port`), `EDGE_MODBUS_UNIT_ID`, `EDGE_MODBUS_DEVICE_ID` (the platform asset ID) and `EDGE_MODBUS_MAP_FILE`. Collection runs at `EDGE_COLLECTOR_INTERVAL`; the simulator may stay disabled. `EDGE_MODBUS_TIMEOUT` (default 5s) bounds each exchange, including dialing. Context cancellation interrupts both queued reads and active socket I/O; the next read reconnects after an interrupted exchange.
+The Modbus TCP adapter reads devices through YAML register maps. Set
+`EDGE_MODBUS_ADDRESS` (`host:port`), `EDGE_MODBUS_UNIT_ID`, `EDGE_MODBUS_DEVICE_ID`
+(the platform asset ID) and `EDGE_MODBUS_MAP_FILE`. Collection runs at
+`EDGE_COLLECTOR_INTERVAL` without needing the simulator.
+
+`EDGE_MODBUS_TIMEOUT` (default 5s) bounds each exchange, including dialing.
+Cancellation interrupts queued and active reads; an interrupted connection is
+reopened on the next read.
 
 ```yaml
 device_type: battery_bms
@@ -312,14 +291,43 @@ points:
     optional: true        # a missing or unavailable register is left missing
 ```
 
-Unknown keys are rejected when the map is loaded. Each point is read separately, because devices may lack the registers between them and fail a request spanning the gap. A required point that is unavailable fails the read; an optional one is left missing rather than reported as zero, and a missing temperature cannot open or clear an overheat incident. `solar_irradiance` cannot be optional because a reading has no way to mark it missing. Decoding is a pure function of the register words and the map, which is where most fixture tests live. Modbus exceptions 1 and 2 (illegal function or address) mean the register does not exist; others count as the device rejecting the read. The transport is [grid-x/modbus](https://github.com/grid-x/modbus) over TCP behind a small `Client` interface; its RTU, ASCII and UDP clients fit the same interface.
+Unknown map keys are rejected. Points are read separately to avoid unsupported
+register gaps. An unavailable required point fails the read; an optional point
+stays absent. Missing temperature cannot open or clear an overheat incident.
+`solar_irradiance` cannot be optional because its absence cannot be represented.
+Modbus exceptions 1 and 2 mean an unsupported register; other exceptions mean
+the device rejected the read. TCP transport uses
+[grid-x/modbus](https://github.com/grid-x/modbus).
 
 ### Victron Cerbo GX battery
 
-`deploy/modbus/victron-battery.yaml` maps the GX `com.victronenergy.battery` service: registers 259 (V), 261 (A), 262 (°C) and 266 (SoC %), with voltage required and the rest optional. Enable Modbus-TCP on the GX, find the battery service's Unit ID under **Available services** (100 is the system, not the battery), and set `EDGE_MODBUS_ADDRESS=192.0.2.1:502`, `EDGE_MODBUS_UNIT_ID=225` (the actual ID) and `EDGE_MODBUS_DEVICE_ID=battery-01`. Timestamps describe successful GX acquisition; the GX may hold cached battery data, so commission against the installed firmware and battery before relying on freshness alerts.
+`deploy/modbus/victron-battery.yaml` maps the GX `com.victronenergy.battery`
+service. Voltage is required; the other fields below are optional.
 
-### SunSpec, later
+Enable Modbus-TCP and find the battery service's Unit ID under **Available
+services** (100 is the system, not the battery). Configure the actual address,
+Unit ID and platform asset ID, for example:
 
-SunSpec devices start with Model 1 (Common) at register 40000, and the model chain can be walked from there instead of hard-coding addresses; current inverter models are the 701–712 series. Take register definitions only from the official SunSpec model definitions (JSON/SMDX on GitHub): third-party tables contradict each other.
+```sh
+EDGE_MODBUS_ADDRESS=192.0.2.1:502
+EDGE_MODBUS_UNIT_ID=225
+EDGE_MODBUS_DEVICE_ID=battery-01
+```
 
-See [verified vendor documentation and register sources](vendor-integration-research.md).
+Timestamps mark GX acquisition, which may return cached battery data. Check
+freshness against the installed firmware and battery during commissioning.
+The [GX Modbus-TCP manual](https://www.victronenergy.com/live/ccgx:modbustcp_faq)
+covers service discovery, functions and missing-register errors. The adapter
+uses FC3; GX also supports FC4.
+Victron's [server register definitions](https://github.com/victronenergy/dbus_modbustcp/blob/master/attributes.csv)
+specify these read-only battery fields; decode signed values before dividing:
+
+| Address | Field | Wire type | Divide by | Unit |
+| --- | --- | --- | --- | --- |
+| 259 | Battery voltage | uint16 | 100 | V |
+| 261 | Battery current | int16 | 10 | A |
+| 262 | Battery temperature | int16 | 10 | °C |
+| 266 | State of charge | uint16 | 10 | % |
+
+This integration provides telemetry only. Its fixtures use a local Modbus server;
+physical hardware compatibility and freshness require commissioning.

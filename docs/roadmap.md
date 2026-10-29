@@ -160,24 +160,15 @@ Critical alert fallback design
 
 ### Milestone 4: Hardware Adapter Contract
 
-Implemented:
+Implemented: shared adapter contracts, simulator and MQTT commands, mapped
+Modbus telemetry, durable command delivery and reconciliation, per-device
+configuration, health metrics, and conformance tests. See
+[hardware adapters](hardware-adapters.md) for the implementation and setup.
+[Funded manual STS vending and audited recovery](sts-vending.md) are also implemented.
 
-- Shared telemetry/command contracts, capability declarations and typed errors.
-- Simulated meter, MQTT v5 command delivery, and YAML-mapped Modbus TCP telemetry,
-  including the Victron GX battery map.
-- Durable command ledger, outcome reconciliation and production broker ACLs.
-- Per-device adapter inventory through `EDGE_DEVICES_FILE`, with independent
-  telemetry/command choices and exact device routing.
-- Prometheus adapter read/command success timestamps, error counters, protocol
-  timeouts and unsupported-field/command counts under `ambagrid_edge_`.
-- Shared conformance suites in CI for simulator, MQTT and Modbus; MQTT also runs
-  through an in-process MQTT v5 broker.
-
-See [inventory and health metrics](hardware-adapters.md#per-device-configuration)
-for configuration and metric semantics. Physical hardware commissioning, broader
-vendor maps, SunSpec discovery, firmware mismatch detection and adapter-health
-alert rules remain future work. Funded manual STS vending and audited recovery
-are implemented; automatic payment-to-token dispatch remains future work.
+Physical hardware commissioning, broader vendor maps, SunSpec discovery, firmware
+mismatch detection, adapter-health alert rules, and automatic payment-to-token
+dispatch remain future work.
 
 ## What Not To Build Yet
 

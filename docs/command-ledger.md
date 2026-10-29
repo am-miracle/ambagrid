@@ -1,52 +1,24 @@
 # Command Ledger
 
-Status: accepted, 2026-10-24; extended 2026-10-25. Applies to the edge agent's meter commands and their delivery through api-go.
-
-A meter command must reach the hardware at most once per command ID, even
-across retries, lost replies, crashes, and power loss. A credit applied twice
-gives energy away; a credit never applied leaves a paying customer
-disconnected. When the edge cannot tell which happened, it says so instead of
-guessing.
-
-## The failure being solved
-
-A command is sent to the meter, the meter applies it, and the reply never
-arrives: the serial link drops, the gateway loses power, or the caller's
-deadline expires. The edge has no record that the command succeeded, so a
-retry sends it again.
-
-A crash and a lost reply are the same failure. Recording the result after the
-device replies cannot fix it, because the gap is between the device acting and
-the edge learning that it acted.
+The edge ledger records meter commands so retries and restarts do not apply
+credit twice. If a device may have acted but its reply is lost, the command
+stays unresolved until it can be retried safely or reconciled.
 
 ## Decision
 
-`adapter.Ledger` wraps any `CommandAdapter` and keeps a durable record per
-command ID in the edge SQLite store (`command_ledger`, schema version 11).
-Adapters only carry commands to the device; the ledger owns at-most-once
-delivery.
+`adapter.Ledger` wraps a `CommandAdapter` and stores each command ID in SQLite
+(`command_ledger`, schema version 11).
 
 ### Intent is recorded before sending
 
-Each adapter calls `adapter.BeforeSend(ctx)` immediately before transmitting,
-after it holds the transport. The ledger commits an `in_flight` row inside
-that hook. If the commit fails, the adapter aborts and nothing is sent.
+Each adapter calls `adapter.BeforeSend(ctx)` once, after acquiring a ready
+transport and immediately before sending. The hook commits an `in_flight` row;
+if that fails, nothing is sent. A timeout while waiting for the transport
+records no intent, so the command can be retried.
 
-The hook exists because only the adapter knows when transmission starts. A
-command that times out while queued for the transport never reached the
-device; recording it as unknown would strand every credit sent to an offline
-meter. The conformance suite checks that every adapter calls the hook exactly
-once, before the device sees anything, and never for a command that did not
-leave the queue.
-
-Transports call the hook too: the MQTT adapter passes it to `Publish`, which
-runs it after its readiness check. The suite only covers adapters and
-transports run through it, so the ledger also guards the contract itself. An
-adapter that reports success without calling the hook has applied a command
-the ledger never recorded; the ledger records it as applied, so a retry finds
-it instead of sending it again, and returns `ErrSendHookSkipped`. A failure
-without the hook is indistinguishable from a command that was never sent and is
-still treated as one.
+Conformance tests check this contract. If an adapter reports success without
+calling the hook, the ledger saves the applied result and returns
+`ErrSendHookSkipped`. A failure without the hook is treated as unsent.
 
 ### States
 
@@ -60,7 +32,7 @@ in_flight ─┼──────────── device rejects ────
 - **rejected**: the device definitely did not apply it. A retry returns the same
   rejection; trying again needs a new command ID, matching the upstream
   `failed` state.
-- **unknown**: the command reached the device but no reply confirmed the
+- **unknown**: the command may have reached the device but no reply confirmed the
   outcome. On startup every `in_flight` row is marked `unknown`, since no
   process can still be waiting on its reply.
 - A failure before `BeforeSend` (unsupported, invalid, cancelled while queued)
@@ -83,11 +55,8 @@ The ledger stores a SHA-256 of the command to detect this.
 | Adapter implements `adapter.Reconciler` | Ask the device; mark applied, or resend if it confirms the command was not applied. |
 | kWh credit, none of the above | Return `ErrOutcomeUnknown` and never resend automatically. |
 
-An unknown credit fails closed. Resending risks a double credit that is hard
-to recover; not resending risks a delayed credit, which the reconciliation
-view "credit issued but meter not updated" in
-[revenue protection](revenue-protection.md#reconciliation) already exists to
-catch.
+An unknown credit that cannot be retried safely needs
+[reconciliation](revenue-protection.md#reconciliation).
 
 ## Retention
 
@@ -97,14 +66,9 @@ A periodic job deletes `applied` and `rejected` rows older than
 are never pruned: deleting one would silently turn "unknown" into "never
 happened".
 
-Retention must stay longer than the longest time upstream may retry one
-command ID, so `API_METER_COMMAND_TTL` (default 24 hours) must be set well
-below it. The two are configured in different services; the edge checks each
-polled command's remaining lifetime against its retention. A non-empty poll
-sets `ambagrid_edge_command_expiry_beyond_retention` to 1 if any command could
-outlive retention, or 0 otherwise; empty polls leave it unchanged. The edge
-logs an error only when the condition changes from false to true. The command
-still runs.
+Keep retention longer than the upstream retry window, including
+`API_METER_COMMAND_TTL` (default 24 hours). The edge flags commands that could
+outlive retention but still executes them; see Operations below.
 
 ## Operations
 
@@ -114,7 +78,8 @@ still runs.
   above zero that persists means a customer's credit may not have arrived.
 - `ambagrid_edge_command_expiry_beyond_retention` at 1 means a pruned ledger
   entry could let a command run twice; lower `API_METER_COMMAND_TTL` or raise
-  `EDGE_COMMAND_RETENTION`. It reflects the last poll that returned commands.
+  `EDGE_COMMAND_RETENTION`. It reflects the last nonempty poll; empty polls
+  leave it unchanged. The edge logs an error when the flag changes from 0 to 1.
 - Unresolved commands do not fail the health check: they need reconciliation,
   not a gateway restart.
 - `ErrTimeout` from the ledger is not a device protocol timeout; count those at
@@ -129,17 +94,12 @@ version.
 
 ## Delivery
 
-Commands reach the edge by polling and outcomes return by report, both over
-api-go with the site's bearer key (`API_EDGE_API_KEYS` on the platform,
-`EDGE_COMMANDS_API_KEY` on the edge). Polling needs only outbound HTTPS, which
-suits NAT and intermittent cellular links; api-go already owns
-`meter_commands`, so it records each report and its audit event in one
-Postgres transaction. Endpoints are described in [the API reference](api.md).
+The edge polls api-go over outbound HTTPS and reports outcomes using its site
+bearer key (`API_EDGE_API_KEYS` on the platform, `EDGE_COMMANDS_API_KEY` on the
+edge). See [the API reference](api.md#post-v1edgecommandspoll) for the contract.
 
-Each poll selects `requested` and `queued` commands before `sent` commands,
-oldest first within each group. Sent commands fill any remaining batch capacity,
-so unresolved outcomes cannot block later credits or relay commands. The edge
-runs the selected batch oldest first.
+Polls prioritize `requested` and `queued` commands over `sent`, oldest first
+within each group. The edge executes the selected batch oldest first.
 
 ```text
 api-go                                 edge agent
@@ -160,19 +120,13 @@ the device confirms, `failed` when it rejects or the edge refuses the command,
 outcome writes no report, so the platform keeps the command at `sent`, the
 state its reconciliation view looks for.
 
-A report waits while an earlier report for the same command is undelivered,
-so the platform hears `sent` before `acknowledged`. Initial delivery is scheduled
-from the edge's local transition time, independently of the device event time,
-so a device clock ahead of the edge cannot delay its acknowledgement report.
-Transient failures back off
-from 5 seconds to 10 minutes. A report the platform refuses for good (`400`,
-`404`, `409`) is kept as abandoned for reconciliation and counted in
-`ambagrid_edge_command_reports_abandoned`; `401` and `403` keep retrying,
-because a wrong key is an operator fix after which the reports still matter.
-A `failed` report carries the device's message bounded to the platform's
-500-byte limit, cut on a UTF-8 boundary and marked `…`, so a verbose device
-cannot get a definite rejection refused and abandoned. The ledger's
-`last_error` keeps the full message.
+Reports are delivered in order per command, using local transition time for
+scheduling so device clock skew cannot delay them. Transient failures retry
+with backoff from 5 seconds to 10 minutes. Responses `400`, `404` and `409`
+abandon the report for reconciliation and increment
+`ambagrid_edge_command_reports_abandoned`; `401` and `403` retry until credentials
+are fixed. Failed reports truncate messages to 500 UTF-8 bytes, marked `…`;
+`last_error` retains the full text.
 
 ### Expiry
 
@@ -181,8 +135,8 @@ cannot get a definite rejection refused and abandoned. The ledger's
 platform expires overdue `requested` commands: those have never been delivered.
 The sweep runs at startup and every minute, settling at most 200 commands per
 batch across all sites, with audit and outcome publication in one transaction.
-The edge checks again before sending, against its own clock, and refuses a late
-command it has never sent. A command that may already have reached the device
+The edge checks the remaining lifetime before sending and refuses a late
+command it has never sent; see Gateway clock below. A command that may already have reached the device
 is never reported as expired, nor resent after its deadline.
 
 A `queued` command was delivered, so the edge may have sent it before the
@@ -198,22 +152,9 @@ platform code without silently contradicting previously published failures.
 
 ### Reconciliation and rollout
 
-`GET /v1/meter-commands/reconciliation` is an operator listing across all
-sites, optionally filtered by `site_id`, served behind the deployment gateway
-like `/v1/sites`. Each entry has a `reconciliation_reason`:
-
-- `overturned_expiry`: platform code before this fix expired the command and a
-  later edge report moved it on. Consumers have already received
-  `meter.command.failed` followed by the device's outcome.
-- `conflicting_report`: an edge report contradicted a settled outcome and was
-  retained in `audit_events` as `meter_command.report_conflict`; exact retries
-  are deduplicated. `legacy_expired_at` marks conflicts on pre-fix expiries,
-  the rows most likely to have been expired falsely.
-- `overdue_outcome_unknown`: an overdue `queued` or `sent` command. Commands at
-  sites that never return stay here instead of becoming assumed failures.
-
-Entries show site health, contact and report receipt times, command age and
-overdue age. See [the endpoint contract](api.md#get-v1meter-commandsreconciliation).
+Use the [reconciliation endpoint](api.md#get-v1meter-commandsreconciliation)
+to find conflicting reports, overturned expiries and overdue unknown outcomes.
+The API reference defines its filters, reason codes and response fields.
 
 Every expiry audit event now records `previous_status`. An expiry without it
 was written by pre-fix code, which also expired `queued` commands that may
@@ -306,34 +247,8 @@ wrong gateway cannot record impossible times.
 
 ### Command adapters
 
-[Broker authentication, TLS and topic ACLs](mqtt-command-security.md) are a
-production precondition; the development broker is insufficient.
-
-Set `EDGE_DEVICES_FILE` to a
-[per-device inventory](hardware-adapters.md#per-device-configuration).
-Each device selects its command adapter with `command` (`simulator` or `mqtt`);
-MQTT devices supply their own `capabilities_file`. Commands for devices without
-a configured command adapter are refused. Each configured route uses the durable
-ledger before reaching the device. Inventory selection cannot be mixed with
-`EDGE_SIMULATOR_ENABLED=true`, `EDGE_MODBUS_ADDRESS`, `EDGE_COMMAND_ADAPTER`, or
-`EDGE_MQTT_CAPABILITIES_FILE`.
-
-Without an inventory, the legacy environment-only setup remains supported:
-`EDGE_COMMAND_ADAPTER` selects the simulator or MQTT, and MQTT reads its
-capability declaration from `EDGE_MQTT_CAPABILITIES_FILE`.
-`EDGE_COMMANDS_ENABLED` controls platform polling in both modes. MQTT connection
-settings remain in `EDGE_MQTT_*`; the adapter speaks the
-[MQTT command protocol](hardware-adapters.md#mqtt-command-protocol). A device
-declaring `outcome_query` lets the ledger settle an unknown outcome by asking it.
-
-## Not yet covered
-
-- **Vendor drivers.** The MQTT adapter needs a device or bridge that speaks the
-  AmbaGrid command protocol; the first vendor telemetry driver now reads Victron Cerbo GX battery registers
-  over Modbus-TCP. Other vendor command drivers remain future work. See
-  [vendor research](vendor-integration-research.md).
-- **STS tokens.** The protocol and adapter accept a token, but the platform
-  creates kWh credits on the payment path. A separate durable
-  [PrismVend manual vending command](sts-vending.md) accepts explicit currency
-  purchases and saves ordered tokens. Automatic payment-to-token delivery is
-  not yet connected.
+Each configured command route uses the durable ledger before reaching the device.
+See [per-device configuration](hardware-adapters.md#per-device-configuration)
+for adapter selection and [the MQTT command protocol](hardware-adapters.md#mqtt-command-protocol)
+for device integration. Production MQTT commands require
+[broker authentication, TLS and topic ACLs](mqtt-command-security.md).

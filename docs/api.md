@@ -380,9 +380,8 @@ issuing credit twice.
 
 ### `POST /v1/edge/commands/poll`
 
-Edge agents fetch their site's meter commands here. Enabled when
-`API_EDGE_API_KEYS` is set; each request carries `Authorization: Bearer <site
-key>`, and the key decides the site. One transaction:
+Returns commands for the site identified by `Authorization: Bearer <site key>`.
+Requires `API_EDGE_API_KEYS`. In one transaction, the endpoint:
 
 1. marks the site's `requested` commands past `expires_at` as `expired`, with
    a `system:command-expiry` audit event whose metadata records
@@ -393,21 +392,19 @@ key>`, and the key decides the site. One transaction:
    oldest-first ordering within each group;
 3. marks the returned `requested` commands `queued`.
 
-`device_id` is the meter's `asset_id`, the identity the gateway uses.
-`expires_in_ms` is the time left on the platform clock, so the edge can enforce
-expiry without trusting its own clock; `credit_kwh` is present on
-`credit_meter` commands. Only a `requested` command has certainly never
-reached the edge, so it is the only one the platform expires. A `queued`
-command past its expiry is still returned, with `expires_in_ms` of zero or
-less, so the edge settles it: it reports `expired` if it never sent it, or the
-device outcome if it did. A `sent` command past its expiry is neither returned
-nor expired: the device may have applied it, so it waits for reconciliation.
+`device_id` is the meter's `asset_id`. `expires_in_ms` is the remaining lifetime
+measured on the platform clock; `credit_kwh` appears on `credit_meter` commands.
 
-The API also expires never-delivered `requested` commands at startup and once
-per minute, up to 200 per batch across all sites, even without site polling or
-configured edge keys. Expiry, audit, and the failed-outcome outbox event commit
-together. Polling locks delivery rows so the expiry worker cannot expire a
-command while it is being handed to an edge.
+Expiry depends on delivery state:
+
+- `requested`: the platform expires overdue commands because they never reached the edge.
+- `queued`: overdue commands remain pollable with `expires_in_ms <= 0`. The edge
+  reports `expired` if unsent, or the device outcome if already sent.
+- `sent`: overdue commands are neither returned nor expired; they await reconciliation.
+
+A worker also expires overdue `requested` commands at startup and every minute,
+in batches of 200 across all sites, even without edge keys or polling. Expiry,
+audit and outcome publication commit together, without racing delivery.
 
 ```json
 {
@@ -440,25 +437,19 @@ event from actor `edge:<site_id>`.
 require a nonblank `failure_reason` of at most 500 bytes, measured in UTF-8
 bytes rather than characters. Other statuses require it to be absent or empty.
 
-Reports are idempotent: a repeat, or a `sent` arriving after the
-outcome, returns `200` with `"changed": false`. A report contradicting a
-definite outcome, including a report after legacy platform expiry, is retained
-as a `meter_command.report_conflict` audit event. Only after that transaction
-commits does the API return `202` with `"changed": false` and
-`"reconciliation_required": true`. The returned `status` remains the platform's
-existing status. No new outcome event is published. Repeating the same evidence
-does not add another audit event. A storage failure returns an error so the
-edge retains and retries its report; another site's command returns `404`.
-`occurred_at` is clamped to between the command's
-`requested_at` and the platform's current time, so a wrong gateway clock cannot
-record impossible times. Settled outcomes (`acknowledged`, `failed`, `expired`)
-publish `meter.command.acknowledged` or `meter.command.failed` through the
-outbox in the same transaction.
+Reports are idempotent. A repeat, or `sent` arriving after an outcome, returns
+`200` with `"changed": false`. Another site's command returns `404`.
 
-Conflicting evidence preserves the original `occurred_at` without clamping,
-plus reported status, failure reason, platform status, and receipt time. A
-`202` acknowledges durable receipt of evidence, not successful execution or a
-status correction. Existing edge agents already treat it as delivered.
+A conflicting report is saved once as `meter_command.report_conflict`. After
+saving, the API returns `202`, `"changed": false` and
+`"reconciliation_required": true`. Platform status stays unchanged and no new
+outcome event is published. A storage failure returns an error so the edge retries.
+
+Normal reports clamp `occurred_at` between `requested_at` and platform time.
+Settled outcomes publish `meter.command.acknowledged` or `meter.command.failed`
+through the outbox in the same transaction. Conflicting evidence retains the
+raw timestamp, reported status, failure reason, platform status and receipt time.
+A `202` confirms evidence was saved; it does not confirm execution or correct status.
 
 ### `GET /v1/meter-commands/reconciliation`
 

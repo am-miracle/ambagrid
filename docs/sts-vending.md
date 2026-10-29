@@ -1,7 +1,8 @@
 # STS vending with PrismVend
 
-The platform integrates PrismVend's VendCredit2 API revision 5.22.2; see
-[verified protocol documentation](vendor-integration-research.md). Provision the
+The platform integrates PrismVend's VendCredit2 API, documented in the
+[official API reference, revision 5.22.2](https://stsweb.prismcrypto.co.za/docs/PrismVend/PrismVend%20Web%20Vending%20API.pdf)
+(sections 3.3, 4.4, 4.6 and 5.4.5–6). Provision the
 Security Module, keys, meter registration, tariff and currency first. The provider
 service has no built-in authentication: use a secured operator network or an
 authenticated gateway. No provider token-retrieval endpoint is assumed.
@@ -53,20 +54,17 @@ entry. Physical/provider commissioning is still required.
 
 ## Connection failures and active requests
 
-`ErrVendInProgress` means another process owns this payment's active vend; wait
-for it to finish and retry the same command. This status does not call for provider
-reconciliation.
+| Result | Action |
+| --- | --- |
+| `ErrVendInProgress` | Another process owns the vend. Wait, then retry the same command. |
+| `ErrVendNotSent` | No usable connection was obtained. Retry the same payment when connectivity returns. |
+| Uncertain outcome | Obtain provider evidence and reconcile; never automatically resend. |
 
-`ErrVendNotSent` means the HTTP client failed before obtaining a usable connection,
-so no vending POST could have been sent. The database records a safely retryable
-reservation. Repeat the same payment command when connectivity returns; its
-funding is rechecked before each retry, and its canonical identity never changes.
-Proven-unsent reservations remain visible in `-list-unresolved`, including when
-a refund or configuration change blocks their next attempt. `safe_to_retry`
-records transport evidence only; it is not permission to bypass funding checks.
-HTTP errors after a connection was obtained, including a lost reply, remain
-uncertain. This distinction uses Go's [HTTP connection trace](https://pkg.go.dev/net/http/httptrace#ClientTrace).
-No HTTP status code alone is treated as proof of non-issuance.
+Retries keep the original payment identity and recheck funding. Unsent requests
+remain in `-list-unresolved` even when a refund or configuration change blocks
+retry. `safe_to_retry` describes transport evidence, not funding eligibility.
+Once a connection was obtained, a lost reply or HTTP error remains uncertain;
+no HTTP status alone proves that tokens were not issued.
 
 ## Preserve issued tokens if saving fails
 
@@ -104,14 +102,10 @@ up to 200 oldest first. Its `status` identifies the next kind of work:
 | `retry_blocked` | No request was sent, but current funding or configuration prevents retry. |
 | `needs_balance_reversal` | Legacy non-issuance needs its missing compensating balance entry. |
 
-Blocked rows include `retry_blocked_reason`, such as `payment_reversed`,
-`installation_changed`, or `currency_changed`. This is computed from the same
-eligibility function used by the funding trigger, so changes appear even before
-a retry is attempted and the reason clears when eligibility is restored.
-`last_error`, when present, is the previously recorded transport error, not the
-current funding diagnosis. Listing never contacts PrismVend or changes a
-reservation; a database read failure is returned as an error, not as a blocked
-funding status. Completed vends and fully reconciled non-issuance are excluded.
+`retry_blocked_reason` reflects current funding/configuration checks, for example
+`payment_reversed`, `installation_changed`, or `currency_changed`. `last_error`
+is the previous transport error. The listing excludes completed cases, never
+contacts PrismVend or changes a reservation, and returns database failures as errors.
 
 Use the original reference to obtain provider transaction evidence and the complete
 ordered token result through the provider's operator procedures. Then save the
@@ -153,11 +147,9 @@ remainders, is recorded as a shortfall on the reversal row.
 For example, a credit of 0.200040 kWh worth 5,001 minor units with only 0.1 kWh
 remaining reverses 0.100000 kWh and 2,500 minor units. It records shortfalls of
 0.100040 kWh and 2,501 minor units, preserving the remaining monetary balance.
-The paired reversal does not repair pre-existing balance drift or establish a
-single tariff for an aggregate balance. Existing reversal entries remain
-historical records; this rule applies to new reconciliations. Shortfalls are
-discrepancies to investigate, not customer debt. List them without contacting
-PrismVend:
+Existing reversal entries remain unchanged; this rule applies to new
+reconciliations. It does not repair earlier balance drift. Investigate shortfalls
+as accounting discrepancies, not customer debt:
 
 ```sh
 go run ./cmd/sts-vend -list-shortfalls
@@ -177,3 +169,23 @@ the original provider evidence to apply the missing reversal and new audit entry
 This preserves the original non-issuance timestamp and cannot compensate twice.
 Legacy **unfunded** reservations lack a provable platform credit link; closing
 those does not alter an account balance.
+
+## Provider protocol reference
+
+The integration uses these PrismVend contract details:
+
+- POST form fields to `/stsvend/VendCredit2.ini`: `meterId`, `subclass=0`,
+  `value` in currency hundredths, and `messageId`. Optional `vendType` defaults to 1.
+- Registered meters accept DRN11 or PAN16/17/18; blind vending accepts IDRecord35.
+- `messageId` allows ASCII letters/digits and `_ - . ,`, up to 40 characters.
+  Reusing it prevents another vend but returns a duplicate error (illustrated
+  as HTTP 500), rather than the original tokens.
+- Preserve ordered `tokenDec_1`…`tokenDec_N` (20 digits each) and `numTokens`;
+  key-change tokens may accompany credit. Other result fields include
+  `unitsActual`, `unitName`, `vendTimeUnix`, `idRecord`, and `toIdRecord`.
+- `QueryTx` counts remaining module transactions; it is not a transaction-result
+  lookup. Recover uncertain outcomes through the operator workflow above.
+
+Protocol tests use a local HTTP server. A live PrismVend installation, licensed
+Security Module, production keys, tariffs and physical token acceptance require
+commissioning.

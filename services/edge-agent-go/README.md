@@ -12,27 +12,13 @@ The service follows the same domain-and-adapter boundaries as the other AmbaGrid
 services:
 
 - `internal/config` owns environment configuration.
-- `internal/adapter` defines the vendor-neutral telemetry and command contract,
-  capability declaration, and typed errors every hardware adapter returns. Its
-  `Ledger` gives any command adapter at-most-once delivery per command ID; see
-  [the command ledger](../../docs/command-ledger.md).
-- `internal/adapter/adaptertest` is the conformance suite each adapter runs via
-  `adaptertest.RunTelemetry` and `adaptertest.RunCommand`, against fixtures in
-  `internal/adapter/testdata/<adapter>/`.
-- `internal/adapter/devicetest` gives test devices the stall, hold and recording
-  controls the suite drives, without linking `testing` into the binary.
-- `internal/adapter/mqtt` carries meter commands as MQTT v5 requests using the
-  protocol and topic map in `docs/hardware-adapters.md`, over an autopaho
-  (`github.com/eclipse/paho.golang`) connection in production.
-- `internal/adapter/modbus` reads telemetry from any Modbus TCP device described
-  by a YAML register map, through a pure decoder and a grid-x/modbus client.
-- `internal/adapter/simulator` is the simulated meter adapter over simulated
-  meter, battery, and inverter hardware. Its device keeps relay, balance and
-  tamper state, and can take the meter offline to exercise stale last-seen
-  times and command timeouts.
-- `internal/commands` polls api-go for the site's meter commands, runs them in
-  request order through the ledger, refuses expired and superseded relay
-  commands, and delivers queued outcome reports.
+- `internal/adapter` owns hardware contracts, capabilities, typed errors and
+  [the durable command ledger](../../docs/command-ledger.md).
+- Its `mqtt`, `modbus` and `simulator` packages implement MQTT v5 commands,
+  mapped Modbus telemetry and simulated hardware. `adaptertest` and `devicetest`
+  provide shared conformance tests and device controls.
+- `internal/commands` polls api-go, executes commands through the ledger and
+  reports outcomes.
 - `internal/collector` validates, envelopes, and persists adapter readings without reshaping their payloads.
 - `internal/domain` owns queue events, records, state, statistics, and errors.
 - `internal/repository/sqlite` owns the durable adapter, with schema setup,
@@ -216,25 +202,12 @@ Run `deploy/mqtt/test-acl.sh` from the repository root to exercise a disposable
 TLS broker with the production policy. The anonymous development broker is not
 suitable for hardware commands in production.
 
-## Modbus telemetry
+## Hardware configuration
 
-For multiple devices or mixed command adapters, set `EDGE_DEVICES_FILE` to a
-device inventory such as `deploy/devices.example.yaml`. Paths in that file are
-relative to the inventory. It replaces the legacy adapter-selection variables;
-broker credentials and platform polling settings remain in the environment.
-See [per-device configuration and metrics](../../docs/hardware-adapters.md#per-device-configuration).
-
-Adapter health metrics include success timestamps, error/timeout counters and
-unsupported fields/commands under `ambagrid_edge_adapter_`, labeled by adapter
-and configured device. They remain available even when queue statistics fail.
-
-A Modbus TCP device can feed the collector without the simulator. Set
-`EDGE_MODBUS_ADDRESS` to `host:port`, `EDGE_MODBUS_UNIT_ID` to its unit ID,
-`EDGE_MODBUS_DEVICE_ID` to its platform asset ID, and `EDGE_MODBUS_MAP_FILE` to
-its register map; `EDGE_MODBUS_TIMEOUT` (default `5s`) bounds each request. A
-Victron Cerbo GX battery service uses `deploy/modbus/victron-battery.yaml`. The
-shared `EDGE_COLLECTOR_INTERVAL` controls polling. See
-[register maps](../../docs/hardware-adapters.md#modbus-register-maps).
+See the hardware guide for [per-device configuration](../../docs/hardware-adapters.md#per-device-configuration),
+[adapter health metrics](../../docs/hardware-adapters.md#adapter-health), and
+[Modbus register maps](../../docs/hardware-adapters.md#modbus-register-maps),
+including the Victron Cerbo GX battery map.
 
 ## Integration tests
 

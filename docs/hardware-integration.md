@@ -61,11 +61,9 @@ Core fields:
 field presence; missing or default epoch timestamps are rejected instead of
 being persisted as `1970-01-01`.
 
-`last_seen_utc` is when the device itself last answered, and sets the asset's
-`last_seen_at`. A gateway that re-reports a cached reading for an unreachable
-meter sends a `last_seen_utc` older than `timestamp_utc`, so the meter stops
-looking live. When omitted it defaults to `timestamp_utc`; a value of zero or
-one later than `timestamp_utc` is rejected.
+`last_seen_utc` records when the device last answered and sets the asset's
+`last_seen_at`. Cached readings retain that older time so an unreachable device
+does not appear live. It defaults to `timestamp_utc`; zero or a later time is rejected.
 
 The simulator always emits `internal_temperature`, `relay_closed`,
 `battery_soc_pct`, and `solar_irradiance` in JSON, even when their value is
@@ -162,27 +160,10 @@ with `metrics` present but one field omitted (e.g. `current` missing from
 the `metrics` object) is accepted and decodes that one field to `NULL`,
 distinct from a reported `0`.
 
-## Adapter Targets
+## Hardware adapters
 
-Good adapter targets include:
-
-- Victron
-- SparkMeter
-- Schneider Electric
-- custom inverter gateways
-- national or regional meter providers
-
-Each adapter should handle vendor-specific details close to the edge:
-
-- authentication
-- vendor topic names
-- unit conversion
-- field naming differences
-- missing values
-- firmware quirks
-- retry behavior over weak networks
-
-Adapters should not leak vendor concepts into the core engine unless the concept is truly part of the grid domain.
+See [hardware adapters](hardware-adapters.md) for vendor targets, adapter
+responsibilities and device configuration.
 
 ## Simulator
 
