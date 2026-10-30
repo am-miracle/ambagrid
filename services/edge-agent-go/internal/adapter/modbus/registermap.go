@@ -24,6 +24,7 @@ const (
 	FieldInternalTemperature Field = "internal_temperature"
 	FieldBatterySOC          Field = "battery_soc"
 	FieldSolarIrradiance     Field = "solar_irradiance"
+	FieldRelayClosed         Field = "relay_closed"
 )
 
 // fieldUnits is the unit each reading field is stored in; a point's scale must
@@ -37,6 +38,7 @@ var fieldUnits = map[Field]string{
 	FieldInternalTemperature: "C",
 	FieldBatterySOC:          "%",
 	FieldSolarIrradiance:     "W/m2",
+	FieldRelayClosed:         "bool",
 }
 
 type Function string
@@ -56,7 +58,6 @@ const (
 	F32 DataType = "f32"
 )
 
-// Words is how many 16-bit registers the type occupies.
 func (t DataType) Words() int {
 	switch t {
 	case U32, I32, F32:
@@ -135,7 +136,21 @@ func (m Map) validate() error {
 		}
 		seen[p.Field] = true
 	}
+	// A reading has no missing representation for the relay, so an unmapped
+	// relay would read as open and could trigger a false reconnect.
+	if m.DeviceType == domain.AssetSmartMeter && !m.mapsRequired(FieldRelayClosed) {
+		return fmt.Errorf("smart_meter map needs a required relay_closed point")
+	}
 	return nil
+}
+
+func (m Map) mapsRequired(field Field) bool {
+	for _, p := range m.Points {
+		if p.Field == field && !p.Optional {
+			return true
+		}
+	}
+	return false
 }
 
 func (p Point) validate() error {

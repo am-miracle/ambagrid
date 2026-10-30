@@ -38,7 +38,7 @@ func (c *Client) Vend(ctx context.Context, request domain.STSVendRequest) (domai
 	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GotConn: func(httptrace.GotConnInfo) { obtainedConnection.Store(true) }})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, strings.NewReader(values.Encode()))
 	if err != nil {
-		return domain.STSVend{}, err
+		return domain.STSVend{}, fmt.Errorf("build PrismVend request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response, err := c.http.Do(req)
@@ -57,7 +57,7 @@ func (c *Client) Vend(ctx context.Context, request domain.STSVendRequest) (domai
 	const maxBody = 64 << 10
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxBody+1))
 	if err != nil {
-		return domain.STSVend{}, err
+		return domain.STSVend{}, fmt.Errorf("read PrismVend response: %w", err)
 	}
 	if len(body) > maxBody {
 		return domain.STSVend{}, fmt.Errorf("PrismVend response too large")
@@ -79,11 +79,14 @@ func (c *Client) Vend(ctx context.Context, request domain.STSVendRequest) (domai
 		fields[key] = value
 	}
 	if err := scanner.Err(); err != nil {
-		return domain.STSVend{}, err
+		return domain.STSVend{}, fmt.Errorf("scan PrismVend response: %w", err)
 	}
 	count, err := strconv.Atoi(fields["numTokens"])
-	if err != nil || count < 1 || count > 16 {
-		return domain.STSVend{}, fmt.Errorf("invalid PrismVend token count")
+	if err != nil {
+		return domain.STSVend{}, fmt.Errorf("parse PrismVend token count: %w", err)
+	}
+	if count < 1 || count > 16 {
+		return domain.STSVend{}, fmt.Errorf("invalid PrismVend token count %d", count)
 	}
 	result := domain.STSVend{UnitName: fields["unitName"], IDRecord: fields["idRecord"], ToIDRecord: fields["toIdRecord"]}
 	for i := 1; i <= count; i++ {
@@ -92,11 +95,14 @@ func (c *Client) Vend(ctx context.Context, request domain.STSVendRequest) (domai
 	}
 	result.Units, err = strconv.ParseFloat(fields["unitsActual"], 64)
 	if err != nil {
-		return domain.STSVend{}, fmt.Errorf("invalid PrismVend units")
+		return domain.STSVend{}, fmt.Errorf("parse PrismVend units: %w", err)
 	}
 	seconds, err := strconv.ParseInt(fields["vendTimeUnix"], 10, 64)
-	if err != nil || seconds <= 0 {
-		return domain.STSVend{}, fmt.Errorf("invalid PrismVend vend time")
+	if err != nil {
+		return domain.STSVend{}, fmt.Errorf("parse PrismVend vend time: %w", err)
+	}
+	if seconds <= 0 {
+		return domain.STSVend{}, fmt.Errorf("invalid PrismVend vend time %d", seconds)
 	}
 	result.VendedAt = time.Unix(seconds, 0).UTC()
 	if err := result.Validate(); err != nil {

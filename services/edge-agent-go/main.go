@@ -277,14 +277,18 @@ func newCommandAdapter(ctx context.Context, cfg config.Config, meter *simulator.
 	if err != nil {
 		return nil, nil, err
 	}
-	subscribeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	commandAdapter, err := mqtt.New(subscribeCtx, mqtt.Config{Topics: topics, Capabilities: caps, ResponseTimeout: m.ResponseTimeout}, transport)
+	commandAdapter, err := subscribeCommandMQTT(ctx, mqtt.Config{Topics: topics, Capabilities: caps, ResponseTimeout: m.ResponseTimeout}, transport)
 	if err != nil {
 		transport.Close()
 		return nil, nil, err
 	}
 	return commandAdapter, transport.Close, nil
+}
+
+func subscribeCommandMQTT(ctx context.Context, cfg mqtt.Config, transport *mqtt.AutopahoTransport) (adapter.CommandAdapter, error) {
+	subscribeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	return mqtt.New(subscribeCtx, cfg, transport)
 }
 
 func dialCommandMQTT(ctx context.Context, m config.MQTTConfig) (*mqtt.AutopahoTransport, error) {

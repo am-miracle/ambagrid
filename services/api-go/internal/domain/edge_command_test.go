@@ -143,6 +143,18 @@ func TestReconciliationReasonPutsPublishedContradictionsFirst(t *testing.T) {
 			CommandReconciliation{SiteCommand: SiteCommand{Command: MeterCommand{Status: CommandStatusExpired}}, LegacyExpiredAt: &expiredAt, ConflictCount: 1},
 			ReconciliationConflictingReport,
 		},
+		"undelivered credit": {
+			CommandReconciliation{SiteCommand: SiteCommand{Command: MeterCommand{CommandType: CommandCreditMeter, Status: CommandStatusFailed}}},
+			ReconciliationCreditUndelivered,
+		},
+		"expired credit": {
+			CommandReconciliation{SiteCommand: SiteCommand{Command: MeterCommand{CommandType: CommandCreditMeter, Status: CommandStatusExpired}}},
+			ReconciliationCreditUndelivered,
+		},
+		"conflict on undelivered credit": {
+			CommandReconciliation{SiteCommand: SiteCommand{Command: MeterCommand{CommandType: CommandCreditMeter, Status: CommandStatusFailed}}, ConflictCount: 1},
+			ReconciliationConflictingReport,
+		},
 		"overturned": {
 			CommandReconciliation{SiteCommand: SiteCommand{Command: MeterCommand{Status: CommandStatusAcknowledged}}, LegacyExpiredAt: &expiredAt, ConflictCount: 1},
 			ReconciliationOverturnedExpiry,

@@ -133,7 +133,8 @@ are fixed. Failed reports truncate messages to 500 UTF-8 bytes, marked `…`;
 `meter_commands.expires_at` defaults to 24 hours after the request
 (`API_METER_COMMAND_TTL`). When the site polls and in a background sweep, the
 platform expires overdue `requested` commands: those have never been delivered.
-The sweep runs at startup and every minute, settling at most 200 commands per
+Marking a command `queued` writes a `meter_command.queued` audit event in the
+same transaction. The sweep runs at startup and every minute, settling at most 200 commands per
 batch across all sites, with audit and outcome publication in one transaction.
 The edge checks the remaining lifetime before sending and refuses a late
 command it has never sent; see Gateway clock below. A command that may already have reached the device
@@ -168,6 +169,8 @@ Deploy this API version before updating edge agents; edge agents need no
 change. Verify capture with a known conflicting report: expect `202`,
 unchanged platform status, one conflict audit event, and no new outcome event.
 Do not reopen expired rows or resend hardware commands as a rollout repair.
+Failed or expired `credit_meter` commands are listed as `credit_not_delivered`;
+a platform-side reversal or replacement for them is not implemented yet.
 
 Inventory every legacy expiry with its current state. Rows that have left
 `expired` already appear in the listing as `overturned_expiry`. Rows still

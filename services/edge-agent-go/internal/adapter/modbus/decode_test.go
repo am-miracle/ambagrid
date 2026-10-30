@@ -3,6 +3,7 @@ package modbus_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -67,13 +68,14 @@ points:
   - {field: voltage, address: 20, function: input, type: i32, word_order: little, scale: 1, unit: V}
   - {field: total_kwh, address: 30, function: holding, type: u32, word_order: big, scale: 0.001, unit: kWh}
   - {field: frequency, address: 40, function: holding, type: f32, word_order: big, scale: 1, unit: Hz}
+  - {field: relay_closed, address: 50, function: holding, type: u16, scale: 1, unit: bool}
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
 	r, err := modbus.Decode(m, modbus.Registers{
 		modbus.Input:   {10: 0xffff, 11: 0xfffe, 20: 0xfffe, 21: 0xffff},
-		modbus.Holding: {30: 0x0001, 31: 0x86a0, 40: 0x4248, 41: 0x0000},
+		modbus.Holding: {30: 0x0001, 31: 0x86a0, 40: 0x4248, 41: 0x0000, 50: 1},
 	}, modbus.Device{SiteID: "s", DeviceID: "meter-01"}, decodeAt)
 	if err != nil {
 		t.Fatal(err)
@@ -104,6 +106,22 @@ func TestDecodeRejectsUnusableRequiredValues(t *testing.T) {
 	} {
 		if _, err := modbus.Decode(victron(t), regs, battery, decodeAt); !errors.Is(err, adapter.ErrInvalidResponse) {
 			t.Errorf("%s: error = %v, want ErrInvalidResponse", name, err)
+		}
+	}
+}
+
+func TestDecodeRelayState(t *testing.T) {
+	m, err := modbus.ParseMap([]byte("device_type: smart_meter\nmanufacturer: m\nmodel: x\npoints:\n  - {field: relay_closed, address: 1, function: holding, type: u16, scale: 1, unit: bool}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for word, want := range map[uint16]bool{0: false, 1: true} {
+		r, err := modbus.Decode(m, modbus.Registers{modbus.Holding: {1: word}}, modbus.Device{SiteID: "s", DeviceID: "d"}, time.Unix(1, 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.RelayClosed != want || !strings.Contains(string(r.Payload), fmt.Sprintf(`"relay_closed":%t`, want)) {
+			t.Errorf("word %d: relay = %t, payload = %s", word, r.RelayClosed, r.Payload)
 		}
 	}
 }

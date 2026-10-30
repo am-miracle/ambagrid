@@ -46,6 +46,7 @@ type HTTPClient struct {
 	baseURL    string
 	apiKey     string
 	httpClient *http.Client
+	timeout    time.Duration
 	// clockOffset is the platform clock minus this gateway's, in nanoseconds.
 	clockOffset atomic.Int64
 }
@@ -62,7 +63,8 @@ func NewHTTPClient(baseURL, apiKey string, timeout time.Duration) *HTTPClient {
 	return &HTTPClient{
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		apiKey:     apiKey,
-		httpClient: &http.Client{Timeout: timeout},
+		httpClient: &http.Client{},
+		timeout:    timeout,
 	}
 }
 
@@ -103,7 +105,6 @@ func (c *HTTPClient) observeClock(sent, received time.Time, date string) {
 	c.clockOffset.Store(int64(offset))
 }
 
-// ClockOffset is the latest estimate of the platform clock minus this gateway's.
 func (c *HTTPClient) ClockOffset() time.Duration {
 	return time.Duration(c.clockOffset.Load())
 }
@@ -147,6 +148,8 @@ func wireFailureReason(report domain.CommandReport) string {
 }
 
 func (c *HTTPClient) post(ctx context.Context, endpoint string, payload []byte, out any) (http.Header, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return nil, err

@@ -93,7 +93,6 @@ func (t Topics) ReplyFilter() string {
 	return t.Reply("+")
 }
 
-// matches reports whether an MQTT topic filter matches a topic name.
 func matches(filter, topic string) bool {
 	f, n := strings.Split(filter, "/"), strings.Split(topic, "/")
 	for i, level := range f {

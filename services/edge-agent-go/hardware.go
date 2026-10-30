@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"edge-agent-go/internal/adapter"
 	"edge-agent-go/internal/adapter/modbus"
@@ -123,9 +122,7 @@ func configureHardware(ctx context.Context, cfg config.Config, store adapter.Led
 			if topicErr != nil {
 				return result, topicErr
 			}
-			subscribeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			command, err = mqtt.New(subscribeCtx, mqtt.Config{DeviceID: device.ID, Topics: topics, Capabilities: caps, ResponseTimeout: cfg.Commands.MQTT.ResponseTimeout}, transport)
-			cancel()
+			command, err = subscribeCommandMQTT(ctx, mqtt.Config{DeviceID: device.ID, Topics: topics, Capabilities: caps, ResponseTimeout: cfg.Commands.MQTT.ResponseTimeout}, transport)
 			if err != nil {
 				return result, fmt.Errorf("device %q MQTT: %w", device.ID, err)
 			}

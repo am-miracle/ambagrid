@@ -9,8 +9,8 @@ authenticated gateway. No provider token-retrieval endpoint is assumed.
 
 ## One physical credit route per payment
 
-Apply all engine migrations, through `202610270001_sts_funding_visibility.sql`,
-before deploying the API version that lists retry eligibility.
+Apply all engine migrations, through `202610300001_credit_delivery_reconciliation.sql`,
+before deploying this API version.
 Before accepting STS-funded payments, commission the meter's `smart_meters` row:
 set `credit_mode='sts'`, `sts_meter_number` to its registered DRN/PAN or IDRecord,
 `sts_installation` to the provisioned provider installation name, and `sts_currency`
@@ -31,6 +31,10 @@ kWh credit commands for STS credits/meters. Switching an automatically credited
 meter to STS later does not make its old payments vendable. Earlier unlinked
 reservations remain visible for reconciliation; new ones require funding.
 
+STS vending deliberately skips `MeterCommand`: nothing reaches a device, so an
+operator delivers tokens by hand, and the `sts-vend` reservation carries the
+audit trail. The adapter's `sts_token` path stays unused until automatic dispatch.
+
 The existing kWh ledger is accounting based on the platform tariff; actual provider
 units/rounding are retained in the vend result. Automatic dispatch and accounting
 adjustment to provider units remain separate work. Do not independently vend
@@ -39,10 +43,18 @@ outside this system for a payment already delivered through another route.
 ## Vend a funded payment
 
 From `services/api-go`, set `DATABASE_URL`, `PRISMVEND_URL`, and the stable
-`PRISMVEND_INSTALLATION`. Use the confirmed payment UUID:
+`PRISMVEND_INSTALLATION`. Find funded credits that have no vend yet (up to 200,
+oldest first):
 
 ```sh
-go run ./cmd/sts-vend -payment PAYMENT_UUID -meter 12345678901 -amount-minor 5001
+go run ./cmd/sts-vend -list-unvended
+```
+
+Then vend with the confirmed payment UUID. `-actor` is required and is saved on
+the reservation as `requested_by`:
+
+```sh
+go run ./cmd/sts-vend -payment PAYMENT_UUID -meter 12345678901 -amount-minor 5001 -actor operator-name
 ```
 
 The amount is currency hundredths, never kWh. The command checks funding before
@@ -77,7 +89,7 @@ payment or assume a failed CLI exit means no tokens were issued.
 ```sh
 umask 077
 set -C # refuse to overwrite an existing recovery file
-go run ./cmd/sts-vend -payment PAYMENT_UUID -meter 12345678901 -amount-minor 5001 > recovered.json
+go run ./cmd/sts-vend -payment PAYMENT_UUID -meter 12345678901 -amount-minor 5001 -actor operator-name > recovered.json
 ```
 
 An empty result file from an earlier/pre-send failure contains no issued tokens;

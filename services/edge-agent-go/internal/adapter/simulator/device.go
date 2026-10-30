@@ -62,9 +62,8 @@ type vendorResponse struct {
 	Message   string `json:"msg,omitempty"`
 }
 
-// Device simulates the hardware behind the adapter: a meter, a battery BMS and
-// an inverter on one gateway. Inject, Reject, Stall and Hold script its next reply;
-// SetTamper and SetMeterOnline change its state until called again.
+// Device simulates a gateway's meter, battery BMS and inverter. Inject, Reject,
+// Stall and Hold script its next reply; SetTamper and SetMeterOnline persist.
 type Device struct {
 	devicetest.Gate
 	devicetest.Recorder

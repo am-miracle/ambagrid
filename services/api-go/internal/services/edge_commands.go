@@ -17,12 +17,10 @@ var ErrReportNeedsReconciliation = fmt.Errorf("%w: command report retained for r
 const (
 	defaultEdgeCommandBatch = 50
 	maxEdgeCommandBatch     = 200
-	commandExpiryActor      = "system:command-expiry"
+	commandDeliveryActor    = "system:command-delivery"
 )
 
-// EdgeCommandService hands meter commands to a site's edge agent and records
-// what the agent reports back. Every status change writes an audit event in
-// the same transaction.
+// EdgeCommandService writes an audit event in the transaction of every status change.
 type EdgeCommandService struct {
 	repository repository.EdgeCommandRepository
 	topics     OutcomeTopics
@@ -31,7 +29,6 @@ type EdgeCommandService struct {
 	limits     PageLimits
 }
 
-// OutcomeTopics are the deployment topics for settled command outcomes.
 type OutcomeTopics struct {
 	Acknowledged string
 	Failed       string
@@ -47,9 +44,7 @@ func NewEdgeCommandService(repository repository.EdgeCommandRepository, topics O
 	return &EdgeCommandService{repository: repository, topics: topics, now: time.Now, thresholds: thresholds, limits: limits}
 }
 
-// Poll expires the site's overdue undelivered commands, then returns its
-// pending ones with requested/queued ahead of sent, oldest first within each
-// group, marking newly delivered ones queued.
+// Poll returns requested and queued commands ahead of sent, oldest first in each group.
 func (s *EdgeCommandService) Poll(ctx context.Context, siteID string, limit int) ([]domain.EdgeCommand, error) {
 	if limit <= 0 {
 		limit = defaultEdgeCommandBatch
@@ -81,7 +76,16 @@ func (s *EdgeCommandService) Poll(ctx context.Context, siteID string, limit int)
 				commands[i].Status = domain.CommandStatusQueued
 			}
 		}
-		return tx.MarkCommandsQueued(ctx, delivered)
+		if err := tx.MarkCommandsQueued(ctx, delivered); err != nil {
+			return err
+		}
+		for _, commandID := range delivered {
+			metadata := map[string]any{"previous_status": domain.CommandStatusRequested}
+			if err := tx.InsertAuditEvent(ctx, siteID, commandDeliveryActor, "meter_command.queued", "meter_command", commandID, metadata); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -126,7 +130,7 @@ func (s *EdgeCommandService) Report(ctx context.Context, siteID string, report d
 		if report.FailureReason != "" {
 			metadata["failure_reason"] = report.FailureReason
 		}
-		reporter := "edge:" + siteID
+		reporter := domain.EdgeActor(siteID)
 		if err := tx.InsertAuditEvent(ctx, siteID, reporter, "meter_command."+string(report.Status), "meter_command", report.CommandID, metadata); err != nil {
 			return err
 		}
@@ -145,10 +149,10 @@ func (s *EdgeCommandService) recordExpiry(ctx context.Context, tx repository.Edg
 	// Reconciliation treats an expiry audit without previous_status as written by
 	// pre-fix code, which also expired queued commands.
 	metadata := map[string]any{"expires_at": cmd.ExpiresAt.UTC(), "previous_status": domain.CommandStatusRequested}
-	if err := tx.InsertAuditEvent(ctx, siteID, commandExpiryActor, "meter_command.expired", "meter_command", cmd.CommandID, metadata); err != nil {
+	if err := tx.InsertAuditEvent(ctx, siteID, domain.CommandExpiryActor, "meter_command.expired", "meter_command", cmd.CommandID, metadata); err != nil {
 		return err
 	}
-	return s.publishOutcome(ctx, tx, cmd, siteID, commandExpiryActor, now)
+	return s.publishOutcome(ctx, tx, cmd, siteID, domain.CommandExpiryActor, now)
 }
 
 // ListReconciliation lists every site's commands when siteID is nil.

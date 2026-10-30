@@ -111,7 +111,7 @@ func fundedSTSRequest(t *testing.T, mode string) (edgeFixture, domain.STSVendReq
 	if err != nil {
 		t.Fatal(err)
 	}
-	return f, domain.STSVendRequest{PaymentID: result.Payment.PaymentID, Reference: result.Payment.PaymentID, MeterID: "12345678901", AmountMinor: 5001}, result
+	return f, domain.STSVendRequest{PaymentID: result.Payment.PaymentID, Reference: result.Payment.PaymentID, MeterID: "12345678901", AmountMinor: 5001, RequestedBy: "operator:test"}, result
 }
 func TestSTSPaymentCannotAlsoReceiveAutomaticCredit(t *testing.T) {
 	f, request, result := fundedSTSRequest(t, "sts")
@@ -630,5 +630,43 @@ func TestLegacyNonIssuanceCanRepairItsMissingBalanceReversal(t *testing.T) {
 	}
 	if kwh != 0 || money != 0 || !closedAt.Equal(originalAt) {
 		t.Fatalf("repair changed history or left credit: %v %d %s (was %s)", kwh, money, closedAt, originalAt)
+	}
+}
+
+func TestUnvendedCreditsListedUntilAVendIsReserved(t *testing.T) {
+	f, request, result := fundedSTSRequest(t, "sts")
+	ctx := context.Background()
+	store := NewSTSVendStore(f.pool, "test-installation")
+	listed := func() bool {
+		t.Helper()
+		credits, err := store.ListUnvendedCredits(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range credits {
+			if c.PaymentID == request.PaymentID {
+				if c.CreditID != result.Credit.CreditID || c.AmountMinor != request.AmountMinor || c.SiteID != f.siteID {
+					t.Fatalf("unvended credit = %+v", c)
+				}
+				return true
+			}
+		}
+		return false
+	}
+	if !listed() {
+		t.Fatal("funded credit with no vend was not listed")
+	}
+	if _, err := services.NewSTSVendingService(store, &vendingProvider{fail: true}).Vend(ctx, request); !errors.Is(err, domain.ErrVendUncertain) {
+		t.Fatalf("error=%v", err)
+	}
+	if listed() {
+		t.Fatal("credit with a reserved vend is still listed as unvended")
+	}
+	var requestedBy string
+	if err := f.pool.QueryRow(ctx, `SELECT requested_by FROM sts_vends WHERE reference=$1`, request.Reference).Scan(&requestedBy); err != nil {
+		t.Fatal(err)
+	}
+	if requestedBy != request.RequestedBy {
+		t.Fatalf("requested_by = %q, want %q", requestedBy, request.RequestedBy)
 	}
 }

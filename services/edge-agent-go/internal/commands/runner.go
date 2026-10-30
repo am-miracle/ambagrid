@@ -235,10 +235,8 @@ func (r *Runner) refuse(ctx context.Context, cmd adapter.Command, status domain.
 	return nil
 }
 
-// deliverReports runs until nothing is due, since delivering a report can make
-// the same command's next report due. It stops at the first transient failure
-// because the link is probably down, and refuses to handle a report twice so a
-// store that keeps returning it cannot spin the loop.
+// deliverReports loops because delivering a report can make the command's next
+// one due; handled stops a store that keeps returning a report from spinning it.
 func (r *Runner) deliverReports(ctx context.Context) error {
 	handled := make(map[int64]bool)
 	for {

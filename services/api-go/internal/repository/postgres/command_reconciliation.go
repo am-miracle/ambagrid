@@ -25,11 +25,17 @@ func (t edgeCommandTx) RetainConflictingReport(ctx context.Context, siteID strin
 		WHERE NOT EXISTS (
 		    SELECT 1 FROM audit_events WHERE site_id = $1 AND subject_type = 'meter_command'
 		    AND subject_id = $3 AND action = 'meter_command.report_conflict' AND metadata = $4::jsonb
-		)`, siteID, "edge:"+siteID, report.CommandID, string(metadata))
+		)`, siteID, domain.EdgeActor(siteID), report.CommandID, string(metadata))
 	if err != nil {
 		return fmt.Errorf("retain conflicting command report: %w", err)
 	}
 	return nil
+}
+
+func meterCommandDests(c *domain.MeterCommand) []any {
+	return []any{&c.CommandID, &c.MeterID, &c.CommandType, &c.Status, &c.RequestedBy,
+		&c.Reason, &c.RequestedAt, &c.ExpiresAt, &c.SentAt, &c.AcknowledgedAt,
+		&c.FailureReason, &c.CreditKWh, &c.CreditID}
 }
 
 func (t edgeCommandTx) ExpireUndeliveredCommands(ctx context.Context, now time.Time, limit int) ([]domain.SiteCommand, error) {
@@ -51,10 +57,7 @@ func (t edgeCommandTx) ExpireUndeliveredCommands(ctx context.Context, now time.T
 	var commands []domain.SiteCommand
 	for rows.Next() {
 		var item domain.SiteCommand
-		c := &item.Command
-		if err := rows.Scan(&c.CommandID, &c.MeterID, &c.CommandType, &c.Status, &c.RequestedBy,
-			&c.Reason, &c.RequestedAt, &c.ExpiresAt, &c.SentAt, &c.AcknowledgedAt,
-			&c.FailureReason, &c.CreditKWh, &c.CreditID, &item.SiteID); err != nil {
+		if err := rows.Scan(append(meterCommandDests(&item.Command), &item.SiteID)...); err != nil {
 			return nil, fmt.Errorf("read expired command: %w", err)
 		}
 		commands = append(commands, item)
@@ -69,6 +72,10 @@ const commandReconciliationSQL = `
 	    SELECT mc.command_id::text AS command_id FROM meter_commands mc
 	    JOIN smart_meters sm ON sm.meter_id = mc.meter_id
 	    WHERE mc.status IN ('queued', 'sent') AND mc.expires_at <= $1 %[1]s
+	    UNION
+	    SELECT mc.command_id::text FROM meter_commands mc
+	    JOIN smart_meters sm ON sm.meter_id = mc.meter_id
+	    WHERE ` + undeliveredCreditPredicate + ` %[1]s
 	    UNION
 	    SELECT a.subject_id FROM audit_events a
 	    WHERE a.subject_type = 'meter_command' AND a.action = 'meter_command.report_conflict' %[2]s
@@ -110,14 +117,19 @@ const commandReconciliationSQL = `
 	) legacy ON true
 	WHERE ((mc.status IN ('queued', 'sent') AND mc.expires_at <= $1)
 	       OR conflicts.total > 0
+	       OR ` + undeliveredCreditPredicate + `
 	       OR (legacy.expired_at IS NOT NULL AND mc.status <> 'expired'))
 	  AND ($2::timestamptz IS NULL OR (mc.requested_at, mc.command_id) > ($2, $3::uuid))
 	ORDER BY mc.requested_at, mc.command_id LIMIT $4`
 
+// Matches meter_commands_undelivered_credit_idx. The balance still holds these
+// credits and the unique credit_id index blocks a replacement command.
+const undeliveredCreditPredicate = `mc.command_type = 'credit_meter' AND mc.status IN ('failed', 'expired')`
+
 // Matches audit_events_legacy_command_expiry_idx. Every expiry since the fix
 // records previous_status; earlier ones may have expired a delivered command.
 const legacyExpiryPredicate = `a.subject_type = 'meter_command' AND a.action = 'meter_command.expired'
-	      AND a.actor_id = 'system:command-expiry' AND NOT (a.metadata ? 'previous_status')`
+	      AND a.actor_id = '` + domain.CommandExpiryActor + `' AND NOT (a.metadata ? 'previous_status')`
 
 func (s *EdgeCommandStore) ListCommandReconciliation(ctx context.Context, siteID *string, now time.Time, limit int, after *page.TimeIDCursor) (page.Page[domain.CommandReconciliation], error) {
 	if s.queryTimeout > 0 {
@@ -145,11 +157,9 @@ func (s *EdgeCommandStore) ListCommandReconciliation(ctx context.Context, siteID
 		var item domain.CommandReconciliation
 		var metadata []byte
 		c := &item.Command
-		if err := rows.Scan(&c.CommandID, &c.MeterID, &c.CommandType, &c.Status, &c.RequestedBy,
-			&c.Reason, &c.RequestedAt, &c.ExpiresAt, &c.SentAt, &c.AcknowledgedAt,
-			&c.FailureReason, &c.CreditKWh, &c.CreditID, &item.SiteID, &item.Site.LastContactAt,
+		if err := rows.Scan(append(meterCommandDests(c), &item.SiteID, &item.Site.LastContactAt,
 			&item.Site.LastEventAt, &item.Site.QueueGrowing, &item.Site.LastSMSHeartbeatAt, &item.Site.SMSHeartbeatExpiresAt,
-			&item.LastReportAt, &item.ConflictCount, &metadata, &item.LatestConflictReceivedAt, &item.LegacyExpiredAt); err != nil {
+			&item.LastReportAt, &item.ConflictCount, &metadata, &item.LatestConflictReceivedAt, &item.LegacyExpiredAt)...); err != nil {
 			return page.Page[domain.CommandReconciliation]{}, fmt.Errorf("read command reconciliation: %w", err)
 		}
 		if metadata != nil {

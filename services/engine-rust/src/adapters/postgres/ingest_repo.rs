@@ -467,14 +467,18 @@ async fn upsert_battery_bms_state(
 ) -> Result<(), PortError> {
     query(
         r#"
-        INSERT INTO battery_bms_state (asset_id, battery_soc_pct)
-        VALUES ($1, $2)
+        INSERT INTO battery_bms_state (asset_id, battery_soc_pct, voltage, current)
+        VALUES ($1, $2, $3, $4)
         ON CONFLICT (asset_id) DO UPDATE SET
-            battery_soc_pct = EXCLUDED.battery_soc_pct
+            battery_soc_pct = EXCLUDED.battery_soc_pct,
+            voltage = EXCLUDED.voltage,
+            current = EXCLUDED.current
         "#,
     )
     .bind(&reading.asset.asset_id)
     .bind(state.battery_soc_pct)
+    .bind(state.voltage)
+    .bind(state.current)
     .execute(&mut **tx)
     .await
     .map_err(PortError::storage)?;
@@ -491,16 +495,18 @@ async fn append_battery_bms_reading(
     query(
         r#"
         INSERT INTO battery_bms_readings (
-            time, asset_id, internal_temperature, battery_soc_pct,
+            time, asset_id, internal_temperature, battery_soc_pct, voltage, current,
             replay, gateway_id, edge_received_at, uploaded_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         "#,
     )
     .bind(reading.observed_at)
     .bind(&reading.asset.asset_id)
     .bind(reading.asset.internal_temperature)
     .bind(state.battery_soc_pct)
+    .bind(state.voltage)
+    .bind(state.current)
     .bind(replay)
     .bind(gateway_id)
     .bind(edge_received_at)

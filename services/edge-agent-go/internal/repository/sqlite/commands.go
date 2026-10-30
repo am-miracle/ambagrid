@@ -149,8 +149,7 @@ func (s *Store) MarkCommandUnknown(ctx context.Context, commandID, lastError str
 	return requireOneRow(res, fmt.Errorf("mark command %q unknown: no in-flight entry", commandID))
 }
 
-// RefuseCommand records a command the edge will never send. It reports false
-// without changes when the command already has an entry, because a command
+// RefuseCommand reports false without changes when the command has an entry: one
 // that may have reached the device must not be reported as never sent.
 func (s *Store) RefuseCommand(ctx context.Context, entry adapter.LedgerEntry, status domain.CommandReportStatus, reason string, at time.Time) (bool, error) {
 	if status != domain.ReportFailed && status != domain.ReportExpired {
@@ -267,9 +266,8 @@ func (s *Store) AbandonCommandReport(ctx context.Context, id int64, at time.Time
 	return nil
 }
 
-// PruneCommands deletes at most limit resolved commands completed before
-// cutoff, and abandoned reports older than cutoff. Unresolved commands are
-// kept until someone reconciles them.
+// PruneCommands also deletes abandoned reports older than cutoff. Unresolved
+// commands are kept until someone reconciles them.
 func (s *Store) PruneCommands(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
 	cutoffMS := cutoff.UTC().UnixMilli()
 	result, err := s.db.ExecContext(ctx, `

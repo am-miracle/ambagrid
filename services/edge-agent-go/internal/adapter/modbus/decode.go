@@ -14,7 +14,6 @@ import (
 // register missing from the snapshot was unavailable on the device.
 type Registers map[Function]map[uint16]uint16
 
-// Device identifies the physical device a map is read from.
 type Device struct {
 	SiteID   string
 	DeviceID string
@@ -62,6 +61,9 @@ func Decode(m Map, regs Registers, device Device, at time.Time) (domain.Reading,
 		case FieldSolarIrradiance:
 			reading.SolarIrradiance = value
 			payload["solar_irradiance"] = value
+		case FieldRelayClosed:
+			reading.RelayClosed = value != 0
+			payload["relay_closed"] = reading.RelayClosed
 		}
 	}
 	payload["metrics"] = reading.Metrics

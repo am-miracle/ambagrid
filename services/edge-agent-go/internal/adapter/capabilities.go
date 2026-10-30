@@ -9,9 +9,8 @@ import (
 	"go.yaml.in/yaml/v2"
 )
 
-// LoadCapabilities reads a device capability declaration in the YAML form of
-// docs/hardware-adapters.md. Unknown keys are errors, so a misspelled
-// capability is caught instead of silently read as false.
+// LoadCapabilities rejects unknown keys, so a misspelled capability is caught
+// instead of silently read as false.
 func LoadCapabilities(path string) (Capabilities, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

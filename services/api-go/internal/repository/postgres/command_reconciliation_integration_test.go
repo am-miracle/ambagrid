@@ -277,3 +277,41 @@ func TestReconciliationListsEverySiteUnlessFiltered(t *testing.T) {
 		t.Fatalf("filtered listing = %v; want only %s", got, f.other)
 	}
 }
+
+func TestPollAuditsEachCommandItQueuesOnce(t *testing.T) {
+	f := newEdgeFixture(t)
+	ctx := context.Background()
+	id := f.insertCommand(t, f.meterID, domain.CommandReconnectMeter, time.Minute, time.Hour)
+	for range 2 {
+		if _, err := f.service.Poll(ctx, f.siteID, 10); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var count int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE subject_id=$1 AND action='meter_command.queued' AND actor_id='system:command-delivery'`, id).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("queued audit events = %d, want 1", count)
+	}
+}
+
+func TestReconciliationListsCreditsThatNeverReachedTheMeter(t *testing.T) {
+	f, _, result := fundedSTSRequest(t, "meter")
+	ctx := context.Background()
+	credit := result.MeterCommand.CommandID
+	relay := f.insertCommand(t, f.meterID, domain.CommandReconnectMeter, time.Minute, time.Hour)
+	for _, id := range []string{credit, relay} {
+		report := domain.CommandReport{CommandID: id, Status: domain.CommandStatusFailed, OccurredAt: time.Now(), FailureReason: "meter refused"}
+		if _, _, err := f.service.Report(ctx, f.siteID, report); err != nil {
+			t.Fatal(err)
+		}
+	}
+	listed, err := f.service.ListReconciliation(ctx, &f.siteID, 10, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Items) != 1 || listed.Items[0].Command.CommandID != credit || listed.Items[0].Reason() != domain.ReconciliationCreditUndelivered {
+		t.Fatalf("listing = %+v, want only the failed credit", listed.Items)
+	}
+}

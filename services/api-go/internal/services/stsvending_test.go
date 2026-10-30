@@ -69,7 +69,7 @@ func TestSTSVendPreservesIssuedTokensOnPersistenceFailure(t *testing.T) {
 	want := domain.STSVend{Tokens: []string{"11111111111111111111", "22222222222222222222"}, Units: 2, UnitName: "kWh", VendedAt: time.Now().UTC(), IDRecord: "12345678901234567890123456789012345"}
 	service := NewSTSVendingService(vendStoreStub{session: &vendSessionStub{completeErr: saveErr}}, issuedVend{result: want})
 	id := "00000000-0000-4000-8000-000000000001"
-	got, err := service.Vend(context.Background(), domain.STSVendRequest{PaymentID: id, Reference: id, MeterID: "12345678901", AmountMinor: 5001})
+	got, err := service.Vend(context.Background(), domain.STSVendRequest{PaymentID: id, Reference: id, MeterID: "12345678901", AmountMinor: 5001, RequestedBy: "operator:test"})
 	if !errors.Is(err, domain.ErrVendUncertain) || !errors.Is(err, saveErr) {
 		t.Fatalf("error=%v, want unresolved persistence failure", err)
 	}

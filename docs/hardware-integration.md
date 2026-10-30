@@ -162,8 +162,19 @@ distinct from a reported `0`.
 
 ## Hardware adapters
 
-See [hardware adapters](hardware-adapters.md) for vendor targets, adapter
-responsibilities and device configuration.
+Each adapter should handle vendor-specific details close to the edge:
+
+- authentication
+- vendor topic names
+- unit conversion
+- field naming differences
+- missing values
+- firmware quirks
+- retry behavior over weak networks
+
+Adapters should not leak vendor concepts into the core engine unless the concept is truly part of the grid domain.
+
+See [hardware adapters](hardware-adapters.md) for vendor targets and device configuration.
 
 ## Simulator
 

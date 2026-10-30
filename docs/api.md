@@ -437,8 +437,9 @@ event from actor `edge:<site_id>`.
 require a nonblank `failure_reason` of at most 500 bytes, measured in UTF-8
 bytes rather than characters. Other statuses require it to be absent or empty.
 
-Reports are idempotent. A repeat, or `sent` arriving after an outcome, returns
-`200` with `"changed": false`. Another site's command returns `404`.
+Reports are idempotent. A repeat, or `sent` arriving after `acknowledged` or
+`failed`, returns `200` with `"changed": false`; `sent` after `expired` is a
+conflicting report. Another site's command returns `404`.
 
 A conflicting report is saved once as `meter_command.report_conflict`. After
 saving, the API returns `202`, `"changed": false` and
@@ -468,6 +469,9 @@ envelope.
   device's outcome;
 - `conflicting_report`: has retained reports that contradict its settled
   outcome;
+- `credit_not_delivered`: a `credit_meter` command that `failed` or `expired`.
+  The balance still holds the credit and the meter does not. It stays listed,
+  because the listing has no resolve action yet and the command cannot be replaced;
 - `overdue_outcome_unknown`: `queued` or `sent` past `expires_at`, with no
   outcome yet.
 

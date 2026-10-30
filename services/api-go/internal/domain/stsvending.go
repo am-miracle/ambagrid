@@ -26,6 +26,8 @@ type STSVendRequest struct {
 	Reference   string `json:"reference"`
 	MeterID     string `json:"meter_id"`
 	AmountMinor int64  `json:"amount_minor"`
+	// RequestedBy is the operator accountable for the vend; never sent to the provider.
+	RequestedBy string `json:"-"`
 }
 
 func (r STSVendRequest) Validate() error {
@@ -54,6 +56,9 @@ func (r STSVendRequest) ValidateFunding() error {
 	}
 	if r.Reference != r.PaymentID {
 		return fmt.Errorf("STS reference must be its funding payment ID")
+	}
+	if strings.TrimSpace(r.RequestedBy) == "" || len(r.RequestedBy) > 200 {
+		return fmt.Errorf("STS vend requires an operator identity of at most 200 bytes")
 	}
 	return nil
 }
@@ -91,6 +96,32 @@ type STSVendRecord struct {
 	AmountMinor          int64     `json:"amount_minor"`
 	RequestedAt          time.Time `json:"requested_at"`
 }
+
+// DeriveStatus prefers a pending balance reversal, then what the row proves about retrying.
+func (r STSVendRecord) DeriveStatus() STSVendStatus {
+	switch {
+	case r.NeedsBalanceReversal:
+		return STSVendNeedsBalanceReversal
+	case r.SafeToRetry && r.RetryBlockedReason != nil:
+		return STSVendRetryBlocked
+	case r.SafeToRetry:
+		return STSVendRetryableUnsent
+	default:
+		return STSVendOutcomeUncertain
+	}
+}
+
+// STSUnvendedCredit is a funded STS credit no vend has been reserved for, so
+// the customer has paid but holds no token.
+type STSUnvendedCredit struct {
+	PaymentID   string     `json:"payment_id"`
+	CreditID    string     `json:"credit_id"`
+	SiteID      string     `json:"site_id"`
+	KWhGranted  DecimalKWh `json:"kwh_granted"`
+	AmountMinor int64      `json:"amount_minor"`
+	CreditedAt  time.Time  `json:"credited_at"`
+}
+
 type STSReconciliation struct {
 	Reference string
 	MeterID   string

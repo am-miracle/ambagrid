@@ -17,7 +17,7 @@ import (
 // TCPClient is a Client over Modbus TCP. A gateway such as a Cerbo GX serves
 // several unit IDs on one connection, so requests are serialized.
 type TCPClient struct {
-	slot    chan struct{}
+	slot    *adapter.Slot
 	handler *gridx.TCPClientHandler
 	client  gridx.Client
 	timeout time.Duration
@@ -29,7 +29,7 @@ func NewTCPClient(address string, timeout time.Duration) *TCPClient {
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
-	c := &TCPClient{slot: make(chan struct{}, 1), timeout: timeout}
+	c := &TCPClient{slot: adapter.NewSlot(), timeout: timeout}
 	c.handler = gridx.NewTCPClientHandler(address, gridx.WithDialer(c.dial))
 	c.handler.Timeout = timeout
 	c.client = gridx.NewClient(c.handler)
@@ -53,24 +53,19 @@ func (c *TCPClient) dial(ctx context.Context, network, address string) (net.Conn
 }
 
 func (c *TCPClient) ReadRegisters(ctx context.Context, unit byte, function Function, address, quantity uint16) ([]uint16, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, adapter.ContextError(err)
+	release, err := c.slot.Acquire(ctx)
+	if err != nil {
+		return nil, err
 	}
-	select {
-	case c.slot <- struct{}{}:
-		defer func() { <-c.slot }()
-	case <-ctx.Done():
-		return nil, adapter.ContextError(ctx.Err())
-	}
+	defer release()
 	caller := ctx
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
 		return nil, adapter.ContextError(err)
 	}
-	// grid-x bounds socket I/O by handler.Timeout, but does not interrupt it
-	// when ctx ends. Close the raw connection, not handler.Close (which waits
-	// for grid-x's exchange lock). A later read then dials a fresh stream.
+	// grid-x does not interrupt socket I/O when ctx ends, so close the raw
+	// connection: handler.Close would wait for grid-x's exchange lock.
 	interrupted := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() {
 		defer close(interrupted)
@@ -87,7 +82,6 @@ func (c *TCPClient) ReadRegisters(ctx context.Context, unit byte, function Funct
 	}()
 	c.handler.SetSlave(unit)
 	var raw []byte
-	var err error
 	switch function {
 	case Holding:
 		raw, err = c.client.ReadHoldingRegisters(ctx, address, quantity)

@@ -65,9 +65,14 @@ pub fn reading_from_payload(payload: MetricPayload) -> Result<Reading, DecodeErr
                 total_kwh: finite_optional_f64("total_kwh", metrics.total_kwh)?,
             })
         }
-        AssetType::BatteryBms => AssetState::BatteryBms(BatteryBmsState {
-            battery_soc_pct: finite_optional_f32("battery_soc_pct", payload.battery_soc_pct)?,
-        }),
+        AssetType::BatteryBms => {
+            let metrics = payload.metrics.unwrap_or_default();
+            AssetState::BatteryBms(BatteryBmsState {
+                battery_soc_pct: finite_optional_f32("battery_soc_pct", payload.battery_soc_pct)?,
+                voltage: finite_optional_f32("voltage", metrics.voltage)?,
+                current: finite_optional_f32("current", metrics.current)?,
+            })
+        }
         AssetType::SolarInverter => AssetState::SolarInverter(SolarInverterState {
             solar_irradiance: finite_f32("solar_irradiance", payload.solar_irradiance)?,
         }),
@@ -363,5 +368,46 @@ mod optional_battery_tests {
             panic!("wrong state")
         };
         assert_eq!(state.battery_soc_pct, None);
+        assert_eq!(state.voltage, None);
+        assert_eq!(state.current, None);
+    }
+
+    #[test]
+    fn battery_keeps_reported_voltage_and_current() {
+        let reading = reading_from_payload(MetricPayload {
+            device_id: "battery-01".into(),
+            site_id: "site-01".into(),
+            device_type: DeviceType::BatteryBms as i32,
+            timestamp_utc: Some(1_792_924_800),
+            metrics: Some(crate::telemetry::proto::ElectricalMetrics {
+                voltage: Some(51.2),
+                current: Some(-12.5),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+        let AssetState::BatteryBms(state) = reading.state else {
+            panic!("wrong state")
+        };
+        assert_eq!(state.voltage, Some(51.2));
+        assert_eq!(state.current, Some(-12.5));
+    }
+
+    #[test]
+    fn battery_rejects_non_finite_voltage() {
+        let err = reading_from_payload(MetricPayload {
+            device_id: "battery-01".into(),
+            site_id: "site-01".into(),
+            device_type: DeviceType::BatteryBms as i32,
+            timestamp_utc: Some(1_792_924_800),
+            metrics: Some(crate::telemetry::proto::ElectricalMetrics {
+                voltage: Some(f32::NAN),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .unwrap_err();
+        assert_eq!(err, DecodeError::InvalidMetric("voltage"));
     }
 }

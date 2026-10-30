@@ -28,9 +28,8 @@ type Message struct {
 	CorrelationData []byte
 }
 
-// Transport is the broker connection. Publish calls beforeSend, when non-nil,
-// after its readiness checks and immediately before handing a command off; an
-// error from it forbids publication. Deliver callbacks must return quickly.
+// Transport calls beforeSend, when non-nil, immediately before handing a command
+// off; its error forbids publication. Deliver callbacks must return quickly.
 type Transport interface {
 	Publish(ctx context.Context, msg Message, beforeSend func() error) error
 	Subscribe(ctx context.Context, filter string, deliver func(Message)) error
@@ -46,7 +45,6 @@ type Config struct {
 	ResponseTimeout time.Duration
 }
 
-// request is the payload published to the command topic.
 type request struct {
 	Op     string `json:"op"`
 	Device string `json:"device"`
@@ -88,9 +86,8 @@ type reconcilingAdapter struct {
 	*Adapter
 }
 
-// New subscribes to device replies before any request is published, and
-// returns an adapter.CommandAdapter that also implements adapter.Reconciler
-// when the declaration has outcome_query.
+// New subscribes before any request is published. The adapter also implements
+// adapter.Reconciler when the declaration has outcome_query.
 func New(ctx context.Context, cfg Config, transport Transport) (adapter.CommandAdapter, error) {
 	// QoS 1 can redeliver below the platform ledger. Monetary credits need
 	// receiver-side deduplication of the correlation data even for one attempt.
@@ -173,9 +170,8 @@ func (r reconcilingAdapter) Outcome(ctx context.Context, cmd adapter.Command) (a
 	return r.result(cmd.ID, got), true, nil
 }
 
-// exchange publishes req and waits for the reply carrying its correlation
-// data. Only commands mark the send through adapter.BeforeSend; an outcome
-// query changes nothing on the device.
+// exchange marks only commands through adapter.BeforeSend; an outcome query
+// changes nothing on the device.
 func (a *Adapter) exchange(ctx context.Context, deviceID, correlation string, req request, command bool) (reply, error) {
 	caller := ctx
 	ctx, cancel := context.WithTimeout(ctx, a.cfg.ResponseTimeout)

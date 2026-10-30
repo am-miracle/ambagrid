@@ -40,14 +40,14 @@ func run() error {
 	}
 	raw, err := os.ReadFile(*sitesFile)
 	if err != nil {
-		return err
+		return fmt.Errorf("read sites file: %w", err)
 	}
 	var sites []struct {
 		ID     string `json:"site_id"`
 		Status string `json:"status"`
 	}
 	if err := json.Unmarshal(raw, &sites); err != nil {
-		return err
+		return fmt.Errorf("decode sites file: %w", err)
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	var workers sync.WaitGroup
@@ -82,7 +82,7 @@ func run() error {
 			SiteID: site.ID, Region: "africa-west", Interval: 5 * time.Second, BatteryOverheatC: 55,
 		}, store, source)
 		if err != nil {
-			return err
+			return fmt.Errorf("create collector for site %s: %w", site.ID, err)
 		}
 		client := uploader.NewIngestClient(*endpoint, "local-fleet-"+site.ID, 10*time.Second)
 		writer := uploader.New(uploader.Config{GatewayID: gatewayID, PollInterval: 2 * time.Second}, store, client, store)

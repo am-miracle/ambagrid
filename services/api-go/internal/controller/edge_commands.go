@@ -26,7 +26,6 @@ type SiteKeys struct {
 	keys map[string]string
 }
 
-// NewSiteKeys takes a map from API key to site ID.
 func NewSiteKeys(keySites map[string]string) SiteKeys {
 	return SiteKeys{keys: keySites}
 }

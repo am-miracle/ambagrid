@@ -28,10 +28,8 @@ WHERE sm.meter_id = mc.meter_id
   AND mc.expires_at <= $2
 RETURNING ` + meterCommandColumns
 
-// Commands awaiting a send take priority so unresolved sent commands cannot
-// consume the whole batch. Spare capacity still redelivers sent commands.
-// Overdue queued commands are redelivered so the edge settles them: it refuses
-// one it never sent as expired, and reports the outcome of one it did.
+// Unsent commands go first so unresolved sent ones cannot consume the batch.
+// Overdue queued commands are redelivered so the edge settles them.
 const listPendingEdgeCommandsSQL = `
 SELECT mc.command_id::text, mc.meter_id, sm.asset_id, mc.command_type,
     mc.status, mc.requested_at, mc.expires_at, mc.credit_kwh::float8

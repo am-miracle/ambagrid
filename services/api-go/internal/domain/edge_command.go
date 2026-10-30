@@ -32,6 +32,12 @@ type CommandReport struct {
 	FailureReason string
 }
 
+const CommandExpiryActor = "system:command-expiry"
+
+func EdgeActor(siteID string) string {
+	return "edge:" + siteID
+}
+
 type SiteCommand struct {
 	SiteID  string
 	Command MeterCommand
@@ -43,6 +49,7 @@ const (
 	ReconciliationOverturnedExpiry  ReconciliationReason = "overturned_expiry"
 	ReconciliationConflictingReport ReconciliationReason = "conflicting_report"
 	ReconciliationOutcomeUnknown    ReconciliationReason = "overdue_outcome_unknown"
+	ReconciliationCreditUndelivered ReconciliationReason = "credit_not_delivered"
 )
 
 // CommandReconciliation keeps an unresolved delivery separate from a conflicting report.
@@ -68,6 +75,8 @@ func (r CommandReconciliation) Reason() ReconciliationReason {
 		return ReconciliationOverturnedExpiry
 	case r.ConflictCount > 0:
 		return ReconciliationConflictingReport
+	case r.Command.CommandType == CommandCreditMeter && (r.Command.Status == CommandStatusFailed || r.Command.Status == CommandStatusExpired):
+		return ReconciliationCreditUndelivered
 	default:
 		return ReconciliationOutcomeUnknown
 	}

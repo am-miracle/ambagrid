@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,17 +19,21 @@ import (
 
 const qosAtLeastOnce = 1
 
-// tlsSchemes are the autopaho URL schemes that connect over TLS.
 var tlsSchemes = map[string]bool{"ssl": true, "tls": true, "mqtts": true, "mqtt+ssl": true, "tcps": true, "wss": true}
+
+// TLSBroker reports whether autopaho connects to the broker URL over TLS.
+func TLSBroker(broker string) bool {
+	scheme, _, ok := strings.Cut(broker, "://")
+	return ok && tlsSchemes[scheme]
+}
 
 type AutopahoConfig struct {
 	// AllowInsecure permits plain TCP and anonymous access, for isolated development only.
-	AllowInsecure bool
-	Broker        string
-	ClientID      string
-	Username      string
-	Password      string
-	// CAFile is the certificate authority trusted for the broker's TLS certificate.
+	AllowInsecure     bool
+	Broker            string
+	ClientID          string
+	Username          string
+	Password          string
 	CAFile            string
 	ConnectTimeout    time.Duration
 	ConnectRetryDelay time.Duration
@@ -106,7 +111,6 @@ func DialAutopaho(ctx context.Context, cfg AutopahoConfig) (*AutopahoTransport, 
 	return t, nil
 }
 
-// Connected reports whether commands can be sent and replies received.
 func (t *AutopahoTransport) Connected() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()

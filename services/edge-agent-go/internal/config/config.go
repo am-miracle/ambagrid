@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"edge-agent-go/internal/adapter/mqtt"
 	"edge-agent-go/internal/fallback"
 )
 
@@ -374,8 +375,8 @@ func FromEnv() (Config, error) {
 				Password:         os.Getenv("EDGE_MQTT_PASSWORD"),
 				CAFile:           envString("EDGE_MQTT_CA_FILE", ""),
 				CapabilitiesFile: envString("EDGE_MQTT_CAPABILITIES_FILE", ""),
-				CommandTopic:     envString("EDGE_MQTT_COMMAND_TOPIC", "site/{site_id}/meter/{device_id}/cmd"),
-				ReplyTopic:       envString("EDGE_MQTT_REPLY_TOPIC", "site/{site_id}/meter/{device_id}/cmd/reply"),
+				CommandTopic:     envString("EDGE_MQTT_COMMAND_TOPIC", mqtt.DefaultCommandTopic),
+				ReplyTopic:       envString("EDGE_MQTT_REPLY_TOPIC", mqtt.DefaultReplyTopic),
 				ResponseTimeout:  mqttResponseTimeout,
 			},
 		},
@@ -425,7 +426,7 @@ func FromEnv() (Config, error) {
 					return Config{}, fmt.Errorf("EDGE_COMMAND_ADAPTER=simulator requires EDGE_SIMULATOR_ENABLED")
 				}
 			case "mqtt":
-				if !cfg.Commands.MQTT.AllowInsecure && (!tlsBroker(cfg.Commands.MQTT.Broker) || cfg.Commands.MQTT.Username == "" || cfg.Commands.MQTT.Password == "" || cfg.Commands.MQTT.CAFile == "") {
+				if !cfg.Commands.MQTT.AllowInsecure && (!mqtt.TLSBroker(cfg.Commands.MQTT.Broker) || cfg.Commands.MQTT.Username == "" || cfg.Commands.MQTT.Password == "" || cfg.Commands.MQTT.CAFile == "") {
 					return Config{}, fmt.Errorf("production command MQTT requires a TLS broker URL (ssl://, tls://, mqtts://), credentials and a CA; EDGE_MQTT_ALLOW_INSECURE is for isolated development only")
 				}
 				if cfg.Commands.MQTT.Broker == "" || (cfg.DevicesFile == "" && cfg.Commands.MQTT.CapabilitiesFile == "") {
@@ -539,14 +540,4 @@ func envInt64(key string, fallback int64) (int64, error) {
 		return 0, fmt.Errorf("%s must be an integer: %w", key, err)
 	}
 	return value, nil
-}
-
-// tlsBroker reports whether the broker URL uses a scheme autopaho connects to over TLS.
-func tlsBroker(broker string) bool {
-	scheme, _, ok := strings.Cut(broker, "://")
-	switch scheme {
-	case "ssl", "tls", "mqtts", "mqtt+ssl", "tcps", "wss":
-		return ok
-	}
-	return false
 }

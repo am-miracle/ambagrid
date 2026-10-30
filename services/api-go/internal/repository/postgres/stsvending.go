@@ -30,31 +30,37 @@ func (s *stsVendSession) Reserve(ctx context.Context, request domain.STSVendRequ
 	if err := request.ValidateFunding(); err != nil {
 		return nil, false, fmt.Errorf("validate STS vend reservation funding: %w", err)
 	}
-	saved, found, retryable, err := s.existing(ctx, request)
+	prior, err := s.existing(ctx, request)
 	if err != nil {
 		return nil, false, err
 	}
-	if found {
-		if retryable {
+	if prior.found {
+		if prior.retryable {
 			_, err := s.conn.Exec(ctx, `UPDATE sts_vends SET safe_to_retry=false,last_error=NULL WHERE reference=$1`, request.Reference)
 			if err != nil {
 				return nil, false, fmt.Errorf("reset STS vend for retry: %w", err)
 			}
 			return nil, true, nil
 		}
-		return saved, false, nil
+		return prior.saved, false, nil
 	}
-	tag, err := s.conn.Exec(ctx, `INSERT INTO sts_vends(reference,installation,meter_id,amount_minor,payment_id) VALUES($1,$2,$3,$4,$5::uuid) ON CONFLICT(reference) DO NOTHING`, request.Reference, s.installation, request.MeterID, request.AmountMinor, request.PaymentID)
+	tag, err := s.conn.Exec(ctx, `INSERT INTO sts_vends(reference,installation,meter_id,amount_minor,payment_id,requested_by) VALUES($1,$2,$3,$4,$5::uuid,$6) ON CONFLICT(reference) DO NOTHING`, request.Reference, s.installation, request.MeterID, request.AmountMinor, request.PaymentID, request.RequestedBy)
 	if err != nil {
 		return nil, false, fmt.Errorf("insert STS vend reservation: %w", err)
 	}
 	if tag.RowsAffected() == 1 {
 		return nil, true, nil
 	}
-	saved, _, _, err = s.existing(ctx, request)
-	return saved, false, err
+	prior, err = s.existing(ctx, request)
+	return prior.saved, false, err
 }
-func (s *stsVendSession) existing(ctx context.Context, request domain.STSVendRequest) (*domain.STSVend, bool, bool, error) {
+
+type stsVendReservation struct {
+	saved            *domain.STSVend
+	found, retryable bool
+}
+
+func (s *stsVendSession) existing(ctx context.Context, request domain.STSVendRequest) (stsVendReservation, error) {
 	var installation, meter string
 	var payment *string
 	var amount int64
@@ -63,25 +69,25 @@ func (s *stsVendSession) existing(ctx context.Context, request domain.STSVendReq
 	var retryable bool
 	err := s.conn.QueryRow(ctx, `SELECT installation,meter_id,amount_minor,result,payment_id::text,not_issued_at,safe_to_retry FROM sts_vends WHERE reference=$1`, request.Reference).Scan(&installation, &meter, &amount, &result, &payment, &notIssued, &retryable)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, false, false, nil
+		return stsVendReservation{}, nil
 	}
 	if err != nil {
-		return nil, false, false, fmt.Errorf("read STS vend reservation: %w", err)
+		return stsVendReservation{}, fmt.Errorf("read STS vend reservation: %w", err)
 	}
 	if installation != s.installation || meter != request.MeterID || amount != request.AmountMinor || payment == nil || *payment != request.PaymentID {
-		return nil, true, false, fmt.Errorf("%w: vending reference used with different parameters", domain.ErrConflict)
+		return stsVendReservation{found: true}, fmt.Errorf("%w: vending reference used with different parameters", domain.ErrConflict)
 	}
 	if notIssued != nil {
-		return nil, true, false, domain.ErrVendNotIssued
+		return stsVendReservation{found: true}, domain.ErrVendNotIssued
 	}
 	if result == nil {
-		return nil, true, retryable, nil
+		return stsVendReservation{found: true, retryable: retryable}, nil
 	}
 	var saved domain.STSVend
 	if err := json.Unmarshal(result, &saved); err != nil {
-		return nil, true, false, fmt.Errorf("decode stored STS vend result: %w", err)
+		return stsVendReservation{found: true}, fmt.Errorf("decode stored STS vend result: %w", err)
 	}
-	return &saved, true, false, nil
+	return stsVendReservation{saved: &saved, found: true}, nil
 }
 func (s *stsVendSession) Complete(ctx context.Context, reference string, result domain.STSVend) error {
 	if reference != s.reference {
@@ -121,6 +127,27 @@ func (s *STSVendStore) ListReversalShortfalls(ctx context.Context) ([]domain.STS
 		return nil, fmt.Errorf("scan STS reversal shortfalls: %w", err)
 	}
 	return shortfalls, nil
+}
+
+// Any installation's reservation counts: the credit is then tracked by that vend.
+func (s *STSVendStore) ListUnvendedCredits(ctx context.Context) ([]domain.STSUnvendedCredit, error) {
+	rows, err := s.pool.Query(ctx, `SELECT ec.payment_id::text,ec.credit_id::text,ec.site_id,ec.kwh_granted::text,COALESCE(ec.money_value_minor_units,0),ec.created_at
+ FROM energy_credits ec
+ WHERE ec.delivery_mode='sts' AND ec.payment_id IS NOT NULL
+ AND NOT EXISTS(SELECT 1 FROM sts_vends sv WHERE sv.payment_id=ec.payment_id)
+ ORDER BY ec.created_at,ec.credit_id LIMIT $1`, stsListLimit)
+	if err != nil {
+		return nil, fmt.Errorf("list unvended STS credits: %w", err)
+	}
+	credits, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.STSUnvendedCredit, error) {
+		var c domain.STSUnvendedCredit
+		err := row.Scan(&c.PaymentID, &c.CreditID, &c.SiteID, &c.KWhGranted, &c.AmountMinor, &c.CreditedAt)
+		return c, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("scan unvended STS credits: %w", err)
+	}
+	return credits, nil
 }
 
 func (s *STSVendStore) ListUnresolved(ctx context.Context) ([]domain.STSVendRecord, error) {

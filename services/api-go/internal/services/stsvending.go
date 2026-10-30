@@ -87,6 +87,7 @@ func ReconcileSTSVend(ctx context.Context, store STSReconciliationStore, r domai
 type STSVendReportStore interface {
 	ListUnresolved(context.Context) ([]domain.STSVendRecord, error)
 	ListReversalShortfalls(context.Context) ([]domain.STSReversalShortfall, error)
+	ListUnvendedCredits(context.Context) ([]domain.STSUnvendedCredit, error)
 }
 
 func ListUnresolvedSTSVends(ctx context.Context, store STSVendReportStore) ([]domain.STSVendRecord, error) {
@@ -95,21 +96,15 @@ func ListUnresolvedSTSVends(ctx context.Context, store STSVendReportStore) ([]do
 		return nil, err
 	}
 	for i := range records {
-		r := &records[i]
-		switch {
-		case r.NeedsBalanceReversal:
-			r.Status = domain.STSVendNeedsBalanceReversal
-		case r.SafeToRetry && r.RetryBlockedReason != nil:
-			r.Status = domain.STSVendRetryBlocked
-		case r.SafeToRetry:
-			r.Status = domain.STSVendRetryableUnsent
-		default:
-			r.Status = domain.STSVendOutcomeUncertain
-		}
+		records[i].Status = records[i].DeriveStatus()
 	}
 	return records, nil
 }
 
 func ListSTSReversalShortfalls(ctx context.Context, store STSVendReportStore) ([]domain.STSReversalShortfall, error) {
 	return store.ListReversalShortfalls(ctx)
+}
+
+func ListUnvendedSTSCredits(ctx context.Context, store STSVendReportStore) ([]domain.STSUnvendedCredit, error) {
+	return store.ListUnvendedCredits(ctx)
 }

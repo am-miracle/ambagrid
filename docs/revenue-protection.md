@@ -263,4 +263,6 @@ Fake payment event
 
 [PrismVend manual vending](sts-vending.md) requires a confirmed STS-routed payment
 and saves all tokens in order. Each payment can fund only one delivery route.
-Automatic payment-to-token dispatch remains future work.
+Automatic payment-to-token dispatch remains future work. `sts-vend -list-unvended`
+shows funded credits with no vend, and the command reconciliation listing shows
+meter credits that failed or expired.

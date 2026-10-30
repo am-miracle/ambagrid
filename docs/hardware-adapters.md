@@ -113,8 +113,8 @@ Useful configuration files:
 - MQTT topic maps
 - unit conversion rules
 - device capability declarations
-- command templates
-- fault code maps
+- command templates (not yet implemented)
+- fault code maps (not yet implemented)
 
 Example capability declaration:
 
@@ -197,6 +197,8 @@ their configured device ID; the legacy site-wide command route uses `all`.
 Command IDs and error text are never metric labels.
 
 Firmware mismatch detection and adapter-health alert rules are not yet implemented.
+Nothing on the platform creates `disconnect_meter` or `request_meter_status`
+commands yet, and edge reports carry no status or tamper result.
 
 ## Per-device configuration
 
@@ -274,12 +276,12 @@ device_type: battery_bms
 manufacturer: victron
 model: Cerbo GX battery service
 points:
-  - field: voltage        # voltage, current, active_power, frequency, total_kwh,
+  - field: voltage        # voltage, current, active_power, frequency, total_kwh, relay_closed,
     address: 259          # internal_temperature, battery_soc, solar_irradiance
     function: holding     # holding or input
     type: u16             # u16, i16, u32, i32, f32
     scale: 0.01           # multiplies the raw value into the field's unit
-    unit: V               # must match the field: V, A, kW, Hz, kWh, C, %, W/m2
+    unit: V               # must match the field: V, A, kW, Hz, kWh, bool, C, %, W/m2
     unavailable: 65535    # raw value meaning "no reading"
   - field: total_kwh
     address: 30
@@ -295,6 +297,10 @@ Unknown map keys are rejected. Points are read separately to avoid unsupported
 register gaps. An unavailable required point fails the read; an optional point
 stays absent. Missing temperature cannot open or clear an overheat incident.
 `solar_irradiance` cannot be optional because its absence cannot be represented.
+`smart_meter` maps must include a required `relay_closed` point (nonzero means
+closed), because an absent relay would read as open and could trigger a false
+reconnect. Battery `voltage` and `current` are stored with the battery's state
+and readings.
 Modbus exceptions 1 and 2 mean an unsupported register; other exceptions mean
 the device rejected the read. TCP transport uses
 [grid-x/modbus](https://github.com/grid-x/modbus).

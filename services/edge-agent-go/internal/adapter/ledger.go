@@ -49,8 +49,7 @@ type LedgerStore interface {
 }
 
 // Ledger gives any CommandAdapter at-most-once delivery per command ID across
-// retries, lost replies, and restarts. An outcome it cannot establish is
-// reported as ErrOutcomeUnknown rather than risking a second application.
+// retries, lost replies, and restarts.
 type Ledger struct {
 	store LedgerStore
 	inner CommandAdapter
@@ -180,7 +179,7 @@ func (l *Ledger) resolveUnknown(ctx context.Context, cmd Command, caps Capabilit
 		if !applied {
 			return CommandResult{}, false, nil
 		}
-		l.record(cmd.ID, l.store.CompleteCommand(context.WithoutCancel(ctx), cmd.ID, CommandApplied, &result, "", l.now().UTC()))
+		logUnrecordedOutcome(cmd.ID, l.store.CompleteCommand(context.WithoutCancel(ctx), cmd.ID, CommandApplied, &result, "", l.now().UTC()))
 		return result, true, nil
 	}
 	if resendSafe(cmd, caps) {
@@ -211,20 +210,20 @@ func (l *Ledger) send(ctx context.Context, cmd Command, hash []byte) (CommandRes
 		// The adapter broke its contract, but the device acted: record it as
 		// applied so a retry finds it instead of sending it again.
 		if recordErr := l.recordApplied(ctx, unrecordedCommand{entry: entry, result: result}); recordErr != nil {
-			l.record(cmd.ID, recordErr)
+			logUnrecordedOutcome(cmd.ID, recordErr)
 		}
 		return result, fmt.Errorf("%w: command %q", ErrSendHookSkipped, cmd.ID)
 	}
 
 	switch {
 	case err == nil:
-		l.record(cmd.ID, l.store.CompleteCommand(persistCtx, cmd.ID, CommandApplied, &result, "", now))
+		logUnrecordedOutcome(cmd.ID, l.store.CompleteCommand(persistCtx, cmd.ID, CommandApplied, &result, "", now))
 		return result, nil
 	case errors.Is(err, ErrDeviceRejected):
-		l.record(cmd.ID, l.store.CompleteCommand(persistCtx, cmd.ID, CommandRejected, nil, err.Error(), now))
+		logUnrecordedOutcome(cmd.ID, l.store.CompleteCommand(persistCtx, cmd.ID, CommandRejected, nil, err.Error(), now))
 		return CommandResult{}, err
 	default:
-		l.record(cmd.ID, l.store.MarkCommandUnknown(persistCtx, cmd.ID, err.Error(), now))
+		logUnrecordedOutcome(cmd.ID, l.store.MarkCommandUnknown(persistCtx, cmd.ID, err.Error(), now))
 		return CommandResult{}, fmt.Errorf("%w: %w", ErrOutcomeUnknown, err)
 	}
 }
@@ -248,9 +247,9 @@ func (l *Ledger) recordApplied(ctx context.Context, applied unrecordedCommand) e
 	return nil
 }
 
-// record logs rather than returns a failure to store an outcome the device has
-// already produced. The row stays in_flight, which later reads treat as unknown.
-func (l *Ledger) record(commandID string, err error) {
+// logUnrecordedOutcome does not return the failure: the device already produced
+// the outcome. The row stays in_flight, which later reads treat as unknown.
+func logUnrecordedOutcome(commandID string, err error) {
 	if err != nil {
 		slog.Error("record command outcome", "command_id", commandID, "error", err)
 	}
