@@ -1,0 +1,26 @@
+rule_files:
+  - api-alerts.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'ambagrid_api_reconciliation_oldest_open_case_age_seconds{instance="api-1"}'
+        values: '604000+60x90'
+      - series: 'ambagrid_api_sts_oldest_unvended_credit_age_seconds{instance="api-1"}'
+        values: '0x90'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ReconciliationCaseAged
+        exp_alerts: []
+      - eval_time: 80m
+        alertname: ReconciliationCaseAged
+        exp_alerts:
+          - exp_labels:
+              instance: api-1
+              severity: warning
+            exp_annotations:
+              summary: 'A meter command case has been open for over 7 days'
+              description: 'Open the reconciliation queue. Settle it with delivery evidence, redelivery or a verified refund; uncertain delivery needs new evidence, not closure.'
+      - eval_time: 80m
+        alertname: UnvendedSTSCreditAged
+        exp_alerts: []

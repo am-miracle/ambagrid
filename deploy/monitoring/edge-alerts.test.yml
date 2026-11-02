@@ -1,0 +1,38 @@
+rule_files:
+  - edge-alerts.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'ambagrid_edge_adapter_firmware_mismatch{instance="edge-1",device_id="meter-1"}'
+        values: '0 1 1 1 0 0'
+      - series: 'ambagrid_edge_commands_unresolved{instance="edge-1"}'
+        values: '1+0x25'
+      - series: 'ambagrid_edge_commands_oldest_unresolved_seconds{instance="edge-1"}'
+        values: '0+60x25'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: EdgeFirmwareMismatch
+        exp_alerts:
+          - exp_labels:
+              instance: edge-1
+              device_id: meter-1
+              severity: critical
+            exp_annotations:
+              summary: 'Missing or incompatible firmware on meter-1'
+              description: 'Read meter status, verify the commissioned firmware policy, and correct the device or capability declaration before retrying a mutation.'
+      - eval_time: 5m
+        alertname: EdgeFirmwareMismatch
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: EdgeCreditDeliveryUnresolved
+        exp_alerts: []
+      - eval_time: 21m
+        alertname: EdgeCreditDeliveryUnresolved
+        exp_alerts:
+          - exp_labels:
+              instance: edge-1
+              severity: critical
+            exp_annotations:
+              summary: 'Meter commands have unresolved device outcomes'
+              description: 'Inspect the reconciliation queue and edge ledger. A missing acknowledgement is not proof that a credit failed.'

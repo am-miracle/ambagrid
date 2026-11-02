@@ -172,6 +172,11 @@ The one hard guard is on destroying value: a `credit_balances` row holding kWh o
 
 Revenue protection eventually becomes a field action.
 
+Each smart meter has a `credit_mode`. A `platform` meter is switched by relay
+against the balance AmbaGrid holds; a `meter` meter keeps its own balance and
+receives every payment as a `credit_meter` command for the kWh it bought. See
+[the command ledger](command-ledger.md#credit) for delivery.
+
 Common command types:
 
 - `CreditMeter`
@@ -226,7 +231,9 @@ The internal ontology should still use the same object:
 MeterCommand
 ```
 
-The adapter decides whether the command becomes an STS token, vendor API request, MQTT message, or manual field workflow.
+The edge adapter translates funded kWh commands into its meter protocol. Funded
+STS vending is a separate manual workflow; automatic token dispatch is not part
+of the edge command interface.
 
 ## Reconciliation
 
@@ -255,3 +262,15 @@ Fake payment event
   -> ReconnectMeter or DisconnectMeter command event
   -> audit trail
 ```
+
+[PrismVend manual vending](sts-vending.md) requires a confirmed STS-routed payment
+and saves all tokens in order. Each payment can fund only one delivery route.
+Automatic payment-to-token dispatch remains future work. `sts-vend -list-unvended`
+shows funded credits with no vend, and the command reconciliation listing shows
+meter credits that failed or expired.
+
+
+[Meter operations](meter-operations.md) closes meter-credit reconciliation with
+owned investigation, evidence, explicit resolution, linked redelivery attempts,
+and accounting for externally completed refunds. It retains all original
+command outcomes and blocks compensation for uncertain or already settled credit.

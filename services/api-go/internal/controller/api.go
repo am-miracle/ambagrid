@@ -21,6 +21,12 @@ type API struct {
 	Fallback       FallbackService
 	Heartbeats     HeartbeatService
 	SMSWebhook     SMSWebhookProvider
+	EdgeCommands   EdgeCommandService
+	// CommandReconciliation returns case evidence, so it requires an operator key.
+	CommandReconciliation CommandReconciliationService
+	EdgeAuth              SiteKeys
+	OperatorAuth          SiteKeys
+	MeterOperations       MeterOperationsService
 }
 
 type WebhookRoute struct {
@@ -53,6 +59,27 @@ func (a API) Handler() http.Handler {
 	for _, wh := range a.Webhooks {
 		provider := wh.Provider
 		a.handleRoute(mux, http.MethodPost, wh.Pattern, a.handleWebhookPayment(provider))
+	}
+	if a.EdgeCommands != nil {
+		a.handleRoute(mux, http.MethodPost, "/v1/edge/commands/poll", a.handlePollEdgeCommands)
+		a.handleRoute(mux, http.MethodPost, "/v1/edge/commands/{command_id}/report", a.handleReportEdgeCommand)
+	}
+	if a.MeterOperations != nil {
+		a.handleRoute(mux, http.MethodPost, "/v1/meter-commands", a.handleCreateMeterCommand)
+		a.handleRoute(mux, http.MethodGet, "/v1/meter-command-templates", a.handleMeterCommandTemplates)
+		a.handleRoute(mux, http.MethodGet, "/v1/meter-commands/{command_id}", a.handleGetMeterCommand)
+		a.handleRoute(mux, http.MethodPost, "/v1/meter-commands/{command_id}/reconcile", a.handleReconcileCommand)
+		a.handleRoute(mux, http.MethodGet, "/v1/meter-commands/reconciliation/resolved", a.handleResolvedCases)
+		// A method-agnostic 405 here would conflict with GET {command_id}, which panics
+		// at startup; that route's own 405 already covers other methods.
+		mux.HandleFunc("GET /v1/meter-commands/refund-shortfalls", a.handleRefundShortfalls)
+	}
+	if a.CommandReconciliation != nil {
+		if a.MeterOperations != nil {
+			mux.HandleFunc("GET /v1/meter-commands/reconciliation", a.handleListCommandReconciliation)
+		} else {
+			a.handleRoute(mux, http.MethodGet, "/v1/meter-commands/reconciliation", a.handleListCommandReconciliation)
+		}
 	}
 	if a.Fallback != nil && a.SMSWebhook != nil {
 		a.handleRoute(mux, http.MethodPost, "/v1/sms/inbound", a.handleSMSFallback)

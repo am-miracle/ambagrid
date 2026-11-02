@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"api-go/internal/config"
 	"api-go/internal/controller"
@@ -40,7 +41,7 @@ func main() {
 		PaymentConfirmed:      cfg.PaymentConfirmedTopic,
 		CreditIssued:          cfg.CreditIssuedTopic,
 		MeterCommandRequested: cfg.MeterCommandRequestedTopic,
-	})
+	}).WithMeterCommandTTL(cfg.MeterCommandTTL)
 	limits := services.PageLimits{
 		DefaultSize: cfg.DefaultPageSize,
 		MaxSize:     cfg.MaxPageSize,
@@ -76,22 +77,62 @@ func main() {
 		logger.Info("SMS fallback webhook enabled", "path", "/v1/sms/inbound")
 	}
 
+	commandService := services.NewEdgeCommandService(postgres.NewEdgeCommandStore(pool, cfg.DBQueryTimeout), services.OutcomeTopics{
+		Acknowledged: cfg.CommandAcknowledgedTopic, Failed: cfg.CommandFailedTopic,
+	}, services.SiteHealthThresholds{
+		OfflineAfter: cfg.SiteOfflineAfter, EventStaleAfter: cfg.SiteEventStaleAfter,
+	}, limits)
+	workerCtx, stopWorker := context.WithCancel(ctx)
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		commandService.RunExpiryWorker(workerCtx, func(err error) {
+			logger.Error("expire undelivered meter commands", "error", err)
+		})
+	}()
+	defer func() {
+		stopWorker()
+		<-workerDone
+	}()
+	var edgeCommands controller.EdgeCommandService
+	if len(cfg.EdgeAPIKeys) > 0 {
+		edgeCommands = commandService
+		logger.Info("edge command delivery enabled", "path", "/v1/edge/commands", "sites", len(cfg.EdgeAPIKeys))
+	}
+
 	api := controller.API{
 		Assets: services.NewAssetService(store, limits),
 		Alerts: services.NewAlertService(store, limits, globalHistoryLimits),
 		Sites: services.NewSiteService(store, limits, services.SiteHealthThresholds{
 			OfflineAfter: cfg.SiteOfflineAfter, EventStaleAfter: cfg.SiteEventStaleAfter,
 		}),
-		Payments:       services.NewPaymentService(store),
-		Health:         services.NewHealthService(store),
-		Webhooks:       webhooks,
-		Logger:         logger,
-		RequestTimeout: cfg.RequestTimeout,
-		AllowedOrigins: cfg.CORSAllowedOrigins,
-		DevMode:        cfg.DevMode,
-		Fallback:       fallbackService,
-		Heartbeats:     heartbeatService,
-		SMSWebhook:     smsWebhook,
+		Payments:              services.NewPaymentService(store),
+		Health:                services.NewHealthService(store),
+		Webhooks:              webhooks,
+		Logger:                logger,
+		RequestTimeout:        cfg.RequestTimeout,
+		AllowedOrigins:        cfg.CORSAllowedOrigins,
+		DevMode:               cfg.DevMode,
+		Fallback:              fallbackService,
+		Heartbeats:            heartbeatService,
+		SMSWebhook:            smsWebhook,
+		EdgeCommands:          edgeCommands,
+		CommandReconciliation: commandService,
+		MeterOperations:       services.NewMeterOperationsService(store),
+		OperatorAuth:          controller.NewSiteKeys(cfg.OperatorAPIKeys),
+		EdgeAuth:              controller.NewSiteKeys(cfg.EdgeAPIKeys),
+	}
+
+	if cfg.MetricsAddr != "" {
+		go func() {
+			err := controller.Serve(ctx, controller.ServerOptions{
+				Addr: cfg.MetricsAddr, ReadHeaderTimeout: cfg.ReadHeaderTimeout, WriteTimeout: 10 * time.Second,
+				IdleTimeout: cfg.IdleTimeout, ShutdownTimeout: cfg.ShutdownTimeout, Logger: logger,
+			}, controller.MetricsHandler(commandService, logger))
+			if err != nil {
+				logger.Error("metrics listener stopped", "error", err)
+			}
+		}()
 	}
 
 	err = controller.Serve(ctx, controller.ServerOptions{

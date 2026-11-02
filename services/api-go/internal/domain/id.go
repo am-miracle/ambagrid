@@ -11,21 +11,29 @@ var ErrInvalidID = errors.New("invalid identifier")
 
 // ValidateAlertID checks the UUID form used by Postgres.
 func ValidateAlertID(value string) error {
+	return validateUUID("alert_id", value)
+}
+
+func ValidateCommandID(value string) error {
+	return validateUUID("command_id", value)
+}
+
+func validateUUID(field, value string) error {
 	if len(value) != 36 {
-		return fmt.Errorf("%w: alert_id must be a UUID", ErrInvalidID)
+		return fmt.Errorf("%w: %s must be a UUID", ErrInvalidID, field)
 	}
 	for i, char := range value {
 		switch i {
 		case 8, 13, 18, 23:
 			if char != '-' {
-				return fmt.Errorf("%w: alert_id must be a UUID", ErrInvalidID)
+				return fmt.Errorf("%w: %s must be a UUID", ErrInvalidID, field)
 			}
 		default:
 			isHex := (char >= '0' && char <= '9') ||
 				(char >= 'a' && char <= 'f') ||
 				(char >= 'A' && char <= 'F')
 			if !isHex {
-				return fmt.Errorf("%w: alert_id must be a UUID", ErrInvalidID)
+				return fmt.Errorf("%w: %s must be a UUID", ErrInvalidID, field)
 			}
 		}
 	}

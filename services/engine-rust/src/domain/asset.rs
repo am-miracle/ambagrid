@@ -79,6 +79,8 @@ pub struct SmartMeterState {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct BatteryBmsState {
     pub battery_soc_pct: Option<f32>,
+    pub voltage: Option<f32>,
+    pub current: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]

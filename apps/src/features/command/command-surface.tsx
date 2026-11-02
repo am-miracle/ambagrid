@@ -10,6 +10,7 @@ import { AlertDetail } from "./components/alert-detail";
 import { AlertInbox } from "./components/alert-inbox";
 import { FilterRail } from "./components/filter-rail";
 import { FleetTable } from "./components/fleet-table";
+import { MeterOperationsPanel } from "./components/meter-operations-panel";
 import { PaymentPanel } from "./components/payment-panel";
 import { RevenuePanel } from "./components/revenue-panel";
 import { SiteCard } from "./components/site-card";
@@ -82,9 +83,9 @@ export function CommandSurface() {
 	const [inboxOpen, setInboxOpen] = useState(false);
 	const [paymentOpen, setPaymentOpen] = useState(false);
 	const [scenario, setScenario] = useState(false);
-	const [inboxTab, setInboxTab] = useState<"alerts" | "revenue" | "fleet">(
-		"alerts",
-	);
+	const [inboxTab, setInboxTab] = useState<
+		"alerts" | "revenue" | "fleet" | "meters"
+	>("alerts");
 
 	const camRef = useRef<CameraApi | null>(null);
 	const timersRef = useRef<number[]>([]);
@@ -557,6 +558,7 @@ export function CommandSurface() {
 							<TabsTrigger value="fleet">Fleet</TabsTrigger>
 							<TabsTrigger value="alerts">Alerts</TabsTrigger>
 							<TabsTrigger value="revenue">Revenue</TabsTrigger>
+							<TabsTrigger value="meters">Meters</TabsTrigger>
 						</TabsList>
 						<TabsContent value="fleet">
 							<FleetTable
@@ -575,6 +577,9 @@ export function CommandSurface() {
 								onOpen={openAlert}
 								onClose={() => setInboxOpen(false)}
 							/>
+						</TabsContent>
+						<TabsContent value="meters">
+							<MeterOperationsPanel />
 						</TabsContent>
 						<TabsContent value="revenue">
 							<RevenuePanel />

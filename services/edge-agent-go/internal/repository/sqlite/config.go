@@ -3,6 +3,8 @@ package sqlite
 import "errors"
 
 type Config struct {
+	// FilesystemFreeBytes reports available bytes; nil uses the operating system.
+	FilesystemFreeBytes    func(path string) (int64, error)
 	Path                   string
 	SiteID                 string
 	GatewayID              string

@@ -1,0 +1,64 @@
+# Local test fleet only. Use with docker-compose.yml as the first Compose file.
+services:
+  local-fleet-database:
+    image: timescale/timescaledb:2.17.2-pg15
+    restart: "no"
+    environment:
+      PGPASSWORD: ambagrid_secure_pass
+    command: [psql, --host=database, --username=ambagrid_admin, --dbname=postgres, --set=ON_ERROR_STOP=on, --file=/seed/create-database.sql]
+    volumes:
+      - ./deploy/local-fleet/create-database.sql:/seed/create-database.sql:ro
+    depends_on:
+      database:
+        condition: service_healthy
+    networks: [ambagrid-network]
+  database-migrate:
+    environment:
+      DATABASE_URL: postgres://ambagrid_admin:ambagrid_secure_pass@database:5432/ambagrid_local_fleet
+    depends_on:
+      local-fleet-database:
+        condition: service_completed_successfully
+  database-seed:
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - exec psql --host=database --username=ambagrid_admin --dbname=ambagrid_local_fleet --set=ON_ERROR_STOP=on --set=sites_json="$$(cat /seed/sites.json)" --file=/seed/seed.sql
+    volumes:
+      - ./deploy/local-fleet/seed.sql:/seed/seed.sql:ro
+      - ./apps/src/mocks/fixtures/sites.json:/seed/sites.json:ro
+  api-go:
+    environment:
+      DATABASE_URL: postgres://ambagrid_admin:ambagrid_secure_pass@database:5432/ambagrid_local_fleet
+  engine-rust:
+    environment:
+      DATABASE_URL: postgres://ambagrid_admin:ambagrid_secure_pass@database:5432/ambagrid_local_fleet
+      TELEMETRY_GROUP_ID: engine-rust-local-fleet
+      SITE_HEALTH_GROUP_ID: engine-rust-health-local-fleet
+  outbox-publisher:
+    environment:
+      DATABASE_URL: postgres://ambagrid_admin:ambagrid_secure_pass@database:5432/ambagrid_local_fleet
+  ingestion-go:
+    environment:
+      INGEST_HTTP_API_KEYS: "lagos-epe:local-edge-key,akwa-ibom-ibeno:local-fleet-akwa-ibom-ibeno,bauchi-darazo:local-fleet-bauchi-darazo,bayelsa-oweikorogha:local-fleet-bayelsa-oweikorogha,benue-otukpo:local-fleet-benue-otukpo,borno-monguno:local-fleet-borno-monguno,cross-river-ikom:local-fleet-cross-river-ikom,delta-burutu:local-fleet-delta-burutu,ebonyi-abakaliki:local-fleet-ebonyi-abakaliki,enugu-nsukka:local-fleet-enugu-nsukka,imo-ohaji:local-fleet-imo-ohaji,kaduna-kachia:local-fleet-kaduna-kachia,kano-bagwai:local-fleet-kano-bagwai,kwara-patigi:local-fleet-kwara-patigi,nasarawa-duduguru:local-fleet-nasarawa-duduguru,niger-wushishi:local-fleet-niger-wushishi,rivers-bolo:local-fleet-rivers-bolo,sokoto-illela:local-fleet-sokoto-illela,taraba-ibi:local-fleet-taraba-ibi,yobe-geidam:local-fleet-yobe-geidam"
+  edge-agent-go:
+    environment:
+      EDGE_GATEWAY_ID: local-outage-gateway-01
+    volumes:
+      - outage_edge_queue:/var/lib/ambagrid-edge
+  fleet-simulator:
+    build:
+      context: ./services/edge-agent-go
+      args:
+        EDGE_BUILD_TARGET: ./cmd/fleet-simulator
+    restart: unless-stopped
+    volumes:
+      - ./apps/src/mocks/fixtures/sites.json:/etc/ambagrid/sites.json:ro
+      - local_fleet_simulator_queue:/var/lib/ambagrid-edge
+    depends_on:
+      ingestion-go:
+        condition: service_started
+      database-seed:
+        condition: service_completed_successfully
+    networks: [ambagrid-network]
+volumes:
+  outage_edge_queue:
+  local_fleet_simulator_queue:

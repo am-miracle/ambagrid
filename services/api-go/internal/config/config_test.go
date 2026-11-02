@@ -184,3 +184,26 @@ func TestFromEnvRequiresQueryTimeoutBelowStatementTimeout(t *testing.T) {
 		t.Fatal("FromEnv() accepted DB_QUERY_TIMEOUT >= DB_STATEMENT_TIMEOUT")
 	}
 }
+
+func TestFromEnvParsesEdgeCommandDelivery(t *testing.T) {
+	setRequired(t)
+	t.Setenv("API_EDGE_API_KEYS", "ng-kaji-01:key-kaji, lagos-epe:key-epe")
+	t.Setenv("API_METER_COMMAND_TTL", "6h")
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.EdgeAPIKeys) != 2 || cfg.EdgeAPIKeys["key-kaji"] != "ng-kaji-01" || cfg.EdgeAPIKeys["key-epe"] != "lagos-epe" {
+		t.Fatalf("edge keys = %v", cfg.EdgeAPIKeys)
+	}
+	if cfg.MeterCommandTTL != 6*time.Hour {
+		t.Fatalf("command TTL = %s", cfg.MeterCommandTTL)
+	}
+
+	for _, raw := range []string{"ng-kaji-01", "ng-kaji-01:", "a:key,b:key"} {
+		t.Setenv("API_EDGE_API_KEYS", raw)
+		if _, err := FromEnv(); err == nil {
+			t.Errorf("accepted API_EDGE_API_KEYS %q", raw)
+		}
+	}
+}

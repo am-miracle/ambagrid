@@ -165,13 +165,17 @@ type MetricPayload struct {
 	HouseholdId string `protobuf:"bytes,5,opt,name=household_id,json=householdId,proto3" json:"household_id,omitempty"` // Optional: Connects smart meters directly to physical properties
 	// --- Real-Time Hardware Sensor Diagnostics ---
 	Metrics             *ElectricalMetrics `protobuf:"bytes,6,opt,name=metrics,proto3" json:"metrics,omitempty"`
-	InternalTemperature float32            `protobuf:"fixed32,7,opt,name=internal_temperature,json=internalTemperature,proto3" json:"internal_temperature,omitempty"` // Celsius (°C) to trigger fire/overheating rules
-	RelayClosed         bool               `protobuf:"varint,8,opt,name=relay_closed,json=relayClosed,proto3" json:"relay_closed,omitempty"`                          // True = Power is active, False = Customer is disconnected
+	InternalTemperature *float32           `protobuf:"fixed32,7,opt,name=internal_temperature,json=internalTemperature,proto3,oneof" json:"internal_temperature,omitempty"` // Celsius (°C) to trigger fire/overheating rules
+	RelayClosed         bool               `protobuf:"varint,8,opt,name=relay_closed,json=relayClosed,proto3" json:"relay_closed,omitempty"`                                // True = Power is active, False = Customer is disconnected
 	// --- Battery/Inverter Specialized States (Populated based on DeviceType) ---
-	BatterySocPct   float32 `protobuf:"fixed32,9,opt,name=battery_soc_pct,json=batterySocPct,proto3" json:"battery_soc_pct,omitempty"`      // State of Charge (0.0 to 100.0%) for BMS nodes
-	SolarIrradiance float32 `protobuf:"fixed32,10,opt,name=solar_irradiance,json=solarIrradiance,proto3" json:"solar_irradiance,omitempty"` // W/m² input reading for solar inverter arrays
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	BatterySocPct   *float32 `protobuf:"fixed32,9,opt,name=battery_soc_pct,json=batterySocPct,proto3,oneof" json:"battery_soc_pct,omitempty"` // State of Charge (0.0 to 100.0%) for BMS nodes
+	SolarIrradiance float32  `protobuf:"fixed32,10,opt,name=solar_irradiance,json=solarIrradiance,proto3" json:"solar_irradiance,omitempty"`  // W/m² input reading for solar inverter arrays
+	// Unix epoch seconds when the device itself last answered. Trails
+	// timestamp_utc when a gateway re-reports a cached reading for a device it
+	// can no longer reach; when unset, timestamp_utc is the last-seen time.
+	LastSeenUtc   *int64 `protobuf:"varint,11,opt,name=last_seen_utc,json=lastSeenUtc,proto3,oneof" json:"last_seen_utc,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *MetricPayload) Reset() {
@@ -247,8 +251,8 @@ func (x *MetricPayload) GetMetrics() *ElectricalMetrics {
 }
 
 func (x *MetricPayload) GetInternalTemperature() float32 {
-	if x != nil {
-		return x.InternalTemperature
+	if x != nil && x.InternalTemperature != nil {
+		return *x.InternalTemperature
 	}
 	return 0
 }
@@ -261,8 +265,8 @@ func (x *MetricPayload) GetRelayClosed() bool {
 }
 
 func (x *MetricPayload) GetBatterySocPct() float32 {
-	if x != nil {
-		return x.BatterySocPct
+	if x != nil && x.BatterySocPct != nil {
+		return *x.BatterySocPct
 	}
 	return 0
 }
@@ -270,6 +274,13 @@ func (x *MetricPayload) GetBatterySocPct() float32 {
 func (x *MetricPayload) GetSolarIrradiance() float32 {
 	if x != nil {
 		return x.SolarIrradiance
+	}
+	return 0
+}
+
+func (x *MetricPayload) GetLastSeenUtc() int64 {
+	if x != nil && x.LastSeenUtc != nil {
+		return *x.LastSeenUtc
 	}
 	return 0
 }
@@ -293,7 +304,7 @@ const file_telemetry_proto_rawDesc = "" +
 	"\n" +
 	"_frequencyB\f\n" +
 	"\n" +
-	"_total_kwh\"\xcf\x03\n" +
+	"_total_kwh\"\xc1\x04\n" +
 	"\rMetricPayload\x12\x1b\n" +
 	"\tdevice_id\x18\x01 \x01(\tR\bdeviceId\x12?\n" +
 	"\vdevice_type\x18\x02 \x01(\x0e2\x1e.ambagrid.telemetry.DeviceTypeR\n" +
@@ -301,13 +312,17 @@ const file_telemetry_proto_rawDesc = "" +
 	"\rtimestamp_utc\x18\x03 \x01(\x03H\x00R\ftimestampUtc\x88\x01\x01\x12\x17\n" +
 	"\asite_id\x18\x04 \x01(\tR\x06siteId\x12!\n" +
 	"\fhousehold_id\x18\x05 \x01(\tR\vhouseholdId\x12?\n" +
-	"\ametrics\x18\x06 \x01(\v2%.ambagrid.telemetry.ElectricalMetricsR\ametrics\x121\n" +
-	"\x14internal_temperature\x18\a \x01(\x02R\x13internalTemperature\x12!\n" +
-	"\frelay_closed\x18\b \x01(\bR\vrelayClosed\x12&\n" +
-	"\x0fbattery_soc_pct\x18\t \x01(\x02R\rbatterySocPct\x12)\n" +
+	"\ametrics\x18\x06 \x01(\v2%.ambagrid.telemetry.ElectricalMetricsR\ametrics\x126\n" +
+	"\x14internal_temperature\x18\a \x01(\x02H\x01R\x13internalTemperature\x88\x01\x01\x12!\n" +
+	"\frelay_closed\x18\b \x01(\bR\vrelayClosed\x12+\n" +
+	"\x0fbattery_soc_pct\x18\t \x01(\x02H\x02R\rbatterySocPct\x88\x01\x01\x12)\n" +
 	"\x10solar_irradiance\x18\n" +
-	" \x01(\x02R\x0fsolarIrradianceB\x10\n" +
-	"\x0e_timestamp_utc*\x83\x01\n" +
+	" \x01(\x02R\x0fsolarIrradiance\x12'\n" +
+	"\rlast_seen_utc\x18\v \x01(\x03H\x03R\vlastSeenUtc\x88\x01\x01B\x10\n" +
+	"\x0e_timestamp_utcB\x17\n" +
+	"\x15_internal_temperatureB\x12\n" +
+	"\x10_battery_soc_pctB\x10\n" +
+	"\x0e_last_seen_utc*\x83\x01\n" +
 	"\n" +
 	"DeviceType\x12\x1b\n" +
 	"\x17DEVICE_TYPE_UNSPECIFIED\x10\x00\x12\x1b\n" +

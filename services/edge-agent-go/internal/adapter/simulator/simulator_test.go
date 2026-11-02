@@ -22,7 +22,7 @@ func TestCriticalFaultScenarioIsExplicitAndDeterministic(t *testing.T) {
 			inverter = &readings[i]
 		}
 	}
-	if battery == nil || battery.InternalTemperature != 68.2 || battery.SiteOutage == nil || !*battery.SiteOutage {
+	if battery == nil || battery.InternalTemperature == nil || *battery.InternalTemperature != 68.2 || battery.SiteOutage == nil || !*battery.SiteOutage {
 		t.Fatalf("battery fault reading = %+v", battery)
 	}
 	if inverter == nil || !inverter.InverterHardFault {

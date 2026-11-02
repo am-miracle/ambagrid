@@ -4,7 +4,7 @@ use super::{client_config, proto};
 use crate::{
     alert_outbox::{AlertOpenedPayload, AlertResolvedPayload, AlertSeverity},
     config::KafkaSecurity,
-    meter_command_outbox::MeterCommandRequestedPayload,
+    meter_command_outbox::{MeterCommandOutcomePayload, MeterCommandRequestedPayload},
     metrics::Metrics,
     ports::{DeadLetter, DeadLetterSink, OutboxEvent, OutboxEventType, OutboxEvents, PortError},
     revenue_outbox::{CreditIssuedPayload, PaymentConfirmedPayload},
@@ -216,6 +216,42 @@ fn encode_outbox_payload(
                 requested_by: payload.requested_by,
                 reason: payload.reason,
                 requested_at_utc,
+                expires_at_utc: payload
+                    .expires_at
+                    .as_deref()
+                    .map(|value| parse_event_time(event, "expires_at", value))
+                    .transpose()?
+                    .unwrap_or_default(),
+                credit_kwh: payload.credit_kwh,
+                credit_id: payload.credit_id.unwrap_or_default(),
+            }
+            .encode_to_vec())
+        }
+        OutboxEventType::MeterCommandAcknowledged | OutboxEventType::MeterCommandFailed => {
+            let payload: MeterCommandOutcomePayload = decode(event)?;
+            // A mismatched status would put a failure on the acknowledgement
+            // topic or the reverse, so it is rejected rather than published.
+            let allowed: &[&str] = match event_type {
+                OutboxEventType::MeterCommandAcknowledged => &["acknowledged"],
+                _ => &["failed", "expired"],
+            };
+            if !allowed.contains(&payload.status.as_str()) {
+                return Err(PortError::message(format!(
+                    "{} event {} has status {:?}",
+                    event.event_type, event.event_id, payload.status
+                )));
+            }
+            let occurred_at_utc = parse_event_time(event, "occurred_at", &payload.occurred_at)?;
+            Ok(proto::MeterCommandOutcome {
+                command_id: payload.command_id,
+                meter_id: payload.meter_id,
+                site_id: payload.site_id,
+                command_type: payload.command_type,
+                status: payload.status,
+                reported_by: payload.reported_by,
+                failure_reason: payload.failure_reason.unwrap_or_default(),
+                occurred_at_utc,
+                credit_kwh: payload.credit_kwh,
             }
             .encode_to_vec())
         }
@@ -554,6 +590,126 @@ mod tests {
             sent[0].headers.get("event_id").map(Vec::as_slice),
             Some(event.event_id.to_string().as_bytes())
         );
+    }
+
+    fn meter_command_event(
+        event_type: OutboxEventType,
+        topic: &str,
+        payload: &[u8],
+    ) -> OutboxEvent {
+        OutboxEvent {
+            event_id: Uuid::new_v4(),
+            claim_id: Uuid::new_v4(),
+            topic: topic.to_string(),
+            event_type,
+            aggregate_id: "cmd-0102".to_string(),
+            payload: payload.to_vec(),
+        }
+    }
+
+    #[tokio::test]
+    async fn outbox_publisher_encodes_requested_expiry_and_tolerates_older_payloads() {
+        let publisher = KafkaOutboxEventPublisher {
+            sink: FakeSink::default(),
+        };
+        publisher
+            .publish(&meter_command_event(
+                OutboxEventType::MeterCommandRequested,
+                "meter.command.requested",
+                include_bytes!(
+                    "../../../../../proto/fixtures/meter_command_requested_outbox_payload.json"
+                ),
+            ))
+            .await
+            .unwrap();
+        let legacy = br#"{"command_id":"cmd-0100","meter_id":"met-0101","site_id":"site-0101","assignment_id":"asgn-0101","command_type":"reconnect_meter","status":"requested","requested_by":"provider:paystack","reason":"older row","requested_at":"2026-10-01T14:30:00Z"}"#;
+        publisher
+            .publish(&meter_command_event(
+                OutboxEventType::MeterCommandRequested,
+                "meter.command.requested",
+                legacy,
+            ))
+            .await
+            .unwrap();
+
+        let sent = publisher.sink.sent.lock().unwrap();
+        let current = proto::MeterCommandRequested::decode(sent[0].payload.as_slice()).unwrap();
+        assert_eq!(current.expires_at_utc, 1790951400);
+        assert_eq!(current.credit_kwh, None);
+        assert_eq!(current.credit_id, "");
+        let older = proto::MeterCommandRequested::decode(sent[1].payload.as_slice()).unwrap();
+        assert_eq!(older.expires_at_utc, 0);
+    }
+
+    #[tokio::test]
+    async fn outbox_publisher_encodes_meter_command_outcomes_as_protobuf() {
+        let publisher = KafkaOutboxEventPublisher {
+            sink: FakeSink::default(),
+        };
+        publisher
+            .publish(&meter_command_event(
+                OutboxEventType::MeterCommandAcknowledged,
+                "meter.command.acknowledged",
+                include_bytes!(
+                    "../../../../../proto/fixtures/meter_command_acknowledged_outbox_payload.json"
+                ),
+            ))
+            .await
+            .unwrap();
+        publisher
+            .publish(&meter_command_event(
+                OutboxEventType::MeterCommandFailed,
+                "meter.command.failed",
+                include_bytes!(
+                    "../../../../../proto/fixtures/meter_command_failed_outbox_payload.json"
+                ),
+            ))
+            .await
+            .unwrap();
+
+        let sent = publisher.sink.sent.lock().unwrap();
+        assert_eq!(sent[0].topic, "meter.command.acknowledged");
+        let acknowledged = proto::MeterCommandOutcome::decode(sent[0].payload.as_slice()).unwrap();
+        assert_eq!(acknowledged.command_id, "cmd-0102");
+        assert_eq!(acknowledged.status, "acknowledged");
+        assert_eq!(acknowledged.reported_by, "edge:site-0101");
+        assert_eq!(acknowledged.credit_kwh, Some(20.0));
+        assert_eq!(acknowledged.failure_reason, "");
+        assert_eq!(acknowledged.occurred_at_utc, 1790865060);
+
+        assert_eq!(sent[1].topic, "meter.command.failed");
+        let failed = proto::MeterCommandOutcome::decode(sent[1].payload.as_slice()).unwrap();
+        assert_eq!(failed.status, "failed");
+        assert_eq!(
+            failed.failure_reason,
+            "superseded by newer relay command cmd-0104"
+        );
+        assert_eq!(failed.credit_kwh, None);
+    }
+
+    #[tokio::test]
+    async fn outbox_publisher_rejects_outcome_status_on_the_wrong_event_type() {
+        let publisher = KafkaOutboxEventPublisher {
+            sink: FakeSink::default(),
+        };
+        let failure_as_ack = meter_command_event(
+            OutboxEventType::MeterCommandAcknowledged,
+            "meter.command.acknowledged",
+            include_bytes!(
+                "../../../../../proto/fixtures/meter_command_failed_outbox_payload.json"
+            ),
+        );
+        let ack_as_failure = meter_command_event(
+            OutboxEventType::MeterCommandFailed,
+            "meter.command.failed",
+            include_bytes!(
+                "../../../../../proto/fixtures/meter_command_acknowledged_outbox_payload.json"
+            ),
+        );
+
+        assert!(publisher.publish(&failure_as_ack).await.is_err());
+        assert!(publisher.publish(&ack_as_failure).await.is_err());
+        assert!(publisher.sink.sent.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

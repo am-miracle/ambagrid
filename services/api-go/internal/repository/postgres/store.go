@@ -15,10 +15,14 @@ import (
 
 // Store reads the operational database with bounded query time.
 type Store struct {
-	pool         databasePool
-	queryTimeout time.Duration
-	outboxTopics OutboxTopics
+	pool            databasePool
+	queryTimeout    time.Duration
+	outboxTopics    OutboxTopics
+	meterCommandTTL time.Duration
 }
+
+// DefaultMeterCommandTTL matches the meter_commands.expires_at column default.
+const DefaultMeterCommandTTL = 24 * time.Hour
 
 type OutboxTopics struct {
 	AlertResolved         string
@@ -32,6 +36,12 @@ type databasePool interface {
 	Ping(ctx context.Context) error
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// WithMeterCommandTTL sets how long new meter commands stay deliverable.
+func (s *Store) WithMeterCommandTTL(ttl time.Duration) *Store {
+	s.meterCommandTTL = ttl
+	return s
 }
 
 func NewStore(pool databasePool, queryTimeout time.Duration) *Store {
@@ -57,7 +67,7 @@ func NewStoreWithOutboxTopics(
 	if outboxTopics.MeterCommandRequested == "" {
 		outboxTopics.MeterCommandRequested = "meter.command.requested"
 	}
-	return &Store{pool: pool, queryTimeout: queryTimeout, outboxTopics: outboxTopics}
+	return &Store{pool: pool, queryTimeout: queryTimeout, outboxTopics: outboxTopics, meterCommandTTL: DefaultMeterCommandTTL}
 }
 
 // Ping checks database readiness.

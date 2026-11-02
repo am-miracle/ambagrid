@@ -174,9 +174,11 @@ The first Milestone 3 component lives in `services/edge-agent-go`. It provides:
 
 The collector persists each normalized reading before promoting it to
 `pending_upload`. On restart, committed `persisted` rows are recovered into the
-upload queue. Upload remains the next step; it should mark a record `uploaded`
-after publishing and `acknowledged` only after the upstream broker confirms
-delivery. The database is bound to one site identity, making `(site_id,
+upload queue. The uploader sends batches to ingestion over HTTP. Accepted
+sequences move through `uploaded` and `acknowledged` in one local transaction
+after ingestion confirms upstream publication. A failed or lost response leaves
+records retryable; downstream consumers deduplicate repeated delivery. The
+database is bound to one site identity, making `(site_id,
 sequence)` the stable idempotency key for this deployment model.
 
 Replay provenance is durable queue state rather than an age estimate. An upload

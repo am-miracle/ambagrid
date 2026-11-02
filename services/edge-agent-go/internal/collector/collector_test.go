@@ -129,7 +129,7 @@ func TestBatteryOverheatIsQueuedAsCriticalFallback(t *testing.T) {
 	defer store.Close()
 	now := time.Unix(1730000000, 0).UTC()
 	source := fixedSource{readings: []domain.Reading{{
-		DeviceID: "batt-01", AssetType: domain.AssetBatteryBMS, TakenAt: now, InternalTemperature: 68.2,
+		DeviceID: "batt-01", AssetType: domain.AssetBatteryBMS, TakenAt: now, InternalTemperature: new(68.2),
 		Payload: testPayload("batt-01", "ng-kaji-01", now),
 	}}}
 	c, err := collector.New(collector.Config{SiteID: "ng-kaji-01", Region: "africa-west", Interval: time.Second, BatteryOverheatC: 55}, store, source)
@@ -283,7 +283,7 @@ func TestCriticalIncidentIsDurableBeforeRecordBecomesUploadable(t *testing.T) {
 	queue := &orderedQueue{}
 	now := time.Unix(1730000000, 0).UTC()
 	source := fixedSource{readings: []domain.Reading{{
-		DeviceID: "batt-01", AssetType: domain.AssetBatteryBMS, TakenAt: now, InternalTemperature: 68.2,
+		DeviceID: "batt-01", AssetType: domain.AssetBatteryBMS, TakenAt: now, InternalTemperature: new(68.2),
 		Payload: testPayload("batt-01", "site-01", now),
 	}}}
 	c, err := collector.New(collector.Config{
@@ -581,4 +581,30 @@ func (q *debounceQueue) ResolveFallbackIncident(_ context.Context, _ string, cod
 		q.resolved++
 	}
 	return nil
+}
+
+func TestUnknownBatteryTemperatureDoesNotResolveOverheat(t *testing.T) {
+	ctx := context.Background()
+	store, err := queuesqlite.Open(ctx, queuesqlite.Config{Path: filepath.Join(t.TempDir(), "queue.db"), SiteID: "site-01", GatewayID: "gateway-01", MaxStorageBytes: 8 << 20, WarningPercent: 70, CriticalReservePercent: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC()
+	source := &mutableSource{readings: []domain.Reading{{DeviceID: "battery-01", AssetType: domain.AssetBatteryBMS, TakenAt: now, InternalTemperature: new(68.2), Payload: testPayload("battery-01", "site-01", now)}}}
+	c, err := collector.New(collector.Config{SiteID: "site-01", Region: "africa-west", Interval: time.Second, BatteryOverheatC: 55}, store, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.CollectOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	source.readings[0].InternalTemperature = nil
+	if err := c.CollectOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := store.FallbackCandidates(ctx, now)
+	if err != nil || len(candidates) != 1 {
+		t.Fatalf("overheat resolved by missing measurement: %+v err=%v", candidates, err)
+	}
 }

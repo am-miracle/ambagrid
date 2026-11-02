@@ -19,3 +19,7 @@ kafka:
         valueProtoType: ambagrid.revenue.CreditIssued
       - topicName: meter.command.requested
         valueProtoType: ambagrid.meter_commands.MeterCommandRequested
+      - topicName: meter.command.acknowledged
+        valueProtoType: ambagrid.meter_commands.MeterCommandOutcome
+      - topicName: meter.command.failed
+        valueProtoType: ambagrid.meter_commands.MeterCommandOutcome

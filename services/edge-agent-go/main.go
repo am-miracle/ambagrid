@@ -2,8 +2,8 @@
 // meters, batteries, and inverters, persists them in a SQLite durable queue,
 // and uploads batches to the ingestion service over HTTP. The queue survives
 // power loss and connectivity gaps — records are only removed after the server
-// acknowledges them. All configuration is environment-based so the same binary
-// runs across sites with different identities and endpoints.
+// acknowledges them. Environment settings and an optional device inventory let
+// the same binary run across sites with different hardware and endpoints.
 package main
 
 import (
@@ -18,8 +18,10 @@ import (
 	"syscall"
 	"time"
 
-	"edge-agent-go/internal/adapter/simulator"
+	"edge-agent-go/internal/adapter"
+	"edge-agent-go/internal/adapter/mqtt"
 	"edge-agent-go/internal/collector"
+	"edge-agent-go/internal/commands"
 	"edge-agent-go/internal/config"
 	"edge-agent-go/internal/domain"
 	"edge-agent-go/internal/fallback"
@@ -62,25 +64,28 @@ func run() (runErr error) {
 		}
 	}()
 
+	adapterMetrics := health.NewAdapterMetrics()
+	hardware, err := configureHardware(ctx, cfg, durableQueue, adapterMetrics)
+	if err != nil {
+		return fmt.Errorf("configure hardware: %w", err)
+	}
+	defer hardware.close()
+
 	var workerWG sync.WaitGroup
 	workerCtx, cancelWorkers := context.WithCancel(ctx)
 	defer func() {
 		cancelWorkers()
 		workerWG.Wait()
 	}()
-
-	if cfg.Collector.Enabled {
-		simulatorOptions := []simulator.Option{}
-		if cfg.Collector.Faults {
-			simulatorOptions = append(simulatorOptions, simulator.WithCriticalFaults())
-		}
+	sources := hardware.sources
+	if len(sources) > 0 {
 		telemetryCollector, err := collector.New(collector.Config{
 			SiteID:           cfg.Queue.SiteID,
 			Region:           cfg.Collector.Region,
 			Interval:         cfg.Collector.Interval,
 			BatteryOverheatC: cfg.SMS.BatteryOverheatC,
 			FallbackDebounce: cfg.SMS.Debounce,
-		}, durableQueue, simulator.New(cfg.Queue.SiteID, simulatorOptions...))
+		}, durableQueue, sources...)
 		if err != nil {
 			return fmt.Errorf("configure telemetry collector: %w", err)
 		}
@@ -88,6 +93,25 @@ func run() (runErr error) {
 		go func() {
 			defer workerWG.Done()
 			telemetryCollector.Run(workerCtx)
+		}()
+
+	}
+
+	commandMetrics := health.NewCommandMetrics()
+	if cfg.Commands.Enabled {
+		runner := commands.New(
+			commands.Config{
+				PollInterval: cfg.Commands.PollInterval, CommandTimeout: cfg.Commands.Timeout,
+				Retention: cfg.Commands.Retention, Metrics: commandMetrics,
+			},
+			commands.NewHTTPClient(cfg.Commands.Endpoint, cfg.Commands.APIKey, cfg.Commands.Timeout),
+			hardware.executor, durableQueue,
+		)
+		workerWG.Add(1)
+		go func() {
+			defer workerWG.Done()
+			slog.Info("meter command delivery started", "endpoint", cfg.Commands.Endpoint, "devices", len(cfg.Devices))
+			runner.Run(workerCtx)
 		}()
 	}
 
@@ -117,6 +141,11 @@ func run() (runErr error) {
 		defer workerWG.Done()
 		runPurge(workerCtx, durableQueue, cfg.Queue.PurgeRetention, cfg.Queue.PurgeInterval)
 	}()
+	workerWG.Add(1)
+	go func() {
+		defer workerWG.Done()
+		runCommandPrune(workerCtx, durableQueue, cfg.Commands.Retention, cfg.Commands.PruneInterval)
+	}()
 
 	if cfg.Uploader.Enabled {
 		client := uploader.NewIngestClient(
@@ -145,7 +174,7 @@ func run() (runErr error) {
 		Addr: cfg.HealthAddr,
 		Handler: health.NewHandler(durableQueue, domain.FallbackRateLimitPolicy{
 			MaxAttempts: cfg.SMS.MaxAttempts, HourlyLimit: cfg.SMS.HourlyLimit, DailyLimit: cfg.SMS.DailyLimit,
-		}),
+		}, adapterMetrics, commandMetrics),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	serverErrors := make(chan error, 1)
@@ -186,4 +215,55 @@ func runPurge(ctx context.Context, queue domain.Queue, retention, interval time.
 			}
 		}
 	}
+}
+
+const commandPruneBatch = 500
+
+type commandPruner interface {
+	PruneCommands(ctx context.Context, cutoff time.Time, limit int) (int64, error)
+}
+
+// runCommandPrune deletes resolved commands in batches so a large backlog never
+// holds the queue's single SQLite connection for long.
+func runCommandPrune(ctx context.Context, store commandPruner, retention, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cutoff := time.Now().Add(-retention)
+			var total int64
+			for ctx.Err() == nil {
+				deleted, err := store.PruneCommands(ctx, cutoff, commandPruneBatch)
+				if err != nil {
+					slog.Error("prune resolved commands", "error", err)
+					break
+				}
+				total += deleted
+				if deleted < commandPruneBatch {
+					break
+				}
+			}
+			if total > 0 {
+				slog.Info("pruned resolved commands", "deleted", total)
+			}
+		}
+	}
+}
+
+func subscribeCommandMQTT(ctx context.Context, cfg mqtt.Config, transport *mqtt.AutopahoTransport) (adapter.CommandAdapter, error) {
+	subscribeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	return mqtt.New(subscribeCtx, cfg, transport)
+}
+
+func dialCommandMQTT(ctx context.Context, m config.MQTTConfig) (*mqtt.AutopahoTransport, error) {
+	dialCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	return mqtt.DialAutopaho(dialCtx, mqtt.AutopahoConfig{
+		AllowInsecure: m.AllowInsecure, Broker: m.Broker, ClientID: m.ClientID,
+		Username: m.Username, Password: m.Password, CAFile: m.CAFile,
+	})
 }

@@ -1,0 +1,19 @@
+groups:
+  - name: ambagrid-api-backlog
+    rules:
+      - alert: ReconciliationCaseAged
+        expr: ambagrid_api_reconciliation_oldest_open_case_age_seconds > 604800
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: 'A meter command case has been open for over 7 days'
+          description: 'Open the reconciliation queue. Settle it with delivery evidence, redelivery or a verified refund; uncertain delivery needs new evidence, not closure.'
+      - alert: UnvendedSTSCreditAged
+        expr: ambagrid_api_sts_oldest_unvended_credit_age_seconds > 604800
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: 'A paid STS credit has had no token for over 7 days'
+          description: 'Run sts-vend -list-unvended. Vend it, correct its blocked_reason, or record a verified refund with -refund-reference.'

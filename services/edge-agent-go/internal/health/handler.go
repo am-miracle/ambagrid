@@ -16,9 +16,10 @@ import (
 
 const statsTimeout = 2 * time.Second
 
-func NewHandler(source StatsSource, fallbackPolicy domain.FallbackRateLimitPolicy) http.Handler {
+func NewHandler(source StatsSource, fallbackPolicy domain.FallbackRateLimitPolicy, metrics ...prometheus.Collector) http.Handler {
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(newCollector(source, fallbackPolicy))
+	registry.MustRegister(metrics...)
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
@@ -37,6 +38,7 @@ type healthResponse struct {
 	OldestPendingSeconds float64           `json:"oldest_pending_seconds"`
 	LastSuccessfulSyncAt *time.Time        `json:"last_successful_sync_at,omitempty"`
 	LastFailedSyncReason string            `json:"last_failed_sync_reason,omitempty"`
+	UnresolvedCommands   *int64            `json:"unresolved_commands,omitempty"`
 }
 
 func healthHandler(source StatsSource) http.HandlerFunc {
@@ -52,7 +54,7 @@ func healthHandler(source StatsSource) http.HandlerFunc {
 		if stats.State == domain.QueueFull || stats.State == domain.QueueFilesystemLow {
 			statusCode = http.StatusInsufficientStorage
 		}
-		payload, err := json.Marshal(healthResponse{
+		response := healthResponse{
 			State:                stats.State,
 			QueueDepth:           stats.Depth,
 			AbandonedRecords:     stats.AbandonedTotal,
@@ -63,7 +65,14 @@ func healthHandler(source StatsSource) http.HandlerFunc {
 			OldestPendingSeconds: stats.OldestAge.Seconds(),
 			LastSuccessfulSyncAt: stats.LastSuccessfulSyncAt,
 			LastFailedSyncReason: stats.LastFailedSyncReason,
-		})
+		}
+		// Unresolved commands need reconciliation, not a failing health check.
+		if commands, ok := source.(CommandStatsSource); ok {
+			if commandStats, err := commands.CommandLedgerStats(ctx, time.Now().UTC()); err == nil {
+				response.UnresolvedCommands = &commandStats.Unresolved
+			}
+		}
+		payload, err := json.Marshal(response)
 		if err != nil {
 			http.Error(w, `{"state":"unavailable"}`, http.StatusInternalServerError)
 			return

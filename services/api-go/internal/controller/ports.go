@@ -35,6 +35,10 @@ type PaymentService interface {
 	ListAuditEvents(ctx context.Context, customerID string) ([]domain.AuditEvent, error)
 }
 
+type CommandReconciliationService interface {
+	ListReconciliation(ctx context.Context, siteID *string, limit int, cursor string) (page.Page[domain.CommandReconciliation], error)
+}
+
 type HealthService interface {
 	Ready(ctx context.Context) error
 }
