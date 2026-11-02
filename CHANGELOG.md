@@ -27,6 +27,8 @@ This project follows the spirit of Keep a Changelog. Dates use `YYYY-MM-DD`.
 - **edge:** Use MQTT v5 requests and mapped Modbus telemetry
 - **edge:** Add adapter health metrics and per-device wiring
 - Add live local fleet and expand command reconciliation
+- Surface undelivered credits and harden hardware integrations
+- Add audited credit resolution and harden meter command delivery
 
 ### Documentation
 
