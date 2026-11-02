@@ -17,7 +17,7 @@ func NewRouter(routes map[string]CommandAdapter) *Router {
 	return &Router{owned}
 }
 
-func (r *Router) Execute(ctx context.Context, cmd Command) (CommandResult, error) {
+func (r *Router) Execute(ctx context.Context, cmd Command, send SendGate) (CommandResult, error) {
 	if err := ctx.Err(); err != nil {
 		return CommandResult{}, ContextError(err)
 	}
@@ -25,5 +25,5 @@ func (r *Router) Execute(ctx context.Context, cmd Command) (CommandResult, error
 	if !ok {
 		return CommandResult{}, fmt.Errorf("%w: no command adapter for device %q", ErrUnsupported, cmd.DeviceID)
 	}
-	return route.Execute(ctx, cmd)
+	return route.Execute(ctx, cmd, send)
 }

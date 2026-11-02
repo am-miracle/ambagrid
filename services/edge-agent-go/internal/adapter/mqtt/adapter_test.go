@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -227,7 +228,7 @@ func ledgerStore(t *testing.T) *queuesqlite.Store {
 
 func newAdapter(t *testing.T, transport mqtt.Transport, caps adapter.Capabilities) adapter.CommandAdapter {
 	t.Helper()
-	a, err := mqtt.New(context.Background(), mqtt.Config{Topics: testTopics(t), Capabilities: caps, ResponseTimeout: 2 * time.Second}, transport)
+	a, err := mqtt.New(context.Background(), mqtt.Config{DeviceID: "meter-01", Topics: testTopics(t), Capabilities: caps, ResponseTimeout: 2 * time.Second}, transport)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +263,7 @@ func TestCommandConformance(t *testing.T) {
 func execute(a adapter.CommandAdapter, cmd adapter.Command) (adapter.CommandResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	return a.Execute(ctx, cmd)
+	return a.Execute(ctx, cmd, adapter.AllowSend())
 }
 
 func TestRequestCarriesPerDeviceResponseTopicAndCommandCorrelation(t *testing.T) {
@@ -288,7 +289,7 @@ func TestRepliesFromAnotherDeviceAreIgnored(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	_, err := a.Execute(ctx, adapter.Command{ID: "cmd-1", Type: adapter.CommandDisconnect, DeviceID: "meter-01"})
+	_, err := a.Execute(ctx, adapter.Command{ID: "cmd-1", Type: adapter.CommandDisconnect, DeviceID: "meter-01"}, adapter.AllowSend())
 	if !errors.Is(err, adapter.ErrTimeout) {
 		t.Fatalf("error = %v, want ErrTimeout because only another device's topic answered", err)
 	}
@@ -298,14 +299,14 @@ func TestAdapterEnforcesItsOwnResponseTimeout(t *testing.T) {
 	broker := &memoryBroker{}
 	device := newMeterDevice(t, broker)
 	device.dropReplies = 1
-	a, err := mqtt.New(context.Background(), mqtt.Config{Topics: testTopics(t), Capabilities: meterCaps, ResponseTimeout: 50 * time.Millisecond}, broker)
+	a, err := mqtt.New(context.Background(), mqtt.Config{DeviceID: "meter-01", Topics: testTopics(t), Capabilities: meterCaps, ResponseTimeout: 50 * time.Millisecond}, broker)
 	if err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
 	go func() {
 		// No caller deadline: only the adapter's response timeout can end the wait.
-		_, err := a.Execute(context.Background(), adapter.Command{ID: "cmd-1", Type: adapter.CommandDisconnect, DeviceID: "meter-01"})
+		_, err := a.Execute(context.Background(), adapter.Command{ID: "cmd-1", Type: adapter.CommandDisconnect, DeviceID: "meter-01"}, adapter.AllowSend())
 		done <- err
 	}()
 	select {
@@ -322,8 +323,9 @@ func TestDisconnectedBrokerDoesNotMarkCommandSent(t *testing.T) {
 	broker := &memoryBroker{disconnected: true}
 	a := newAdapter(t, broker, meterCaps)
 	marked := 0
-	ctx := adapter.WithSendHook(context.Background(), func() error { marked++; return nil })
-	if _, err := a.Execute(ctx, adapter.Command{ID: "cmd-1", Type: adapter.CommandDisconnect, DeviceID: "meter-01"}); err == nil {
+	ctx := context.Background()
+	gate := adapter.NewSendGate(func() error { marked++; return nil })
+	if _, err := a.Execute(ctx, adapter.Command{ID: "cmd-1", Type: adapter.CommandDisconnect, DeviceID: "meter-01"}, gate); err == nil {
 		t.Fatal("command succeeded over a disconnected broker")
 	}
 	if marked != 0 {
@@ -358,7 +360,7 @@ func TestLostCreditReplyIsNeverAppliedTwice(t *testing.T) {
 			ledger := adapter.NewLedger(ledgerStore(t), newAdapter(t, broker, c.caps))
 
 			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-			_, err := ledger.Execute(ctx, credit)
+			_, err := ledger.Execute(ctx, credit, adapter.AllowSend())
 			cancel()
 			if !errors.Is(err, adapter.ErrOutcomeUnknown) {
 				t.Fatalf("lost reply error = %v, want ErrOutcomeUnknown", err)
@@ -379,7 +381,7 @@ func TestLostCreditReplyIsNeverAppliedTwice(t *testing.T) {
 func TestMQTTCreditRequiresReceiverDeduplication(t *testing.T) {
 	caps := meterCaps
 	caps.Capabilities.IdempotentRefs = false
-	_, err := mqtt.New(context.Background(), mqtt.Config{Topics: testTopics(t), Capabilities: caps}, &memoryBroker{})
+	_, err := mqtt.New(context.Background(), mqtt.Config{DeviceID: "meter-01", Topics: testTopics(t), Capabilities: caps}, &memoryBroker{})
 	if !errors.Is(err, adapter.ErrUnsupported) {
 		t.Fatalf("error = %v, want unsafe credit rejected", err)
 	}
@@ -387,16 +389,17 @@ func TestMQTTCreditRequiresReceiverDeduplication(t *testing.T) {
 
 func TestLocalSendHookDeadlineIsNotAProtocolTimeout(t *testing.T) {
 	broker := &memoryBroker{}
-	a, err := mqtt.New(context.Background(), mqtt.Config{Topics: testTopics(t), Capabilities: meterCaps, ResponseTimeout: 10 * time.Millisecond}, broker)
+	a, err := mqtt.New(context.Background(), mqtt.Config{DeviceID: "meter-01", Topics: testTopics(t), Capabilities: meterCaps, ResponseTimeout: 10 * time.Millisecond}, broker)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := adapter.WithSendHook(context.Background(), func() error {
+	ctx := context.Background()
+	gate := adapter.NewSendGate(func() error {
 		// Local persistence is still busy after the exchange budget expires.
 		time.Sleep(30 * time.Millisecond)
 		return context.DeadlineExceeded
 	})
-	_, err = a.Execute(ctx, adapter.Command{ID: "blocked-store", DeviceID: "meter-01", Type: adapter.CommandDisconnect})
+	_, err = a.Execute(ctx, adapter.Command{ID: "blocked-store", DeviceID: "meter-01", Type: adapter.CommandDisconnect}, gate)
 	if !errors.Is(err, adapter.ErrTimeout) || errors.Is(err, adapter.ErrProtocolTimeout) {
 		t.Fatalf("local wait classified as device timeout: %v", err)
 	}
@@ -476,5 +479,119 @@ func TestOutcomeReplyValidation(t *testing.T) {
 				t.Fatalf("result command ID = %q, want cmd-1", result.CommandID)
 			}
 		})
+	}
+}
+
+func TestFirmwarePolicyChecksBeforeRecordingMutationIntent(t *testing.T) {
+	for _, version := range []string{"", "0.9.0", "1.2.3"} {
+		t.Run("version="+version, func(t *testing.T) {
+			broker := &memoryBroker{}
+			topics := testTopics(t)
+			var mu sync.Mutex
+			var operations []string
+			if err := broker.Subscribe(context.Background(), topics.Command("+"), func(msg mqtt.Message) {
+				var req wireRequest
+				if json.Unmarshal(msg.Payload, &req) != nil {
+					return
+				}
+				mu.Lock()
+				operations = append(operations, req.Op)
+				mu.Unlock()
+				payload, _ := json.Marshal(map[string]any{"ok": true, "firmware_version": version, "ts_ms": time.Now().UnixMilli(), "tamper": 1, "balance_wh": 12500})
+				_ = broker.Publish(context.Background(), mqtt.Message{Topic: msg.ResponseTopic, CorrelationData: msg.CorrelationData, Payload: payload}, nil)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			caps := meterCaps
+			caps.FirmwareVersions = []string{"1.2.3"}
+			store := ledgerStore(t)
+			command := adapter.Command{ID: "firmware-credit", DeviceID: "meter-01", Type: adapter.CommandCredit, CreditKWh: 5}
+			ledger := adapter.NewLedger(store, newAdapter(t, broker, caps))
+			_, err := execute(ledger, command)
+			entry, found, loadErr := store.LoadCommand(context.Background(), command.ID)
+			if loadErr != nil {
+				t.Fatal(loadErr)
+			}
+			mu.Lock()
+			got := append([]string(nil), operations...)
+			mu.Unlock()
+			if version != "1.2.3" {
+				if !errors.Is(err, adapter.ErrFirmwareMismatch) || found || len(got) != 1 || got[0] != "status" {
+					t.Fatalf("unsafe firmware gate: err=%v found=%t ops=%v", err, found, got)
+				}
+			} else if err != nil || !found || entry.State != adapter.CommandApplied || len(got) != 2 || got[0] != "status" || got[1] != "credit" {
+				t.Fatalf("compatible mutation: err=%v entry=%+v ops=%v", err, entry, got)
+			}
+			// Status remains available even when a mutation is blocked by firmware policy.
+			result, err := execute(ledger, adapter.Command{ID: "read-status", DeviceID: "meter-01", Type: adapter.CommandRequestStatus})
+			if err != nil || result.FirmwareVersion != version || result.TamperDetected == nil || !*result.TamperDetected {
+				t.Fatalf("status evidence: %+v %v", result, err)
+			}
+		})
+	}
+}
+func TestFaultCodeDeclarationExplainsDeviceRejection(t *testing.T) {
+	broker := &memoryBroker{}
+	device := newMeterDevice(t, broker)
+	device.Reject([]byte(`{"ok":false,"code":"E_METER_LOCKED","msg":"service required"}`))
+	caps := meterCaps
+	caps.FaultCodes = map[string]adapter.FaultCode{"E_METER_LOCKED": {Description: "Meter cover open", Severity: "critical"}}
+	_, err := execute(adapter.NewLedger(ledgerStore(t), newAdapter(t, broker, caps)), adapter.Command{ID: "fault", DeviceID: "meter-01", Type: adapter.CommandDisconnect})
+	if !errors.Is(err, adapter.ErrDeviceRejected) || !strings.Contains(err.Error(), "Meter cover open (critical)") {
+		t.Fatalf("missing fault explanation: %v", err)
+	}
+}
+
+func TestMQTTRequiresExplicitDeviceBinding(t *testing.T) {
+	broker := &memoryBroker{}
+	if _, err := mqtt.New(context.Background(), mqtt.Config{Topics: testTopics(t), Capabilities: meterCaps}, broker); err == nil {
+		t.Fatal("accepted site-wide command adapter")
+	}
+	a := newAdapter(t, broker, meterCaps)
+	if _, err := execute(a, adapter.Command{ID: "wrong-route", DeviceID: "meter-02", Type: adapter.CommandDisconnect}); !errors.Is(err, adapter.ErrUnsupported) {
+		t.Fatalf("wrong device accepted: %v", err)
+	}
+	broker.mu.Lock()
+	defer broker.mu.Unlock()
+	if len(broker.published) != 0 {
+		t.Fatal("wrong-device command published")
+	}
+	for _, subscription := range broker.subs {
+		if subscription.filter != testTopics(t).Reply("meter-01") {
+			t.Fatalf("wildcard subscription: %q", subscription.filter)
+		}
+	}
+}
+
+func TestCommandTemplatesShapeRequestsIncludingTheFirmwareProbe(t *testing.T) {
+	broker := &memoryBroker{}
+	topics := testTopics(t)
+	var mu sync.Mutex
+	var bodies []string
+	if err := broker.Subscribe(context.Background(), topics.Command("+"), func(msg mqtt.Message) {
+		mu.Lock()
+		bodies = append(bodies, string(msg.Payload))
+		mu.Unlock()
+		payload, _ := json.Marshal(map[string]any{"ok": true, "firmware_version": "1.2.3", "ts_ms": time.Now().UnixMilli()})
+		_ = broker.Publish(context.Background(), mqtt.Message{Topic: msg.ResponseTopic, CorrelationData: msg.CorrelationData, Payload: payload}, nil)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	caps := meterCaps
+	caps.FirmwareVersions = []string{"1.2.3"}
+	caps.CommandTemplates = map[adapter.CommandType]string{
+		adapter.CommandRequestStatus: `{"cmd":"read","meter":{device}}`,
+		adapter.CommandCredit:        `{"cmd":"topup","meter":{device},"wh":{wh}}`,
+	}
+	store := ledgerStore(t)
+	command := adapter.Command{ID: "templated-credit", DeviceID: "meter-01", Type: adapter.CommandCredit, CreditKWh: 5}
+	if _, err := execute(adapter.NewLedger(store, newAdapter(t, broker, caps)), command); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{`{"cmd":"read","meter":"meter-01"}`, `{"cmd":"topup","meter":"meter-01","wh":5000}`}
+	if !slices.Equal(bodies, want) {
+		t.Fatalf("bodies = %v, want %v", bodies, want)
 	}
 }

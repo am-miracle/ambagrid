@@ -20,7 +20,6 @@ import (
 
 	"edge-agent-go/internal/adapter"
 	"edge-agent-go/internal/adapter/mqtt"
-	"edge-agent-go/internal/adapter/simulator"
 	"edge-agent-go/internal/collector"
 	"edge-agent-go/internal/commands"
 	"edge-agent-go/internal/config"
@@ -111,11 +110,7 @@ func run() (runErr error) {
 		workerWG.Add(1)
 		go func() {
 			defer workerWG.Done()
-			selection := cfg.Commands.Adapter
-			if cfg.DevicesFile != "" {
-				selection = "inventory"
-			}
-			slog.Info("meter command delivery started", "endpoint", cfg.Commands.Endpoint, "adapter", selection)
+			slog.Info("meter command delivery started", "endpoint", cfg.Commands.Endpoint, "devices", len(cfg.Devices))
 			runner.Run(workerCtx)
 		}()
 	}
@@ -256,33 +251,6 @@ func runCommandPrune(ctx context.Context, store commandPruner, retention, interv
 			}
 		}
 	}
-}
-
-// newCommandAdapter returns the configured adapter and a function releasing
-// its connection; config validation guarantees meter is set for the simulator.
-func newCommandAdapter(ctx context.Context, cfg config.Config, meter *simulator.Adapter) (adapter.CommandAdapter, func(), error) {
-	if cfg.Commands.Adapter == "simulator" {
-		return meter, func() {}, nil
-	}
-	m := cfg.Commands.MQTT
-	caps, err := adapter.LoadCapabilities(m.CapabilitiesFile)
-	if err != nil {
-		return nil, nil, err
-	}
-	topics, err := mqtt.NewTopics(m.CommandTopic, m.ReplyTopic, cfg.Queue.SiteID)
-	if err != nil {
-		return nil, nil, err
-	}
-	transport, err := dialCommandMQTT(ctx, m)
-	if err != nil {
-		return nil, nil, err
-	}
-	commandAdapter, err := subscribeCommandMQTT(ctx, mqtt.Config{Topics: topics, Capabilities: caps, ResponseTimeout: m.ResponseTimeout}, transport)
-	if err != nil {
-		transport.Close()
-		return nil, nil, err
-	}
-	return commandAdapter, transport.Close, nil
 }
 
 func subscribeCommandMQTT(ctx context.Context, cfg mqtt.Config, transport *mqtt.AutopahoTransport) (adapter.CommandAdapter, error) {

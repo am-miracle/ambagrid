@@ -1,0 +1,59 @@
+groups:
+  - name: ambagrid-edge-adapters
+    rules:
+      - alert: EdgeAdapterTelemetryStale
+        expr: time() - ambagrid_edge_adapter_last_successful_read_timestamp_seconds > 120
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'No fresh telemetry from {{ $labels.device_id }}'
+          description: 'Check device power, network, adapter configuration, and protocol errors. A zero timestamp means no successful read since startup.'
+      - alert: EdgeAdapterCommandFailures
+        expr: increase(ambagrid_edge_adapter_command_errors_total[10m]) >= 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Repeated meter command failures on {{ $labels.device_id }}'
+          description: 'Inspect failed command reasons and firmware compatibility. Do not replace credits until delivery evidence is verified.'
+      - alert: EdgeAdapterProtocolTimeouts
+        expr: increase(ambagrid_edge_adapter_protocol_timeouts_total[10m]) >= 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Repeated protocol timeouts on {{ $labels.device_id }}'
+          description: 'Check transport and device response times. These exclude caller cancellation and time spent waiting for a transport.'
+      - alert: EdgeFirmwareMismatch
+        expr: ambagrid_edge_adapter_firmware_mismatch == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'Missing or incompatible firmware on {{ $labels.device_id }}'
+          description: 'Read meter status, verify the commissioned firmware policy, and correct the device or capability declaration before retrying a mutation.'
+      - alert: EdgeCreditDeliveryUnresolved
+        expr: (ambagrid_edge_commands_unresolved > 0) and (ambagrid_edge_commands_oldest_unresolved_seconds > 900)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'Meter commands have unresolved device outcomes'
+          description: 'Inspect the reconciliation queue and edge ledger. A missing acknowledgement is not proof that a credit failed.'
+      - alert: EdgeCommandReportsAbandoned
+        expr: ambagrid_edge_command_reports_abandoned > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'Command reports require reconciliation'
+          description: 'Preserve abandoned reports before retention prunes them. Check API rejection reasons and submit verified evidence.'
+      - alert: EdgeCommandRetentionUnsafe
+        expr: ambagrid_edge_command_expiry_beyond_retention == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'Command lifetime exceeds edge deduplication retention'
+          description: 'Reduce API_METER_COMMAND_TTL or increase EDGE_COMMAND_RETENTION before old commands can be replayed.'

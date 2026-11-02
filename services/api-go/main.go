@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"api-go/internal/config"
 	"api-go/internal/controller"
@@ -117,7 +118,21 @@ func main() {
 		SMSWebhook:            smsWebhook,
 		EdgeCommands:          edgeCommands,
 		CommandReconciliation: commandService,
+		MeterOperations:       services.NewMeterOperationsService(store),
+		OperatorAuth:          controller.NewSiteKeys(cfg.OperatorAPIKeys),
 		EdgeAuth:              controller.NewSiteKeys(cfg.EdgeAPIKeys),
+	}
+
+	if cfg.MetricsAddr != "" {
+		go func() {
+			err := controller.Serve(ctx, controller.ServerOptions{
+				Addr: cfg.MetricsAddr, ReadHeaderTimeout: cfg.ReadHeaderTimeout, WriteTimeout: 10 * time.Second,
+				IdleTimeout: cfg.IdleTimeout, ShutdownTimeout: cfg.ShutdownTimeout, Logger: logger,
+			}, controller.MetricsHandler(commandService, logger))
+			if err != nil {
+				logger.Error("metrics listener stopped", "error", err)
+			}
+		}()
 	}
 
 	err = controller.Serve(ctx, controller.ServerOptions{

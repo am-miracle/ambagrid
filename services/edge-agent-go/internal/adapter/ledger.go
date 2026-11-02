@@ -75,7 +75,7 @@ func (l *Ledger) Capabilities() Capabilities {
 	return l.inner.Capabilities()
 }
 
-func (l *Ledger) Execute(ctx context.Context, cmd Command) (CommandResult, error) {
+func (l *Ledger) Execute(ctx context.Context, cmd Command, send SendGate) (CommandResult, error) {
 	if err := ctx.Err(); err != nil {
 		return CommandResult{}, ContextError(err)
 	}
@@ -132,9 +132,11 @@ func (l *Ledger) Execute(ctx context.Context, cmd Command) (CommandResult, error
 			if result, settled, err := l.resolveUnknown(ctx, cmd, caps); settled {
 				return result, err
 			}
+			_, queried := l.inner.(Reconciler)
+			return l.send(ctx, cmd, hash, send, cmd.Type == CommandCredit && !queried)
 		}
 	}
-	return l.send(ctx, cmd, hash)
+	return l.send(ctx, cmd, hash, send, false)
 }
 
 // own serializes callers of one command ID within this process; the durable
@@ -188,17 +190,19 @@ func (l *Ledger) resolveUnknown(ctx context.Context, cmd Command, caps Capabilit
 	return CommandResult{}, true, fmt.Errorf("%w: command %q reached the device without confirmation; reconcile it before issuing a replacement", ErrOutcomeUnknown, cmd.ID)
 }
 
-func (l *Ledger) send(ctx context.Context, cmd Command, hash []byte) (CommandResult, error) {
+// send takes unverifiedResend for a credit that may already be applied, where a
+// device refusing the repeat proves nothing about the first attempt.
+func (l *Ledger) send(ctx context.Context, cmd Command, hash []byte, send SendGate, unverifiedResend bool) (CommandResult, error) {
 	entry := LedgerEntry{CommandID: cmd.ID, DeviceID: cmd.DeviceID, Type: cmd.Type, RequestHash: hash, RequestedAt: cmd.RequestedAt}
 	sent := false
-	hooked := WithSendHook(ctx, func() error {
+	gate := send.Then(func() error {
 		if err := l.store.BeginCommandAttempt(ctx, entry, l.now().UTC()); err != nil {
 			return fmt.Errorf("record command %q before sending: %w", cmd.ID, ContextError(err))
 		}
 		sent = true
 		return nil
 	})
-	result, err := l.inner.Execute(hooked, cmd)
+	result, err := l.inner.Execute(ctx, cmd, gate)
 
 	// The device may have acted, so the outcome is recorded even if the caller gave up.
 	persistCtx := context.WithoutCancel(ctx)
@@ -219,9 +223,12 @@ func (l *Ledger) send(ctx context.Context, cmd Command, hash []byte) (CommandRes
 	case err == nil:
 		logUnrecordedOutcome(cmd.ID, l.store.CompleteCommand(persistCtx, cmd.ID, CommandApplied, &result, "", now))
 		return result, nil
-	case errors.Is(err, ErrDeviceRejected):
+	case errors.Is(err, ErrDeviceRejected) && !unverifiedResend:
 		logUnrecordedOutcome(cmd.ID, l.store.CompleteCommand(persistCtx, cmd.ID, CommandRejected, nil, err.Error(), now))
 		return CommandResult{}, err
+	case errors.Is(err, ErrDeviceRejected):
+		logUnrecordedOutcome(cmd.ID, l.store.MarkCommandUnknown(persistCtx, cmd.ID, err.Error(), now))
+		return CommandResult{}, fmt.Errorf("%w: device refused the repeat: %s", ErrOutcomeUnknown, err)
 	default:
 		logUnrecordedOutcome(cmd.ID, l.store.MarkCommandUnknown(persistCtx, cmd.ID, err.Error(), now))
 		return CommandResult{}, fmt.Errorf("%w: %w", ErrOutcomeUnknown, err)
@@ -259,8 +266,6 @@ func resendSafe(cmd Command, caps Capabilities) bool {
 	switch {
 	case cmd.Type != CommandCredit:
 		return true // relay and status commands set or read absolute state
-	case cmd.STSToken != "":
-		return true // STS meters refuse a token they have already accepted
 	default:
 		return caps.Capabilities.IdempotentRefs
 	}

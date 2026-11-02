@@ -49,7 +49,7 @@ type Metrics interface {
 }
 
 type Executor interface {
-	Execute(context.Context, adapter.Command) (adapter.CommandResult, error)
+	Execute(context.Context, adapter.Command, adapter.SendGate) (adapter.CommandResult, error)
 }
 
 // Runner handles one command at a time in request order, which is what lets
@@ -151,7 +151,7 @@ func (r *Runner) handle(ctx context.Context, p Pending) error {
 
 	execCtx, cancel := context.WithTimeout(ctx, min(r.cfg.CommandTimeout, p.deadline().Sub(r.now())))
 	defer cancel()
-	_, err = r.executor.Execute(execCtx, cmd)
+	_, err = r.executor.Execute(execCtx, cmd, adapter.AllowSend())
 	switch {
 	case err == nil, errors.Is(err, adapter.ErrDeviceRejected):
 		return nil

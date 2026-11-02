@@ -174,6 +174,7 @@ func TestFromEnvConfiguresMQTTCommandAdapter(t *testing.T) {
 	t.Setenv("EDGE_COMMANDS_ENDPOINT", "http://api:8081")
 	t.Setenv("EDGE_COMMANDS_API_KEY", "key-kaji")
 	t.Setenv("EDGE_COMMAND_ADAPTER", "mqtt")
+	t.Setenv("EDGE_MQTT_DEVICE_ID", "meter-01")
 	if _, err := config.FromEnv(); err == nil {
 		t.Fatal("accepted the mqtt adapter without a broker")
 	}
@@ -188,7 +189,7 @@ func TestFromEnvConfiguresMQTTCommandAdapter(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := cfg.Commands.MQTT
-	if cfg.Commands.Adapter != "mqtt" || m.Broker != "tcp://localhost:1883" || m.ClientID != "ambagrid-edge-gateway-01" ||
+	if len(cfg.Devices) != 1 || cfg.Devices[0].Command != config.MQTT || m.Broker != "tcp://localhost:1883" || m.ClientID != "ambagrid-edge-gateway-01" ||
 		m.CommandTopic != "site/{site_id}/meter/{device_id}/cmd" || m.ReplyTopic != "site/{site_id}/meter/{device_id}/cmd/reply" || m.ResponseTimeout != 30*time.Second {
 		t.Fatalf("mqtt config = %+v", cfg.Commands)
 	}
@@ -245,6 +246,7 @@ func TestProductionMQTTRequiresTLSAndCredentials(t *testing.T) {
 	t.Setenv("EDGE_COMMANDS_ENDPOINT", "http://api:8081")
 	t.Setenv("EDGE_COMMANDS_API_KEY", "test-key")
 	t.Setenv("EDGE_COMMAND_ADAPTER", "mqtt")
+	t.Setenv("EDGE_MQTT_DEVICE_ID", "meter-01")
 	t.Setenv("EDGE_MQTT_BROKER", "ssl://broker.example:8883")
 	t.Setenv("EDGE_MQTT_CAPABILITIES_FILE", "/etc/ambagrid/meter.yaml")
 	t.Setenv("EDGE_MQTT_USERNAME", "gateway-site-01")
@@ -264,5 +266,29 @@ func TestProductionMQTTRequiresTLSAndCredentials(t *testing.T) {
 	t.Setenv("EDGE_MQTT_USERNAME", "")
 	if _, err := config.FromEnv(); err == nil {
 		t.Fatal("accepted anonymous production broker")
+	}
+}
+
+func TestEnvironmentMQTTSelectionNormalizesToOneExplicitDevice(t *testing.T) {
+	t.Setenv("EDGE_SITE_ID", "site-01")
+	t.Setenv("EDGE_GATEWAY_ID", "gateway-01")
+	t.Setenv("EDGE_COMMANDS_ENABLED", "true")
+	t.Setenv("EDGE_COMMANDS_ENDPOINT", "http://api:8081")
+	t.Setenv("EDGE_COMMANDS_API_KEY", "fixture-key")
+	t.Setenv("EDGE_COMMAND_ADAPTER", "mqtt")
+	t.Setenv("EDGE_MQTT_BROKER", "tcp://localhost:1883")
+	t.Setenv("EDGE_MQTT_ALLOW_INSECURE", "true")
+	t.Setenv("EDGE_MQTT_CAPABILITIES_FILE", "meter.yaml")
+	t.Setenv("EDGE_MQTT_DEVICE_ID", "")
+	if _, err := config.FromEnv(); err == nil {
+		t.Fatal("accepted MQTT without an explicit target")
+	}
+	t.Setenv("EDGE_MQTT_DEVICE_ID", "meter-02")
+	cfg, err := config.FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Devices) != 1 || cfg.Devices[0].ID != "meter-02" || cfg.Devices[0].Command != config.MQTT {
+		t.Fatalf("normalized selection: %+v", cfg.Devices)
 	}
 }

@@ -231,7 +231,9 @@ The internal ontology should still use the same object:
 MeterCommand
 ```
 
-The adapter decides whether the command becomes an STS token, vendor API request, MQTT message, or manual field workflow.
+The edge adapter translates funded kWh commands into its meter protocol. Funded
+STS vending is a separate manual workflow; automatic token dispatch is not part
+of the edge command interface.
 
 ## Reconciliation
 
@@ -266,3 +268,9 @@ and saves all tokens in order. Each payment can fund only one delivery route.
 Automatic payment-to-token dispatch remains future work. `sts-vend -list-unvended`
 shows funded credits with no vend, and the command reconciliation listing shows
 meter credits that failed or expired.
+
+
+[Meter operations](meter-operations.md) closes meter-credit reconciliation with
+owned investigation, evidence, explicit resolution, linked redelivery attempts,
+and accounting for externally completed refunds. It retains all original
+command outcomes and blocks compensation for uncertain or already settled credit.

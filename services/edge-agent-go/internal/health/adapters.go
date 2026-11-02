@@ -18,6 +18,7 @@ func (m *AdapterMetrics) initialize(name, device, operation string) {
 		m.readErrors.WithLabelValues(name, device)
 	} else {
 		m.lastCommand.WithLabelValues(name, device)
+		m.firmwareMismatch.WithLabelValues(name, device)
 		m.commandErrors.WithLabelValues(name, device)
 	}
 }
@@ -84,10 +85,23 @@ func (m *AdapterMetrics) Command(name, device string, inner adapter.CommandAdapt
 	return observed
 }
 
-func (a *observedCommand) Execute(ctx context.Context, cmd adapter.Command) (adapter.CommandResult, error) {
+func (a *observedCommand) Execute(ctx context.Context, cmd adapter.Command, send adapter.SendGate) (adapter.CommandResult, error) {
 	var sent atomic.Bool
-	ctx = adapter.WithSendHook(ctx, func() error { sent.Store(true); return nil })
-	result, err := a.CommandAdapter.Execute(ctx, cmd)
+	gate := send.Then(func() error { sent.Store(true); return nil })
+	result, err := a.CommandAdapter.Execute(ctx, cmd, gate)
+	if errors.Is(err, adapter.ErrFirmwareMismatch) {
+		a.metrics.firmwareMismatch.WithLabelValues(a.name, a.device).Set(1)
+	}
+	if err == nil && sent.Load() {
+		caps := a.Capabilities()
+		if len(caps.FirmwareVersions) > 0 {
+			mismatch := 0.0
+			if !caps.FirmwareAllowed(result.FirmwareVersion) {
+				mismatch = 1
+			}
+			a.metrics.firmwareMismatch.WithLabelValues(a.name, a.device).Set(mismatch)
+		}
+	}
 	if err != nil {
 		a.metrics.failure(a.name, a.device, "command", err)
 		if errors.Is(err, adapter.ErrUnsupported) {

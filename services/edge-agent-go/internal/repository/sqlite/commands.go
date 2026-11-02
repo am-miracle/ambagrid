@@ -131,7 +131,19 @@ func (s *Store) CompleteCommand(ctx context.Context, commandID string, state ada
 		if result != nil && !result.AcknowledgedAt.IsZero() {
 			reportedAt = result.AcknowledgedAt
 		}
-		return queueReport(ctx, tx, commandID, report, lastError, reportedAt, at)
+		if err := queueReport(ctx, tx, commandID, report, lastError, reportedAt, at); err != nil {
+			return err
+		}
+		if result != nil && report == domain.ReportAcknowledged {
+			observation, err := json.Marshal(result.Observation())
+			if err != nil {
+				return fmt.Errorf("encode observation of command %q: %w", commandID, err)
+			}
+			if _, err = tx.ExecContext(ctx, `UPDATE command_reports SET observation=? WHERE id=last_insert_rowid()`, observation); err != nil {
+				return fmt.Errorf("save observation of command %q: %w", commandID, err)
+			}
+		}
+		return nil
 	})
 }
 
@@ -206,7 +218,7 @@ func (s *Store) LastRelayCommand(ctx context.Context, deviceID string) (requeste
 // command is still waiting, so the platform hears "sent" before "acknowledged".
 func (s *Store) DueCommandReports(ctx context.Context, now time.Time, limit int) ([]domain.CommandReport, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT r.id, r.command_id, r.status, r.occurred_at_ms, r.failure_reason, r.attempt_count
+		SELECT r.id, r.command_id, r.status, r.occurred_at_ms, r.failure_reason, r.attempt_count, r.observation
 		FROM command_reports r
 		WHERE r.abandoned_at_ms IS NULL AND r.next_attempt_at_ms <= ?
 		  AND NOT EXISTS (
@@ -221,13 +233,19 @@ func (s *Store) DueCommandReports(ctx context.Context, now time.Time, limit int)
 	var reports []domain.CommandReport
 	for rows.Next() {
 		var (
-			report     domain.CommandReport
-			status     string
-			occurredMS int64
-			reason     sql.NullString
+			report      domain.CommandReport
+			status      string
+			occurredMS  int64
+			reason      sql.NullString
+			observation []byte
 		)
-		if err := rows.Scan(&report.ID, &report.CommandID, &status, &occurredMS, &reason, &report.Attempts); err != nil {
+		if err := rows.Scan(&report.ID, &report.CommandID, &status, &occurredMS, &reason, &report.Attempts, &observation); err != nil {
 			return nil, fmt.Errorf("scan command report: %w", err)
+		}
+		if observation != nil {
+			if err := json.Unmarshal(observation, &report.Observation); err != nil {
+				return nil, fmt.Errorf("decode report observation: %w", err)
+			}
 		}
 		report.Status = domain.CommandReportStatus(status)
 		report.OccurredAt = time.UnixMilli(occurredMS).UTC()

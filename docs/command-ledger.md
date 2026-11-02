@@ -7,11 +7,12 @@ stays unresolved until it can be retried safely or reconciled.
 ## Decision
 
 `adapter.Ledger` wraps a `CommandAdapter` and stores each command ID in SQLite
-(`command_ledger`, schema version 11).
+(`command_ledger`, schema version 12).
 
 ### Intent is recorded before sending
 
-Each adapter calls `adapter.BeforeSend(ctx)` once, after acquiring a ready
+Each command call explicitly receives an `adapter.SendGate`. The adapter calls
+`send.BeforeSend(ctx)` once, after acquiring a ready
 transport and immediately before sending. The hook commits an `in_flight` row;
 if that fails, nothing is sent. A timeout while waiting for the transport
 records no intent, so the command can be retried.
@@ -31,11 +32,12 @@ in_flight ─┼──────────── device rejects ────
 - **applied**: a retry returns the stored result without contacting the device.
 - **rejected**: the device definitely did not apply it. A retry returns the same
   rejection; trying again needs a new command ID, matching the upstream
-  `failed` state.
+  `failed` state. A credit resent from `unknown` without an outcome query stays
+  `unknown` when refused, because the device may be refusing a repeat it applied.
 - **unknown**: the command may have reached the device but no reply confirmed the
   outcome. On startup every `in_flight` row is marked `unknown`, since no
   process can still be waiting on its reply.
-- A failure before `BeforeSend` (unsupported, invalid, cancelled while queued)
+- A failure before `send.BeforeSend` (unsupported, invalid, cancelled while queued)
   writes no row, so a retry runs normally.
 
 Outcomes are recorded with `context.WithoutCancel`: once the device may have
@@ -50,7 +52,6 @@ The ledger stores a SHA-256 of the command to detect this.
 | Command or device | Action |
 |---|---|
 | Disconnect, reconnect, status | Resend: they set or read absolute state. |
-| Credit by STS token | Resend: meters refuse a token they already accepted. |
 | Device declares `idempotent_refs` | Resend with the same reference. |
 | Adapter implements `adapter.Reconciler` | Ask the device; mark applied, or resend if it confirms the command was not applied. |
 | kWh credit, none of the above | Return `ErrOutcomeUnknown` and never resend automatically. |
@@ -169,8 +170,9 @@ Deploy this API version before updating edge agents; edge agents need no
 change. Verify capture with a known conflicting report: expect `202`,
 unchanged platform status, one conflict audit event, and no new outcome event.
 Do not reopen expired rows or resend hardware commands as a rollout repair.
-Failed or expired `credit_meter` commands are listed as `credit_not_delivered`;
-a platform-side reversal or replacement for them is not implemented yet.
+Failed or expired `credit_meter` commands are listed as `credit_not_delivered`.
+[Meter operations](meter-operations.md) provides audited investigation, resolution,
+linked replacement attempts, and recording of externally completed refunds.
 
 Inventory every legacy expiry with its current state. Rows that have left
 `expired` already appear in the listing as `overturned_expiry`. Rows still
@@ -223,7 +225,8 @@ old from arriving, so the newest surviving entry still decides.
   commands cannot deliver the same funded credit. See [STS vending](sts-vending.md).
 
 `meter_commands.credit_kwh` carries the amount, required exactly for credit
-commands, and one energy credit can be delivered by at most one command. A
+commands, and one energy credit has one root delivery command and may have a serialized chain
+of explicitly authorized replacement attempts. A
 lost credit reply stays unknown unless the device declares `idempotent_refs`
 or `outcome_query`, in line with the retry table above.
 
@@ -255,3 +258,30 @@ See [per-device configuration](hardware-adapters.md#per-device-configuration)
 for adapter selection and [the MQTT command protocol](hardware-adapters.md#mqtt-command-protocol)
 for device integration. Production MQTT commands require
 [broker authentication, TLS and topic ACLs](mqtt-command-security.md).
+
+## Explicit send contract and shared encoding
+
+`CommandAdapter.Execute(ctx, command, send)` requires an explicit `SendGate`.
+The runner starts execution with `adapter.AllowSend()`; each routed ledger adds
+its durable write with `send.Then(...)` before calling the transport. A zero gate
+refuses transmission. Cancellation remains in the context, while send correctness
+no longer depends on finding a callback in context values. Conformance tests
+verify ready-transport ordering, durable-write refusal, cancellation, concurrent
+retries, and adapters that accidentally omit the gate.
+
+MQTT and simulator command adapters share `adapter.EncodeMeterCommand`, including
+Wh conversion and relay polarity. MQTT uses correlation data for the reference;
+the simulator carries it in its JSON envelope. Token delivery is absent from
+this command contract; funded manual STS vending is separate.
+
+Adapter kinds are parsed at configuration ingress, and runtime factory maps
+construct per-device routes. Environment-only simulation is normalized into
+those same routes. Environment-only MQTT requires `EDGE_MQTT_DEVICE_ID`; existing
+inventory deployments already carry device IDs. Remove obsolete `sts_token`
+capability fields when updating declarations: strict YAML parsing now rejects
+that retired capability.
+
+The report failure-reason limit has one source in
+`proto/contracts/meter-command-report.json`. The generator emits constants into
+each independent Go module, so neither depends on the other's internal packages.
+CI rejects stale generated files.

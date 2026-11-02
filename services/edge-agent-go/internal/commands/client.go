@@ -25,7 +25,6 @@ const maxResponseBytes = 1 << 20
 
 // Keep in sync with api-go/internal/domain and the fake platform in runner_test.go;
 // exceeding this limit abandons the report and leaves the platform at sent.
-const maxFailureReasonBytes = 500
 
 type Pending struct {
 	CommandID   string    `json:"command_id"`
@@ -111,10 +110,11 @@ func (c *HTTPClient) ClockOffset() time.Duration {
 
 func (c *HTTPClient) Report(ctx context.Context, report domain.CommandReport) error {
 	payload, err := json.Marshal(struct {
+		Observation   *domain.CommandObservation `json:"observation,omitempty"`
 		Status        domain.CommandReportStatus `json:"status"`
 		OccurredAt    time.Time                  `json:"occurred_at"`
 		FailureReason string                     `json:"failure_reason,omitempty"`
-	}{report.Status, report.OccurredAt.Add(c.ClockOffset()).UTC(), wireFailureReason(report)})
+	}{report.Observation, report.Status, report.OccurredAt.Add(c.ClockOffset()).UTC(), wireFailureReason(report)})
 	if err != nil {
 		return fmt.Errorf("encode command report: %w", err)
 	}
@@ -136,11 +136,11 @@ func wireFailureReason(report domain.CommandReport) string {
 	if strings.TrimSpace(reason) == "" {
 		return "rejected without a reason"
 	}
-	if len(reason) <= maxFailureReasonBytes {
+	if len(reason) <= MaxFailureReasonBytes {
 		return reason
 	}
 	const marker = "…"
-	cut := maxFailureReasonBytes - len(marker)
+	cut := MaxFailureReasonBytes - len(marker)
 	for cut > 0 && !utf8.RuneStart(reason[cut]) {
 		cut--
 	}

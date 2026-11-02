@@ -167,10 +167,12 @@ configuration, health metrics, and conformance tests. See
 [Funded manual STS vending and audited recovery](sts-vending.md) are also implemented.
 
 Physical hardware commissioning, broader vendor maps, SunSpec discovery, firmware
-mismatch detection, adapter-health alert rules, automatic payment-to-token
-dispatch, command templates, fault code maps, platform-created disconnect and
-status commands, status and tamper results in edge reports, and reversing or
-replacing undelivered meter credits remain future work.
+register checks for Modbus devices and automatic payment-to-token dispatch remain
+future work. [Meter operations](meter-operations.md) now includes credit resolution,
+linked redelivery, recording external refunds, manual relay/status commands with
+operator presets, MQTT command templates, durable status/tamper observations, configured MQTT firmware checks
+and fault maps, and deployable adapter alert rules. Automated provider refunds
+and commissioning broader vendor-specific policies remain future work.
 
 ## What Not To Build Yet
 

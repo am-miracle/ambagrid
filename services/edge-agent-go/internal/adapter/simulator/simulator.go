@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"time"
 
 	"edge-agent-go/internal/adapter"
@@ -130,7 +129,7 @@ func unscale(v *int64, factor float64) *float64 {
 	return &f
 }
 
-func (a *Adapter) Execute(ctx context.Context, cmd adapter.Command) (adapter.CommandResult, error) {
+func (a *Adapter) Execute(ctx context.Context, cmd adapter.Command, send adapter.SendGate) (adapter.CommandResult, error) {
 	if err := ctx.Err(); err != nil {
 		return adapter.CommandResult{}, adapter.ContextError(err)
 	}
@@ -141,7 +140,7 @@ func (a *Adapter) Execute(ctx context.Context, cmd adapter.Command) (adapter.Com
 		return adapter.CommandResult{}, err
 	}
 
-	payload, err := json.Marshal(encodeCommand(cmd))
+	payload, err := json.Marshal(adapter.EncodeMeterCommand(cmd))
 	if err != nil {
 		return adapter.CommandResult{}, err
 	}
@@ -151,7 +150,7 @@ func (a *Adapter) Execute(ctx context.Context, cmd adapter.Command) (adapter.Com
 		return adapter.CommandResult{}, err
 	}
 	defer release()
-	if err := adapter.BeforeSend(ctx); err != nil {
+	if err := send.BeforeSend(ctx); err != nil {
 		return adapter.CommandResult{}, err
 	}
 	raw, err := a.device.Send(ctx, payload)
@@ -176,21 +175,6 @@ func (a *Adapter) Execute(ctx context.Context, cmd adapter.Command) (adapter.Com
 		result.TamperDetected = &tamper
 	}
 	return result, nil
-}
-
-func encodeCommand(cmd adapter.Command) vendorCommand {
-	v := vendorCommand{Ref: cmd.ID, Device: cmd.DeviceID}
-	switch cmd.Type {
-	case adapter.CommandCredit:
-		v.Op = "credit"
-		v.Wh = int64(math.Round(cmd.CreditKWh * 1000))
-	case adapter.CommandDisconnect, adapter.CommandReconnect:
-		closed := cmd.Type == adapter.CommandReconnect
-		v.Op, v.Closed = "relay", &closed
-	case adapter.CommandRequestStatus:
-		v.Op = "status"
-	}
-	return v
 }
 
 type canonicalPayload struct {

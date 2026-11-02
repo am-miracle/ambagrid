@@ -53,18 +53,6 @@ func configureHardware(ctx context.Context, cfg config.Config, store adapter.Led
 			result.close()
 		}
 	}()
-	devices := cfg.Devices
-	if cfg.DevicesFile == "" {
-		if cfg.Collector.Enabled {
-			for _, id := range []string{"meter-01", "battery-01", "inverter-01"} {
-				devices = append(devices, config.DeviceConfig{ID: id, Telemetry: "simulator"})
-			}
-		}
-		if cfg.Modbus.Address != "" {
-			unit := cfg.Modbus.UnitID
-			devices = append(devices, config.DeviceConfig{ID: cfg.Modbus.DeviceID, Telemetry: "modbus", Modbus: &config.DeviceModbusConfig{Address: cfg.Modbus.Address, UnitID: &unit, MapFile: cfg.Modbus.MapFile, Timeout: cfg.Modbus.Timeout}})
-		}
-	}
 	var simulated *simulator.Adapter
 	getSimulator := func() *simulator.Adapter {
 		if simulated == nil {
@@ -77,67 +65,69 @@ func configureHardware(ctx context.Context, cfg config.Config, store adapter.Led
 		return simulated
 	}
 	var transport *mqtt.AutopahoTransport
-	routes := map[string]adapter.CommandAdapter{}
-	for _, device := range devices {
-		var source adapter.TelemetryAdapter
-		switch device.Telemetry {
-		case "simulator":
-			source = simulatorDevice{getSimulator(), device.ID}
-		case "modbus":
+
+	telemetryFactories := map[config.AdapterKind]func(config.DeviceConfig) (adapter.TelemetryAdapter, error){
+		config.Simulator: func(device config.DeviceConfig) (adapter.TelemetryAdapter, error) {
+			return simulatorDevice{getSimulator(), device.ID}, nil
+		},
+		config.Modbus: func(device config.DeviceConfig) (adapter.TelemetryAdapter, error) {
 			settings := device.ModbusSettings()
-			registerMap, loadErr := modbus.LoadMap(settings.MapFile)
-			if loadErr != nil {
-				return result, fmt.Errorf("device %q register map: %w", device.ID, loadErr)
+			registerMap, err := modbus.LoadMap(settings.MapFile)
+			if err != nil {
+				return nil, err
 			}
 			client := modbus.NewTCPClient(settings.Address, settings.Timeout)
 			closers = append(closers, func() { _ = client.Close() })
-			source, err = modbus.New(modbus.Config{Map: registerMap, Device: modbus.Device{SiteID: cfg.Queue.SiteID, DeviceID: device.ID}, UnitID: settings.UnitID}, client)
+			return modbus.New(modbus.Config{Map: registerMap, Device: modbus.Device{SiteID: cfg.Queue.SiteID, DeviceID: device.ID}, UnitID: settings.UnitID}, client)
+		},
+	}
+	commandFactories := map[config.AdapterKind]func(config.DeviceConfig) (adapter.CommandAdapter, error){
+		config.Simulator: func(config.DeviceConfig) (adapter.CommandAdapter, error) { return getSimulator(), nil },
+		config.MQTT: func(device config.DeviceConfig) (adapter.CommandAdapter, error) {
+			caps, err := adapter.LoadCapabilities(device.CapabilitiesFile)
 			if err != nil {
-				return result, fmt.Errorf("device %q: %w", device.ID, err)
-			}
-		}
-		if source != nil {
-			result.sources = append(result.sources, metrics.Telemetry(device.Telemetry, device.ID, source))
-		}
-		if !cfg.Commands.Enabled || device.Command == "" {
-			continue
-		}
-		var command adapter.CommandAdapter
-		switch device.Command {
-		case "simulator":
-			command = getSimulator()
-		case "mqtt":
-			caps, loadErr := adapter.LoadCapabilities(device.CapabilitiesFile)
-			if loadErr != nil {
-				return result, fmt.Errorf("device %q capabilities: %w", device.ID, loadErr)
+				return nil, err
 			}
 			if transport == nil {
 				transport, err = dialCommandMQTT(ctx, cfg.Commands.MQTT)
 				if err != nil {
-					return result, err
+					return nil, err
 				}
 				closers = append(closers, transport.Close)
 			}
-			topics, topicErr := mqtt.NewTopics(cfg.Commands.MQTT.CommandTopic, cfg.Commands.MQTT.ReplyTopic, cfg.Queue.SiteID)
-			if topicErr != nil {
-				return result, topicErr
-			}
-			command, err = subscribeCommandMQTT(ctx, mqtt.Config{DeviceID: device.ID, Topics: topics, Capabilities: caps, ResponseTimeout: cfg.Commands.MQTT.ResponseTimeout}, transport)
+			topics, err := mqtt.NewTopics(cfg.Commands.MQTT.CommandTopic, cfg.Commands.MQTT.ReplyTopic, cfg.Queue.SiteID)
 			if err != nil {
-				return result, fmt.Errorf("device %q MQTT: %w", device.ID, err)
+				return nil, err
 			}
-		}
-		routes[device.ID] = metrics.Command(device.Command, device.ID, adapter.NewLedger(store, command))
+			return subscribeCommandMQTT(ctx, mqtt.Config{DeviceID: device.ID, Topics: topics, Capabilities: caps, ResponseTimeout: cfg.Commands.MQTT.ResponseTimeout}, transport)
+		},
 	}
-	if cfg.Commands.Enabled && cfg.DevicesFile == "" {
-		command, closeCommand, configureErr := newCommandAdapter(ctx, cfg, simulated)
-		if configureErr != nil {
-			return result, configureErr
+	routes := map[string]adapter.CommandAdapter{}
+	for _, device := range cfg.Devices {
+		if device.Telemetry != "" {
+			factory, ok := telemetryFactories[device.Telemetry]
+			if !ok {
+				return result, fmt.Errorf("device %q: no telemetry factory for %q", device.ID, device.Telemetry)
+			}
+			source, err := factory(device)
+			if err != nil {
+				return result, fmt.Errorf("device %q telemetry: %w", device.ID, err)
+			}
+			result.sources = append(result.sources, metrics.Telemetry(string(device.Telemetry), device.ID, source))
 		}
-		closers = append(closers, closeCommand)
-		result.executor = metrics.Command(cfg.Commands.Adapter, "all", adapter.NewLedger(store, command))
-	} else {
-		result.executor = adapter.NewRouter(routes)
+		if !cfg.Commands.Enabled || device.Command == "" {
+			continue
+		}
+		factory, ok := commandFactories[device.Command]
+		if !ok {
+			return result, fmt.Errorf("device %q: no command factory for %q", device.ID, device.Command)
+		}
+		command, err := factory(device)
+		if err != nil {
+			return result, fmt.Errorf("device %q command: %w", device.ID, err)
+		}
+		routes[device.ID] = metrics.Command(string(device.Command), device.ID, adapter.NewLedger(store, command))
 	}
+	result.executor = adapter.NewRouter(routes)
 	return result, nil
 }

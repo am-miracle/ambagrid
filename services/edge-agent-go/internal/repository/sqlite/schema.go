@@ -7,7 +7,7 @@ import (
 	"edge-agent-go/internal/domain"
 )
 
-const schemaVersion = 11
+const schemaVersion = 12
 
 // Legacy request times sort at the end of their millisecond. This expression
 // also defines the v11 index; keep it immutable to preserve migration behavior.
@@ -135,6 +135,7 @@ CREATE TABLE IF NOT EXISTS command_reports (
     status             TEXT NOT NULL CHECK (status IN ('sent', 'acknowledged', 'failed', 'expired')),
     occurred_at_ms     INTEGER NOT NULL,
     failure_reason     TEXT,
+    observation        BLOB,
     attempt_count      INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
     next_attempt_at_ms INTEGER NOT NULL,
     last_error         TEXT,
@@ -385,6 +386,7 @@ func (s *Store) migrateSchema(ctx context.Context, version int) error {
 			{8, migrateV8ToV9, "migrate queue schema from version 8 to 9"},
 			{9, migrateV9ToV10, "migrate queue schema from version 9 to 10"},
 			{10, migrateV10ToV11, "migrate queue schema from version 10 to 11"},
+			{11, "ALTER TABLE command_reports ADD COLUMN observation BLOB;", "migrate queue schema from version 11 to 12"},
 		}
 		for _, m := range incremental {
 			if version > m.from {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"go.yaml.in/yaml/v2"
@@ -30,8 +31,35 @@ func ParseCapabilities(data []byte) (Capabilities, error) {
 	if strings.TrimSpace(caps.Manufacturer) == "" || strings.TrimSpace(caps.Model) == "" {
 		return Capabilities{}, fmt.Errorf("capability declaration needs a manufacturer and model")
 	}
-	if caps.Capabilities.STSToken && !caps.Capabilities.PrepaidCredit {
-		return Capabilities{}, fmt.Errorf("capability declaration has sts_token without prepaid_credit")
+	if len(caps.FirmwareVersions) > 0 && !caps.Capabilities.Telemetry {
+		return Capabilities{}, fmt.Errorf("firmware verification requires status capability")
+	}
+	for _, v := range caps.FirmwareVersions {
+		if strings.TrimSpace(v) == "" || len(v) > 200 {
+			return Capabilities{}, fmt.Errorf("invalid firmware version")
+		}
+	}
+	for code, fault := range caps.FaultCodes {
+		if strings.TrimSpace(code) == "" || strings.TrimSpace(fault.Description) == "" || len(fault.Description) > 500 {
+			return Capabilities{}, fmt.Errorf("fault codes require a code and description")
+		}
+		switch fault.Severity {
+		case "info", "warning", "critical":
+		default:
+			return Capabilities{}, fmt.Errorf("invalid fault severity for %q", code)
+		}
+	}
+	for commandType, template := range caps.CommandTemplates {
+		sample := Command{ID: "sample", Type: commandType, DeviceID: "sample", CreditKWh: 1}
+		if !slices.Contains(CommandTypes, commandType) {
+			return Capabilities{}, fmt.Errorf("command template for unknown command %q", commandType)
+		}
+		if err := caps.Supports(sample); err != nil {
+			return Capabilities{}, fmt.Errorf("command template: %w", err)
+		}
+		if _, err := RenderCommandTemplate(template, sample); err != nil {
+			return Capabilities{}, fmt.Errorf("command template: %w", err)
+		}
 	}
 	return caps, nil
 }

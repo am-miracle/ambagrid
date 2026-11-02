@@ -455,9 +455,9 @@ A `202` confirms evidence was saved; it does not confirm execution or correct st
 ### `GET /v1/meter-commands/reconciliation`
 
 A read-only operator listing of meter commands that need reconciliation, across
-all sites. Like `/v1/sites`, it does not take an edge site key; deploy it
-behind the gateway that authenticates operators. `site_id` narrows it to one
-site. `limit` and `cursor` follow [Pagination](#pagination), so a `limit`
+all sites. It requires an operator bearer key configured by `API_OPERATOR_KEYS`,
+because entries include case owners, evidence and refund references; an edge
+site key is refused. `site_id` narrows it to one site. `limit` and `cursor` follow [Pagination](#pagination), so a `limit`
 over the maximum is a 400; `cursor` continues in oldest-request-first order.
 The response uses the standard `data`, `page`, and `request_id` collection
 envelope.
@@ -470,8 +470,9 @@ envelope.
 - `conflicting_report`: has retained reports that contradict its settled
   outcome;
 - `credit_not_delivered`: a `credit_meter` command that `failed` or `expired`.
-  The balance still holds the credit and the meter does not. It stays listed,
-  because the listing has no resolve action yet and the command cannot be replaced;
+  The balance still holds the credit and the meter does not. It stays listed
+  until resolved through [meter operations](meter-operations.md);
+- `case_open`: an acknowledged command with a case still under investigation;
 - `overdue_outcome_unknown`: `queued` or `sent` past `expires_at`, with no
   outcome yet.
 
@@ -566,5 +567,27 @@ and pins the connection that cancelling it was meant to free.
   storage tables but no public collection handlers yet.
 - **General writes.** Alert resolution is the only operator command exposed
   here. Payment writes are limited to the provider webhook and local-development
-  injection route; manual credits, customer changes, and direct meter commands
-  are not here yet.
+  injection route; manual credits and customer changes are not here yet. Direct
+  meter commands are the audited [operator meter operations](#operator-meter-operations).
+
+## Operator meter operations
+
+See [Meter operations](meter-operations.md) for request bodies, deployment,
+capability commissioning, compensation restrictions, and examples. These routes
+require an operator bearer key configured by `API_OPERATOR_KEYS`:
+
+- `GET /v1/meter-command-templates`
+- `POST /v1/meter-commands`
+- `GET /v1/meter-commands/{command_id}`
+- `POST /v1/meter-commands/{command_id}/reconcile`
+- `GET /v1/meter-commands/reconciliation`
+- `GET /v1/meter-commands/reconciliation/resolved`
+- `GET /v1/meter-commands/refund-shortfalls`
+
+`API_METRICS_ADDR` optionally serves backlog `/metrics` on a separate listener; see
+[monitoring](../deploy/monitoring/README.md).
+
+The reconciliation listing now includes case ownership/state, credit ID/amount,
+and a `needs_review` flag. Resolved cases leave the default listing unless new
+conflicting evidence arrives. Edge acknowledgement reports may include an
+`observation` object with relay, balance, tamper, firmware, and fault fields.

@@ -20,7 +20,16 @@ const (
 	ReportExpired      CommandReportStatus = "expired"
 )
 
+type CommandObservation struct {
+	RelayClosed     *bool    `json:"relay_closed,omitempty"`
+	BalanceKWh      *float64 `json:"balance_kwh,omitempty"`
+	TamperDetected  *bool    `json:"tamper_detected,omitempty"`
+	FirmwareVersion string   `json:"firmware_version,omitempty"`
+	FaultCode       string   `json:"fault_code,omitempty"`
+}
+
 type CommandReport struct {
+	Observation   *CommandObservation
 	ID            int64
 	CommandID     string
 	Status        CommandReportStatus

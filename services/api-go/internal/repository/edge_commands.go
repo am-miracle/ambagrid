@@ -11,6 +11,7 @@ import (
 type EdgeCommandRepository interface {
 	RunEdgeCommandTx(ctx context.Context, fn func(EdgeCommandTx) error) error
 	ListCommandReconciliation(ctx context.Context, siteID *string, now time.Time, limit int, after *page.TimeIDCursor) (page.Page[domain.CommandReconciliation], error)
+	ReconciliationBacklog(ctx context.Context, now time.Time) (domain.ReconciliationBacklog, error)
 }
 
 type EdgeCommandTx interface {
@@ -22,6 +23,6 @@ type EdgeCommandTx interface {
 	LockSiteCommand(ctx context.Context, siteID, commandID string) (domain.MeterCommand, error)
 	SaveCommandStatus(ctx context.Context, cmd domain.MeterCommand) error
 	RetainConflictingReport(context.Context, string, domain.MeterCommand, domain.CommandReport) error
-	PublishCommandOutcome(ctx context.Context, topic, eventType string, cmd domain.MeterCommand, siteID, reportedBy string, occurredAt time.Time) error
+	PublishCommandOutcome(ctx context.Context, topic, eventType string, outcome domain.CommandOutcome) error
 	InsertAuditEvent(ctx context.Context, siteID, actorID, action, subjectType, subjectID string, metadata map[string]any) error
 }

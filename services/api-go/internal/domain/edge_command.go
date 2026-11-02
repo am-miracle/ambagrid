@@ -3,11 +3,11 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"math"
+	"reflect"
 	"strings"
 	"time"
 )
-
-const maxFailureReasonBytes = 500
 
 var ErrInvalidReport = errors.New("invalid command report")
 
@@ -26,6 +26,7 @@ type EdgeCommand struct {
 }
 
 type CommandReport struct {
+	Observation   *CommandObservation
 	CommandID     string
 	Status        MeterCommandStatus
 	OccurredAt    time.Time
@@ -50,10 +51,13 @@ const (
 	ReconciliationConflictingReport ReconciliationReason = "conflicting_report"
 	ReconciliationOutcomeUnknown    ReconciliationReason = "overdue_outcome_unknown"
 	ReconciliationCreditUndelivered ReconciliationReason = "credit_not_delivered"
+	ReconciliationCaseOpen          ReconciliationReason = "case_open"
 )
 
 // CommandReconciliation keeps an unresolved delivery separate from a conflicting report.
 type CommandReconciliation struct {
+	Case        *ReconciliationCase
+	NeedsReview bool
 	SiteCommand
 	Site                     Site
 	LastReportAt             *time.Time
@@ -75,14 +79,23 @@ func (r CommandReconciliation) Reason() ReconciliationReason {
 		return ReconciliationOverturnedExpiry
 	case r.ConflictCount > 0:
 		return ReconciliationConflictingReport
-	case r.Command.CommandType == CommandCreditMeter && (r.Command.Status == CommandStatusFailed || r.Command.Status == CommandStatusExpired):
+	case r.Command.UndeliveredCredit():
 		return ReconciliationCreditUndelivered
+	case r.Case != nil && r.Case.State != CaseResolved && r.Command.Status == CommandStatusAcknowledged:
+		return ReconciliationCaseOpen
 	default:
 		return ReconciliationOutcomeUnknown
 	}
 }
 
 func (r CommandReport) Validate() error {
+	if r.Observation != nil {
+		o := r.Observation
+		if r.Status != CommandStatusAcknowledged || (o.BalanceKWh != nil && (math.IsNaN(*o.BalanceKWh) || math.IsInf(*o.BalanceKWh, 0))) || len(o.FirmwareVersion) > 200 || len(o.FaultCode) > 200 {
+			return fmt.Errorf("%w: invalid command observation", ErrInvalidReport)
+		}
+	}
+
 	if err := ValidateCommandID(r.CommandID); err != nil {
 		return err
 	}
@@ -95,8 +108,8 @@ func (r CommandReport) Validate() error {
 		if strings.TrimSpace(r.FailureReason) == "" {
 			return fmt.Errorf("%w: failed commands need a failure_reason", ErrInvalidReport)
 		}
-		if len(r.FailureReason) > maxFailureReasonBytes {
-			return fmt.Errorf("%w: failure_reason must not exceed %d bytes", ErrInvalidReport, maxFailureReasonBytes)
+		if len(r.FailureReason) > MaxFailureReasonBytes {
+			return fmt.Errorf("%w: failure_reason must not exceed %d bytes", ErrInvalidReport, MaxFailureReasonBytes)
 		}
 	default:
 		return fmt.Errorf("%w: status %q cannot be reported by an edge agent", ErrInvalidReport, r.Status)
@@ -105,6 +118,10 @@ func (r CommandReport) Validate() error {
 		return fmt.Errorf("%w: occurred_at is required", ErrInvalidReport)
 	}
 	return nil
+}
+
+func (c MeterCommand) UndeliveredCredit() bool {
+	return c.CommandType == CommandCreditMeter && (c.Status == CommandStatusFailed || c.Status == CommandStatusExpired)
 }
 
 // ClampOccurredAt bounds a gateway-reported time to when the command could
@@ -128,6 +145,9 @@ func (c MeterCommand) ApplyReport(r CommandReport) (MeterCommand, bool, error) {
 	}
 	switch c.Status {
 	case CommandStatusAcknowledged:
+		if r.Status == CommandStatusAcknowledged && r.Observation != nil && !reflect.DeepEqual(c.Observation, r.Observation) {
+			return conflict()
+		}
 		switch r.Status {
 		case CommandStatusAcknowledged, CommandStatusSent:
 			return c, false, nil
@@ -155,6 +175,8 @@ func (c MeterCommand) ApplyReport(r CommandReport) (MeterCommand, bool, error) {
 
 	next := c
 	next.Status = r.Status
+	next.Observation = r.Observation
+	next.ObservedAt = &at
 	switch r.Status {
 	case CommandStatusSent:
 		next.SentAt = &at
@@ -174,4 +196,12 @@ func (c MeterCommand) ApplyReport(r CommandReport) (MeterCommand, bool, error) {
 		next.FailureReason = &reason
 	}
 	return next, true, nil
+}
+
+// CommandOutcome is the settled device outcome with its reporting provenance.
+type CommandOutcome struct {
+	Command    MeterCommand
+	SiteID     string
+	ReportedBy string
+	OccurredAt time.Time
 }

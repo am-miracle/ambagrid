@@ -87,8 +87,9 @@ gateways default to a 256 MiB filesystem reserve.
 | `EDGE_COMMAND_PRUNE_INTERVAL` | `1h` | Interval between ledger pruning passes. Unresolved commands are never pruned. |
 | `EDGE_COMMANDS_ENABLED` | `false` | Fetch meter commands from api-go and run them through the command ledger. |
 | `EDGE_COMMAND_ADAPTER` | `simulator` | `simulator` (requires `EDGE_SIMULATOR_ENABLED`) or `mqtt`. |
+| `EDGE_MQTT_DEVICE_ID` | required without inventory | Explicit target device for environment-only MQTT commands; site-wide routing is unsupported. |
 | `EDGE_MQTT_BROKER` | required for `mqtt` | TLS broker URL, e.g. `ssl://broker:8883` or `mqtts://broker:8883`. |
-| `EDGE_MQTT_CAPABILITIES_FILE` | required for `mqtt` | YAML capability declaration of the meters behind the broker. |
+| `EDGE_MQTT_CAPABILITIES_FILE` | required for `mqtt` | YAML capability declaration of the configured meter. |
 | `EDGE_MQTT_COMMAND_TOPIC` | `site/{site_id}/meter/{device_id}/cmd` | Command topic template; `{device_id}` must fill a whole level. |
 | `EDGE_MQTT_REPLY_TOPIC` | `site/{site_id}/meter/{device_id}/cmd/reply` | Per-device reply topic template, sent as each request's `ResponseTopic`. |
 | `EDGE_MQTT_RESPONSE_TIMEOUT` | `30s` | How long to wait for a device's reply; a PUBACK alone is not an answer. |
@@ -214,3 +215,14 @@ including the Victron Cerbo GX battery map.
 `go test -tags=integration ./...` also runs the MQTT adapter's conformance suite
 over autopaho against an in-process MQTT v5 broker, and the Modbus client
 against an in-process Modbus TCP server, so neither needs external services.
+
+
+Command adapters now receive an explicit `adapter.SendGate` argument. The ledger
+adds the durable send-intent write to that gate before calling the transport;
+there is no context-carried send hook. Adapters must acquire a ready transport,
+then call `send.BeforeSend(ctx)` and transmit only when it succeeds.
+
+The meter report byte limit is generated independently for each Go module from
+`proto/contracts/meter-command-report.json`. Regenerate with
+`python3 scripts/generate_command_contract.py` at the repository root; CI checks
+for drift with `--check`.

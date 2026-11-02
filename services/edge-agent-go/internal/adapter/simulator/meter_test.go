@@ -79,7 +79,7 @@ func TestOfflineMeterFreezesLastSeenAndTimesOutCommands(t *testing.T) {
 	credit := adapter.Command{ID: "credit", Type: adapter.CommandCredit, DeviceID: meterID, CreditKWh: 1}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if _, err := a.Execute(ctx, credit); !errors.Is(err, adapter.ErrTimeout) {
+	if _, err := a.Execute(ctx, credit, adapter.AllowSend()); !errors.Is(err, adapter.ErrTimeout) {
 		t.Fatalf("command to offline meter error = %v, want ErrTimeout", err)
 	}
 	if n := len(a.Device().Received()); n != 0 {
@@ -111,7 +111,7 @@ func TestMeterOfflineBeforeFirstPollIsOmitted(t *testing.T) {
 
 func execute(t *testing.T, a *Adapter, cmd adapter.Command) adapter.CommandResult {
 	t.Helper()
-	result, err := a.Execute(context.Background(), cmd)
+	result, err := a.Execute(context.Background(), cmd, adapter.AllowSend())
 	if err != nil {
 		t.Fatalf("execute %s: %v", cmd.ID, err)
 	}

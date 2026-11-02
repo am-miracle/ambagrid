@@ -113,8 +113,9 @@ Useful configuration files:
 - MQTT topic maps
 - unit conversion rules
 - device capability declarations
-- command templates (not yet implemented)
-- fault code maps (not yet implemented)
+- MQTT command templates (see below)
+- [operator command presets](meter-operations.md)
+- [configured MQTT fault-code maps](meter-operations.md)
 
 Example capability declaration:
 
@@ -126,7 +127,6 @@ capabilities:
   telemetry: true
   relay_control: true
   prepaid_credit: true
-  sts_token: true
   idempotent_refs: false
   outcome_query: false
 ```
@@ -136,6 +136,23 @@ capabilities:
 `outcome_query` declares that the device can answer whether it applied a given command reference, which lets an unknown outcome be settled without resending.
 
 Unknown capability keys fail startup.
+
+An MQTT device that does not speak the default request body can declare
+`command_templates`, one JSON object per command type, without a rebuild:
+
+```yaml
+command_templates:
+  credit_meter: '{"cmd":"topup","meter":{device},"wh":{wh}}'
+  disconnect_meter: '{"cmd":"open","meter":{device}}'
+  reconnect_meter: '{"cmd":"close","meter":{device}}'
+  request_meter_status: '{"cmd":"read","meter":{device}}'
+```
+
+Placeholders stand unquoted and are filled with JSON values: `{device}` always,
+and `{wh}` for credits. Unknown placeholders, invalid JSON and commands the device
+does not support fail at startup. Templates shape requests only. Correlation and
+replies still follow the protocol below, and firmware probes use the
+`request_meter_status` template.
 
 ## MQTT Command Protocol
 
@@ -163,14 +180,14 @@ The gateway subscribes to every device's reply topic before it publishes anythin
 {"op": "status", "device": "meter-01"}
 ```
 
-A credit carries either `wh` or an STS `token`. The device publishes its reply to the request's `ResponseTopic`, echoing its `CorrelationData`:
+A credit carries `wh`. The device publishes its reply to the request's `ResponseTopic`, echoing its `CorrelationData`:
 
 ```json
 {"ok": true, "ts_ms": 1790865060000, "relay": 1, "balance_wh": 12500}
 {"ok": false, "code": "E_METER_LOCKED", "msg": "meter cover open"}
 ```
 
-`ok` must be present. Only an explicit `"ok": false` records the command as rejected, which the ledger treats as definitely not applied. A reply without `ok`, such as `{}` or `null`, leaves the outcome unknown.
+`ok` must be present. An explicit `"ok": false` records the command as rejected, which the ledger treats as definitely not applied, except on a credit resent after a lost reply: there a device may be refusing a repeat it already applied, so the outcome stays unknown. A reply without `ok`, such as `{}` or `null`, leaves the outcome unknown.
 
 A reply is only accepted on the reply topic of the device the request went to: the command ID is guessable, so the topic, which broker access rules restrict to that device, says who answered. A PUBACK only means the broker has the request; the gateway waits up to `EDGE_MQTT_RESPONSE_TIMEOUT` (default 30s) for the device's reply. A device declaring `outcome_query` also answers `{"op": "outcome", "device": "meter-01", "target": "cmd-0101"}`, sent with its own correlation value, with `{"ok": true, "applied": true}` plus its status fields. Device IDs containing `/`, `+`, or `#` are refused. Fixtures for the suite are in `services/edge-agent-go/internal/adapter/testdata/mqtt/`.
 
@@ -193,12 +210,12 @@ Success gauges start at zero. Counters reset on process restart. Cached ledger
 successes and outcome queries do not refresh the successful-command gauge.
 Unavailable-value sentinels represent missing data, not unsupported registers,
 and do not increment the unsupported counter. Explicit inventory routes use
-their configured device ID; the legacy site-wide command route uses `all`.
+their configured device ID. Every command route is now device-specific.
 Command IDs and error text are never metric labels.
 
-Firmware mismatch detection and adapter-health alert rules are not yet implemented.
-Nothing on the platform creates `disconnect_meter` or `request_meter_status`
-commands yet, and edge reports carry no status or tamper result.
+[Meter operations](meter-operations.md) provides optional MQTT firmware
+verification, deployable adapter alert rules, authorized disconnect/status
+commands, and durable status/tamper observations in edge acknowledgements.
 
 ## Per-device configuration
 
@@ -239,7 +256,9 @@ still applies to all telemetry sources.
 The inventory replaces `EDGE_SIMULATOR_ENABLED=true`, `EDGE_MODBUS_ADDRESS`,
 `EDGE_COMMAND_ADAPTER` and `EDGE_MQTT_CAPABILITIES_FILE`; mixing these selection
 settings is rejected. Without an inventory, the existing environment-only setup
-continues to work. Container deployments must mount the inventory and referenced
+is normalized to the same per-device routing. Environment-only MQTT selection
+requires `EDGE_MQTT_DEVICE_ID`; the adapter no longer has a site-wide mode.
+Container deployments must mount the inventory and referenced
 maps/capability files into the container with paths that agree.
 
 CI explicitly runs simulator, MQTT and Modbus conformance tests with `-race` and
@@ -337,3 +356,11 @@ specify these read-only battery fields; decode signed values before dividing:
 
 This integration provides telemetry only. Its fixtures use a local Modbus server;
 physical hardware compatibility and freshness require commissioning.
+
+## Operator workflows, firmware, and alerts
+
+[Meter operations](meter-operations.md) documents manual command templates,
+capability profiles, durable status/tamper reports, optional MQTT firmware
+allowlists and model-specific fault-code declarations. Load the
+[monitoring rules](../deploy/monitoring/README.md) to alert on stale adapters,
+repeated failures, firmware mismatches and unresolved delivery outcomes.

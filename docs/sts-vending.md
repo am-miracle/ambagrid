@@ -33,7 +33,8 @@ reservations remain visible for reconciliation; new ones require funding.
 
 STS vending deliberately skips `MeterCommand`: nothing reaches a device, so an
 operator delivers tokens by hand, and the `sts-vend` reservation carries the
-audit trail. The adapter's `sts_token` path stays unused until automatic dispatch.
+audit trail. Token dispatch is not part of the edge command contract; an unused
+STS-token transport path has been removed.
 
 The existing kWh ledger is accounting based on the platform tariff; actual provider
 units/rounding are retained in the vend result. Automatic dispatch and accounting
@@ -44,11 +45,27 @@ outside this system for a payment already delivered through another route.
 
 From `services/api-go`, set `DATABASE_URL`, `PRISMVEND_URL`, and the stable
 `PRISMVEND_INSTALLATION`. Find funded credits that have no vend yet (up to 200,
-oldest first):
+oldest first; pass the last row's `credit_id` as `-after` for the next page):
 
 ```sh
 go run ./cmd/sts-vend -list-unvended
 ```
+
+Each row is a confirmed payment. `blocked_reason`, when present, says what must be
+corrected, such as `meter_configuration_changed`, before that credit can be vended.
+
+If a credit should not be vended, pay the refund through your provider first, then
+record it. This never sends money:
+
+```sh
+go run ./cmd/sts-vend -payment PAYMENT_UUID -refund-reference PROVIDER_REFUND_REF \
+  -actor operator-name -evidence 'provider refund confirmation'
+```
+
+It reverses what the balance holds of that credit, records any remainder as a
+shortfall in `-list-shortfalls`, and permanently blocks vending that payment. It is
+refused while a vend is active or once any reservation exists; use the
+reconciliation commands below for those. The payment's status stays `confirmed`.
 
 Then vend with the confirmed payment UUID. `-actor` is required and is saved on
 the reservation as `requested_by`:
@@ -201,3 +218,14 @@ The integration uses these PrismVend contract details:
 Protocol tests use a local HTTP server. A live PrismVend installation, licensed
 Security Module, production keys, tariffs and physical token acceptance require
 commissioning.
+
+## Reconciliation implementation
+
+Reservation transition decisions and jointly affordable credit-reversal planning
+live in the domain module. The Postgres adapter still owns the advisory lock,
+row locks, atomic balance update, reversal record, audit, and commit.
+Reversal planning uses exact integer micro-kWh and arbitrary-precision intermediate
+products, preserving whole-minor-unit quantization and downward energy rounding.
+The integration suite checks missing balances, legacy repairs, duplicate decisions,
+conservation, and maximum-size money values. An independent SQL oracle retains
+the previous PostgreSQL calculation to detect changes in arithmetic behavior.

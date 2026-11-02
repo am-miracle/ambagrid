@@ -15,7 +15,7 @@ type deviceCommand struct {
 }
 
 func (d *deviceCommand) Capabilities() adapter.Capabilities { return adapter.Capabilities{} }
-func (d *deviceCommand) Execute(_ context.Context, cmd adapter.Command) (adapter.CommandResult, error) {
+func (d *deviceCommand) Execute(_ context.Context, cmd adapter.Command, send adapter.SendGate) (adapter.CommandResult, error) {
 	d.calls++
 	if cmd.DeviceID != d.id {
 		panic("routed to wrong device")
@@ -30,13 +30,13 @@ func TestRouterSelectsExactDeviceWithoutFallback(t *testing.T) {
 	routes := map[string]adapter.CommandAdapter{"a": a, "b": b}
 	router := adapter.NewRouter(routes)
 	delete(routes, "a")
-	if _, err := router.Execute(context.Background(), adapter.Command{ID: "cmd-a", DeviceID: "a"}); err != nil {
+	if _, err := router.Execute(context.Background(), adapter.Command{ID: "cmd-a", DeviceID: "a"}, adapter.AllowSend()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := router.Execute(context.Background(), adapter.Command{ID: "cmd-b", DeviceID: "b"}); !errors.Is(err, adapter.ErrUnsupported) {
+	if _, err := router.Execute(context.Background(), adapter.Command{ID: "cmd-b", DeviceID: "b"}, adapter.AllowSend()); !errors.Is(err, adapter.ErrUnsupported) {
 		t.Fatal(err)
 	}
-	if _, err := router.Execute(context.Background(), adapter.Command{ID: "unknown", DeviceID: "unknown"}); !errors.Is(err, adapter.ErrUnsupported) {
+	if _, err := router.Execute(context.Background(), adapter.Command{ID: "unknown", DeviceID: "unknown"}, adapter.AllowSend()); !errors.Is(err, adapter.ErrUnsupported) {
 		t.Fatal(err)
 	}
 	if a.calls != 1 || b.calls != 1 {

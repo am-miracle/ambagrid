@@ -35,7 +35,7 @@ export class ApiError extends Error {
 
 type Query = Record<string, string | number | undefined>;
 
-async function request<T>(
+export async function request<T>(
 	path: string,
 	query: Query = {},
 	init: RequestInit = {},

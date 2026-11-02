@@ -28,20 +28,22 @@ func main() {
 func run() error {
 	var request domain.STSVendRequest
 	var unresolved, shortfalls, unvended, notIssued bool
-	var recoverFile, actor, evidence string
+	var recoverFile, actor, evidence, afterCredit, refundReference string
 	flag.StringVar(&request.Reference, "reference", "", "reservation reference for reconciliation")
 	flag.StringVar(&request.PaymentID, "payment", "", "confirmed STS-routed payment ID")
 	flag.BoolVar(&unresolved, "list-unresolved", false, "list incomplete reservations and retry eligibility without contacting provider")
 	flag.BoolVar(&shortfalls, "list-shortfalls", false, "list non-issuance reversals the balance could not fully cover")
-	flag.BoolVar(&unvended, "list-unvended", false, "list funded STS credits with no vend reserved")
+	flag.BoolVar(&unvended, "list-unvended", false, "list funded STS credits with no vend reserved, 200 at a time")
+	flag.StringVar(&afterCredit, "after", "", "credit_id of the last -list-unvended row, to read the next page")
 	flag.StringVar(&recoverFile, "recover", "", "JSON result recovered from provider records")
 	flag.BoolVar(&notIssued, "not-issued", false, "record provider non-issuance and reverse its funded credit; never retries")
+	flag.StringVar(&refundReference, "refund-reference", "", "reference of a refund already paid for an unvended -payment; reverses its credit and blocks vending")
 	flag.StringVar(&actor, "actor", "", "operator identity for the vend or reconciliation audit")
 	flag.StringVar(&evidence, "evidence", "", "provider transaction or support evidence reference")
 	flag.StringVar(&request.MeterID, "meter", "", "registered DRN/PAN or blind IDRecord")
 	flag.Int64Var(&request.AmountMinor, "amount-minor", 0, "net-of-fees amount in the vending installation's currency hundredths")
 	flag.Parse()
-	if !unresolved && !shortfalls && !unvended && recoverFile == "" && !notIssued {
+	if !unresolved && !shortfalls && !unvended && recoverFile == "" && !notIssued && refundReference == "" {
 		request.Reference = request.PaymentID
 		request.RequestedBy = actor
 		if err := request.ValidateFunding(); err != nil {
@@ -63,7 +65,7 @@ func run() error {
 	defer pool.Close()
 	store := postgres.NewSTSVendStore(pool, installation)
 	modes := 0
-	for _, selected := range []bool{unresolved, shortfalls, unvended, recoverFile != "" || notIssued} {
+	for _, selected := range []bool{unresolved, shortfalls, unvended, recoverFile != "" || notIssued, refundReference != ""} {
 		if selected {
 			modes++
 		}
@@ -78,8 +80,18 @@ func run() error {
 		}
 		return json.NewEncoder(os.Stdout).Encode(records)
 	}
+	if refundReference != "" {
+		plan, err := services.RefundUnvendedSTSCredit(ctx, store, domain.STSCreditRefund{PaymentID: request.PaymentID, Reference: refundReference, Actor: actor, Evidence: evidence})
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(map[string]any{
+			"reversed_kwh": plan.Reversed.KWh, "reversed_money_minor": plan.Reversed.MoneyMinor,
+			"shortfall_kwh": plan.Shortfall.KWh, "shortfall_money_minor": plan.Shortfall.MoneyMinor,
+		})
+	}
 	if unvended {
-		records, err := services.ListUnvendedSTSCredits(ctx, store)
+		records, err := services.ListUnvendedSTSCredits(ctx, store, afterCredit)
 		if err != nil {
 			return err
 		}

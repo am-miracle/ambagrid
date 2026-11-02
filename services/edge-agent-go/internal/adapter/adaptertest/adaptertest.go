@@ -110,7 +110,7 @@ func RunCommand(t *testing.T, factory CommandFactory) {
 		h := factory(t)
 		cmd := probeCommand(t, h)
 		testCancelled(t, h.Device.Stall, func(ctx context.Context) error {
-			_, err := h.Adapter.Execute(ctx, cmd)
+			_, err := h.Adapter.Execute(ctx, cmd, adapter.AllowSend())
 			return err
 		})
 	})
@@ -118,7 +118,7 @@ func RunCommand(t *testing.T, factory CommandFactory) {
 		h := factory(t)
 		cmd := probeCommand(t, h)
 		testTimeout(t, h.Device.Stall, func(ctx context.Context) error {
-			_, err := h.Adapter.Execute(ctx, cmd)
+			_, err := h.Adapter.Execute(ctx, cmd, adapter.AllowSend())
 			return err
 		})
 		if n := len(h.Device.Received()); n != 0 {
@@ -259,7 +259,7 @@ func testDeclaresCapabilities(t *testing.T, h CommandHarness) {
 
 func testSendsVendorPayload(t *testing.T, h CommandHarness) {
 	cmd := fixtureCommand(t, h)
-	result, err := h.Adapter.Execute(withDeadline(t), cmd)
+	result, err := h.Adapter.Execute(withDeadline(t), cmd, adapter.AllowSend())
 	if err != nil {
 		t.Fatalf("execute fixture command: %v", err)
 	}
@@ -276,11 +276,11 @@ func testSendsVendorPayload(t *testing.T, h CommandHarness) {
 
 func testRetryAppliesOnce(t *testing.T, h CommandHarness) {
 	cmd := fixtureCommand(t, h)
-	first, err := h.Adapter.Execute(withDeadline(t), cmd)
+	first, err := h.Adapter.Execute(withDeadline(t), cmd, adapter.AllowSend())
 	if err != nil {
 		t.Fatalf("first attempt: %v", err)
 	}
-	second, err := h.Adapter.Execute(withDeadline(t), cmd)
+	second, err := h.Adapter.Execute(withDeadline(t), cmd, adapter.AllowSend())
 	if err != nil {
 		t.Fatalf("retry: %v", err)
 	}
@@ -295,7 +295,7 @@ func testRetryAppliesOnce(t *testing.T, h CommandHarness) {
 func testDeviceRejection(t *testing.T, h CommandHarness) {
 	cmd := fixtureCommand(t, h)
 	h.Device.Reject(readFixture(t, h.Fixtures, "error_response.json"))
-	_, err := h.Adapter.Execute(withDeadline(t), cmd)
+	_, err := h.Adapter.Execute(withDeadline(t), cmd, adapter.AllowSend())
 	if !errors.Is(err, adapter.ErrDeviceRejected) {
 		t.Fatalf("error = %v, want ErrDeviceRejected", err)
 	}
@@ -309,7 +309,7 @@ func testUnsupported(t *testing.T, h CommandHarness) {
 	deviceID := commandFixture(t, h).DeviceID
 	expectUnsupported := func(cmd adapter.Command) {
 		t.Helper()
-		_, err := h.Adapter.Execute(withDeadline(t), cmd)
+		_, err := h.Adapter.Execute(withDeadline(t), cmd, adapter.AllowSend())
 		if !errors.Is(err, adapter.ErrUnsupported) {
 			t.Errorf("%s: error = %v, want ErrUnsupported", cmd.ID, err)
 		}
@@ -321,9 +321,6 @@ func testUnsupported(t *testing.T, h CommandHarness) {
 		if caps.Supports(cmd) != nil {
 			expectUnsupported(cmd)
 		}
-	}
-	if caps.Capabilities.PrepaidCredit && !caps.Capabilities.STSToken {
-		expectUnsupported(adapter.Command{ID: "unsupported-sts", Type: adapter.CommandCredit, DeviceID: deviceID, STSToken: "12345678901234567890"})
 	}
 	if n := len(h.Device.Received()); n != 0 {
 		t.Fatalf("device applied %d unsupported payloads", n)
@@ -345,12 +342,13 @@ func testCallsBeforeSend(t *testing.T, h CommandHarness) {
 	cmd := probeCommand(t, h)
 	before := h.Device.Arrivals()
 	var calls, arrivalsAtHook atomic.Int32
-	ctx := adapter.WithSendHook(withDeadline(t), func() error {
+	ctx := withDeadline(t)
+	gate := adapter.NewSendGate(func() error {
 		calls.Add(1)
 		arrivalsAtHook.Store(int32(h.Device.Arrivals()))
 		return nil
 	})
-	if _, err := h.Adapter.Execute(ctx, cmd); err != nil {
+	if _, err := h.Adapter.Execute(ctx, cmd, gate); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 	if n := calls.Load(); n != 1 {
@@ -363,8 +361,9 @@ func testCallsBeforeSend(t *testing.T, h CommandHarness) {
 	refused := cmd
 	refused.ID += "-refused"
 	applied, arrivals := len(h.Device.Received()), h.Device.Arrivals()
-	ctx = adapter.WithSendHook(withDeadline(t), func() error { return errSendRefused })
-	if _, err := h.Adapter.Execute(ctx, refused); !errors.Is(err, errSendRefused) {
+	ctx = withDeadline(t)
+	gate = adapter.NewSendGate(func() error { return errSendRefused })
+	if _, err := h.Adapter.Execute(ctx, refused, gate); !errors.Is(err, errSendRefused) {
 		t.Fatalf("error = %v, want the refusal from BeforeSend", err)
 	}
 	if h.Device.Arrivals() != arrivals || len(h.Device.Received()) != applied {
@@ -372,8 +371,9 @@ func testCallsBeforeSend(t *testing.T, h CommandHarness) {
 	}
 
 	var unsupported sendCounter
-	ctx = adapter.WithSendHook(withDeadline(t), unsupported.hook)
-	if _, err := h.Adapter.Execute(ctx, adapter.Command{ID: "unsupported-hook", Type: "reboot_meter", DeviceID: cmd.DeviceID}); !errors.Is(err, adapter.ErrUnsupported) {
+	ctx = withDeadline(t)
+	gate = adapter.NewSendGate(unsupported.hook)
+	if _, err := h.Adapter.Execute(ctx, adapter.Command{ID: "unsupported-hook", Type: "reboot_meter", DeviceID: cmd.DeviceID}, gate); !errors.Is(err, adapter.ErrUnsupported) {
 		t.Fatalf("unsupported command error = %v, want ErrUnsupported", err)
 	}
 	if unsupported.n.Load() != 0 {
@@ -431,7 +431,7 @@ func holdDevice(t *testing.T, h CommandHarness, cmd adapter.Command) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = h.Adapter.Execute(ctx, cmd)
+		_, _ = h.Adapter.Execute(ctx, cmd, adapter.AllowSend())
 	}()
 	t.Cleanup(func() {
 		release()
@@ -462,7 +462,7 @@ func testCancelledWhileQueued(t *testing.T, h CommandHarness) {
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(20*time.Millisecond, cancel)
 	err := within(t, func() error {
-		_, err := h.Adapter.Execute(adapter.WithSendHook(ctx, sends.hook), queued)
+		_, err := h.Adapter.Execute(ctx, queued, adapter.NewSendGate(sends.hook))
 		return err
 	})
 	if err != nil && (!errors.Is(err, context.Canceled) || errors.Is(err, adapter.ErrTimeout)) {
@@ -483,7 +483,7 @@ func testDeadlineWhileQueued(t *testing.T, h CommandHarness) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	err := within(t, func() error {
-		_, err := h.Adapter.Execute(adapter.WithSendHook(ctx, sends.hook), queued)
+		_, err := h.Adapter.Execute(ctx, queued, adapter.NewSendGate(sends.hook))
 		return err
 	})
 	if err != nil && (!errors.Is(err, adapter.ErrTimeout) || !errors.Is(err, context.DeadlineExceeded)) {
@@ -507,7 +507,7 @@ func testConcurrentRetriesApplyOnce(t *testing.T, h CommandHarness) {
 		go func() {
 			defer wg.Done()
 			<-start
-			results[i], errs[i] = h.Adapter.Execute(ctx, cmd)
+			results[i], errs[i] = h.Adapter.Execute(ctx, cmd, adapter.AllowSend())
 		}()
 	}
 	close(start)
@@ -539,7 +539,7 @@ func testRetriesWhileInFlightApplyOnce(t *testing.T, h CommandHarness) {
 	}
 	outcomes := make(chan outcome, attempts)
 	attempt := func() {
-		result, err := h.Adapter.Execute(ctx, cmd)
+		result, err := h.Adapter.Execute(ctx, cmd, adapter.AllowSend())
 		outcomes <- outcome{result, err}
 	}
 	arrivalsBefore := h.Device.Arrivals()

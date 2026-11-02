@@ -38,6 +38,9 @@ jobs:
             services/ingestion-go/go.sum
             services/edge-agent-go/go.sum
 
+      - name: Check generated meter command contract
+        run: python3 scripts/generate_command_contract.py --check
+
       - name: Check root Go formatting
         run: test -z "$(gofmt -l scripts)"
 
@@ -206,6 +209,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Test meter operations state transitions
+        run: npm run test:meter-operations
 
       - name: Run Biome checks
         run: npm run check

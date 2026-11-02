@@ -7,6 +7,17 @@ capabilities:
   telemetry: true
   relay_control: true
   prepaid_credit: true
-  sts_token: false
   idempotent_refs: true
   outcome_query: false
+
+# Optional: configure only versions verified for this device model. A policy
+# requires firmware_version in status replies; mutations fail closed otherwise.
+# firmware_versions: ["1.2.3"]
+# Optional, commissioned model-specific rejection codes (illustrative only):
+# fault_codes:
+#   E_METER_LOCKED:
+#     description: Meter cover open
+#     severity: critical
+# Optional request bodies for devices that do not speak the default format:
+# command_templates:
+#   disconnect_meter: '{"cmd":"open","meter":{device}}'

@@ -133,8 +133,9 @@ func TestAutopahoDoesNotMarkCommandsSentWhileDisconnected(t *testing.T) {
 	waitFor(t, "the connection to drop", func() bool { return !edge.Connected() })
 
 	marked := 0
-	ctx := adapter.WithSendHook(context.Background(), func() error { marked++; return nil })
-	if _, err := a.Execute(ctx, adapter.Command{ID: "cmd-1", Type: adapter.CommandDisconnect, DeviceID: "meter-01"}); err == nil {
+	ctx := context.Background()
+	gate := adapter.NewSendGate(func() error { marked++; return nil })
+	if _, err := a.Execute(ctx, adapter.Command{ID: "cmd-1", Type: adapter.CommandDisconnect, DeviceID: "meter-01"}, gate); err == nil {
 		t.Fatal("command succeeded with the broker down")
 	}
 	if marked != 0 {

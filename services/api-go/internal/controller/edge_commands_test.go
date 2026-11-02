@@ -101,12 +101,21 @@ func TestReconciliationIsAnOperatorListingAcrossSites(t *testing.T) {
 		Logger:                slog.New(slog.NewTextHandler(io.Discard, nil)),
 		RequestTimeout:        time.Second,
 		EdgeAuth:              NewSiteKeys(map[string]string{"key-kaji": "ng-kaji-01"}),
+		OperatorAuth:          NewSiteKeys(map[string]string{"operator-key": "operator-alice"}),
 		EdgeCommands:          &fakeEdgeCommands{},
 		CommandReconciliation: reconciliation,
 	}.Handler()
 
+	for _, key := range []string{"", "key-kaji", "unknown"} {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, edgeRequest(http.MethodGet, "/v1/meter-commands/reconciliation", key, ""))
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("key %q: status=%d, want 401", key, rec.Code)
+		}
+	}
+
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/meter-commands/reconciliation", nil))
+	handler.ServeHTTP(rec, edgeRequest(http.MethodGet, "/v1/meter-commands/reconciliation", "operator-key", ""))
 	if rec.Code != http.StatusOK || reconciliation.gotSite != nil {
 		t.Fatalf("fleet-wide: status=%d site=%v: %s", rec.Code, reconciliation.gotSite, rec.Body.String())
 	}
@@ -120,7 +129,7 @@ func TestReconciliationIsAnOperatorListingAcrossSites(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/meter-commands/reconciliation?site_id=lagos-epe&limit=10&cursor=before", nil))
+	handler.ServeHTTP(rec, edgeRequest(http.MethodGet, "/v1/meter-commands/reconciliation?site_id=lagos-epe&limit=10&cursor=before", "operator-key", ""))
 	if rec.Code != http.StatusOK || reconciliation.gotSite == nil || *reconciliation.gotSite != "lagos-epe" || reconciliation.gotLimit != 10 || reconciliation.gotCursor != "before" {
 		t.Fatalf("filtered: status=%d site=%v limit=%d cursor=%s", rec.Code, reconciliation.gotSite, reconciliation.gotLimit, reconciliation.gotCursor)
 	}

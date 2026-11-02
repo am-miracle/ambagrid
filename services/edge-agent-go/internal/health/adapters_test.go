@@ -31,9 +31,9 @@ type commandCall struct {
 }
 
 func (s commandCall) Capabilities() adapter.Capabilities { return adapter.Capabilities{} }
-func (s commandCall) Execute(ctx context.Context, cmd adapter.Command) (adapter.CommandResult, error) {
+func (s commandCall) Execute(ctx context.Context, cmd adapter.Command, send adapter.SendGate) (adapter.CommandResult, error) {
 	if s.send {
-		if err := adapter.BeforeSend(ctx); err != nil {
+		if err := send.BeforeSend(ctx); err != nil {
 			return adapter.CommandResult{}, err
 		}
 	}
@@ -59,7 +59,7 @@ func TestAdapterMetricsRemainAvailableWhenQueueFails(t *testing.T) {
 		_, _ = m.Telemetry("modbus", "battery-01", call).Read(ctx)
 	}
 	for _, call := range []commandCall{{send: true}, {err: adapter.ErrUnsupported}, {err: adapter.ErrTimeout}, {err: adapter.ErrProtocolTimeout}} {
-		_, _ = m.Command("mqtt", "meter-01", call).Execute(ctx, adapter.Command{ID: "cmd-1", DeviceID: "meter-01"})
+		_, _ = m.Command("mqtt", "meter-01", call).Execute(ctx, adapter.Command{ID: "cmd-1", DeviceID: "meter-01"}, adapter.AllowSend())
 	}
 	handler := health.NewHandler(unavailableQueue{}, domain.FallbackRateLimitPolicy{}, m)
 	response := httptest.NewRecorder()
@@ -100,7 +100,7 @@ func TestCommandMetricsPreserveOptionalReconciliationAndIgnoreCachedSuccess(t *t
 	if _, applied, err := r.Outcome(context.Background(), adapter.Command{}); err != nil || !applied {
 		t.Fatalf("reconcile: %t %v", applied, err)
 	}
-	_, _ = bare.Execute(context.Background(), adapter.Command{}) // no send hook: a cached success
+	_, _ = bare.Execute(context.Background(), adapter.Command{}, adapter.AllowSend()) // no send hook: a cached success
 	response := httptest.NewRecorder()
 	health.NewHandler(unavailableQueue{}, domain.FallbackRateLimitPolicy{}, m).ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
 	if !strings.Contains(response.Body.String(), `ambagrid_edge_adapter_last_successful_command_timestamp_seconds{adapter="plain",device_id="meter-01"} 0`) {

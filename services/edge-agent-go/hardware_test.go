@@ -64,14 +64,14 @@ func TestDeviceInventoryWiresTelemetryAndDurableCommandRoutes(t *testing.T) {
 		}
 	}
 	cmd := adapter.Command{ID: "relay-1", DeviceID: "meter-01", Type: adapter.CommandDisconnect}
-	if _, err := hw.executor.Execute(ctx, cmd); err != nil {
+	if _, err := hw.executor.Execute(ctx, cmd, adapter.AllowSend()); err != nil {
 		t.Fatal(err)
 	}
 	lastSuccess := value("ambagrid_edge_adapter_last_successful_command_timestamp_seconds")
 	if lastSuccess == 0 {
 		t.Fatal("successful hardware command did not update health")
 	}
-	if _, err := hw.executor.Execute(ctx, cmd); err != nil {
+	if _, err := hw.executor.Execute(ctx, cmd, adapter.AllowSend()); err != nil {
 		t.Fatal(err)
 	}
 	if got := value("ambagrid_edge_adapter_last_successful_command_timestamp_seconds"); got != lastSuccess {
@@ -81,8 +81,8 @@ func TestDeviceInventoryWiresTelemetryAndDurableCommandRoutes(t *testing.T) {
 	if err != nil || !found || entry.State != adapter.CommandApplied || entry.Attempts != 1 {
 		t.Fatalf("ledger: %+v found=%t err=%v", entry, found, err)
 	}
-	unsupported := adapter.Command{ID: "unsupported-token", DeviceID: "meter-01", Type: adapter.CommandCredit, STSToken: "12345678901234567890"}
-	if _, err := hw.executor.Execute(ctx, unsupported); !errors.Is(err, adapter.ErrUnsupported) {
+	unsupported := adapter.Command{ID: "unsupported-command", DeviceID: "meter-01", Type: "vend_sts_token"}
+	if _, err := hw.executor.Execute(ctx, unsupported, adapter.AllowSend()); !errors.Is(err, adapter.ErrUnsupported) {
 		t.Fatalf("unsupported token: %v", err)
 	}
 	if value("ambagrid_edge_adapter_unsupported_total") != 1 || value("ambagrid_edge_adapter_command_errors_total") != 1 {
@@ -90,7 +90,7 @@ func TestDeviceInventoryWiresTelemetryAndDurableCommandRoutes(t *testing.T) {
 	}
 	cmd.ID = "battery-command"
 	cmd.DeviceID = "battery-01"
-	if _, err := hw.executor.Execute(ctx, cmd); !errors.Is(err, adapter.ErrUnsupported) {
+	if _, err := hw.executor.Execute(ctx, cmd, adapter.AllowSend()); !errors.Is(err, adapter.ErrUnsupported) {
 		t.Fatalf("telemetry-only command: %v", err)
 	}
 }

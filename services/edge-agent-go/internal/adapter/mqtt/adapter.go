@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -36,7 +35,7 @@ type Transport interface {
 }
 
 type Config struct {
-	// DeviceID binds an inventory adapter to one device; empty keeps the legacy site-wide mode.
+	// DeviceID binds this adapter and its reply subscription to exactly one device.
 	DeviceID     string
 	Topics       Topics
 	Capabilities adapter.Capabilities
@@ -45,25 +44,19 @@ type Config struct {
 	ResponseTimeout time.Duration
 }
 
-type request struct {
-	Op     string `json:"op"`
-	Device string `json:"device"`
-	Wh     int64  `json:"wh,omitempty"`
-	Token  string `json:"token,omitempty"`
-	Closed *bool  `json:"closed,omitempty"`
-	// Target is the command ID an "outcome" query asks about.
-	Target string `json:"target,omitempty"`
-}
+type request = adapter.MeterCommandPayload
 
 type reply struct {
-	OK        *bool  `json:"ok"`
-	TsMs      int64  `json:"ts_ms,omitempty"`
-	Relay     *int   `json:"relay,omitempty"`
-	BalanceWh *int64 `json:"balance_wh,omitempty"`
-	Tamper    *int   `json:"tamper,omitempty"`
-	Applied   *bool  `json:"applied,omitempty"`
-	Code      string `json:"code,omitempty"`
-	Message   string `json:"msg,omitempty"`
+	FirmwareVersion string `json:"firmware_version,omitempty"`
+	FaultCode       string `json:"fault_code,omitempty"`
+	OK              *bool  `json:"ok"`
+	TsMs            int64  `json:"ts_ms,omitempty"`
+	Relay           *int   `json:"relay,omitempty"`
+	BalanceWh       *int64 `json:"balance_wh,omitempty"`
+	Tamper          *int   `json:"tamper,omitempty"`
+	Applied         *bool  `json:"applied,omitempty"`
+	Code            string `json:"code,omitempty"`
+	Message         string `json:"msg,omitempty"`
 }
 
 type waiter struct {
@@ -101,13 +94,10 @@ func New(ctx context.Context, cfg Config, transport Transport) (adapter.CommandA
 		cfg.ResponseTimeout = DefaultResponseTimeout
 	}
 	a := &Adapter{cfg: cfg, transport: transport, now: time.Now, waiting: make(map[string]waiter)}
-	filter := cfg.Topics.ReplyFilter()
-	if cfg.DeviceID != "" {
-		if err := topicSafe(cfg.DeviceID); err != nil {
-			return nil, err
-		}
-		filter = cfg.Topics.Reply(cfg.DeviceID)
+	if err := topicSafe(cfg.DeviceID); err != nil {
+		return nil, fmt.Errorf("MQTT adapter requires an explicit device ID: %w", err)
 	}
+	filter := cfg.Topics.Reply(cfg.DeviceID)
 	if err := transport.Subscribe(ctx, filter, a.deliver); err != nil {
 		return nil, fmt.Errorf("subscribe to meter replies: %w", err)
 	}
@@ -121,8 +111,11 @@ func (a *Adapter) Capabilities() adapter.Capabilities {
 	return a.cfg.Capabilities
 }
 
-func (a *Adapter) Execute(ctx context.Context, cmd adapter.Command) (adapter.CommandResult, error) {
-	if a.cfg.DeviceID != "" && cmd.DeviceID != a.cfg.DeviceID {
+func (a *Adapter) Execute(ctx context.Context, cmd adapter.Command, send adapter.SendGate) (adapter.CommandResult, error) {
+	if err := topicSafe(cmd.DeviceID); err != nil {
+		return adapter.CommandResult{}, err
+	}
+	if cmd.DeviceID != a.cfg.DeviceID {
 		return adapter.CommandResult{}, fmt.Errorf("%w: adapter belongs to device %q", adapter.ErrUnsupported, a.cfg.DeviceID)
 	}
 	if err := ctx.Err(); err != nil {
@@ -134,30 +127,48 @@ func (a *Adapter) Execute(ctx context.Context, cmd adapter.Command) (adapter.Com
 	if err := cmd.Validate(); err != nil {
 		return adapter.CommandResult{}, err
 	}
-	if err := topicSafe(cmd.DeviceID); err != nil {
-		return adapter.CommandResult{}, err
+	// A firmware probe is read-only and must never record send intent for the
+	// pending mutation. Missing firmware fails closed when a policy is configured.
+	verifiedFirmware := ""
+	if cmd.Type != adapter.CommandRequestStatus && len(a.cfg.Capabilities.FirmwareVersions) > 0 {
+		probe, err := a.exchangeCommand(ctx, adapter.Command{Type: adapter.CommandRequestStatus, DeviceID: cmd.DeviceID}, cmd.ID+":firmware:"+fmt.Sprint(a.now().UnixNano()), nil)
+		if err != nil {
+			return adapter.CommandResult{}, err
+		}
+		if !*probe.OK || !a.cfg.Capabilities.FirmwareAllowed(probe.FirmwareVersion) {
+			return adapter.CommandResult{}, fmt.Errorf("%w: reported %q", adapter.ErrFirmwareMismatch, probe.FirmwareVersion)
+		}
+		verifiedFirmware = probe.FirmwareVersion
 	}
 	// The command ID is the correlation data, so a retry is the same request
 	// to a device that deduplicates.
-	got, err := a.exchange(ctx, cmd.DeviceID, cmd.ID, encode(cmd), true)
+	got, err := a.exchangeCommand(ctx, cmd, cmd.ID, &send)
 	if err != nil {
 		return adapter.CommandResult{}, err
 	}
 	if !*got.OK {
-		return adapter.CommandResult{}, fmt.Errorf("%w: %s: %s", adapter.ErrDeviceRejected, got.Code, got.Message)
+		message := got.Message
+		if fault, ok := a.cfg.Capabilities.FaultCodes[got.Code]; ok {
+			message = fmt.Sprintf("%s (%s): %s", fault.Description, fault.Severity, message)
+		}
+		return adapter.CommandResult{}, fmt.Errorf("%w: %s: %s", adapter.ErrDeviceRejected, got.Code, message)
 	}
-	return a.result(cmd.ID, got), nil
+	result := a.result(cmd.ID, got)
+	if result.FirmwareVersion == "" {
+		result.FirmwareVersion = verifiedFirmware
+	}
+	return result, nil
 }
 
 func (r reconcilingAdapter) Outcome(ctx context.Context, cmd adapter.Command) (adapter.CommandResult, bool, error) {
-	if r.cfg.DeviceID != "" && cmd.DeviceID != r.cfg.DeviceID {
+	if cmd.DeviceID != r.cfg.DeviceID {
 		return adapter.CommandResult{}, false, fmt.Errorf("%w: adapter belongs to device %q", adapter.ErrUnsupported, r.cfg.DeviceID)
 	}
 	if err := topicSafe(cmd.DeviceID); err != nil {
 		return adapter.CommandResult{}, false, err
 	}
 	correlation := cmd.ID + ":outcome:" + fmt.Sprint(r.now().UnixNano())
-	got, err := r.exchange(ctx, cmd.DeviceID, correlation, request{Op: "outcome", Device: cmd.DeviceID, Target: cmd.ID}, false)
+	got, err := r.exchange(ctx, cmd.DeviceID, correlation, request{Op: "outcome", Device: cmd.DeviceID, Target: cmd.ID}, nil)
 	if err != nil {
 		return adapter.CommandResult{}, false, err
 	}
@@ -170,16 +181,33 @@ func (r reconcilingAdapter) Outcome(ctx context.Context, cmd adapter.Command) (a
 	return r.result(cmd.ID, got), true, nil
 }
 
-// exchange marks only commands through adapter.BeforeSend; an outcome query
-// changes nothing on the device.
-func (a *Adapter) exchange(ctx context.Context, deviceID, correlation string, req request, command bool) (reply, error) {
-	caller := ctx
-	ctx, cancel := context.WithTimeout(ctx, a.cfg.ResponseTimeout)
-	defer cancel()
+// exchange marks only commands through send.BeforeSend; an outcome query changes
+// nothing on the device.
+func (a *Adapter) exchange(ctx context.Context, deviceID, correlation string, req request, send *adapter.SendGate) (reply, error) {
 	payload, err := json.Marshal(req)
 	if err != nil {
 		return reply{}, fmt.Errorf("encode %s request: %w", req.Op, err)
 	}
+	return a.exchangePayload(ctx, deviceID, correlation, req.Op, payload, send)
+}
+
+// exchangeCommand applies a declared template; replies still use protocol v2.
+func (a *Adapter) exchangeCommand(ctx context.Context, cmd adapter.Command, correlation string, send *adapter.SendGate) (reply, error) {
+	template, ok := a.cfg.Capabilities.CommandTemplates[cmd.Type]
+	if !ok {
+		return a.exchange(ctx, cmd.DeviceID, correlation, encode(cmd), send)
+	}
+	payload, err := adapter.RenderCommandTemplate(template, cmd)
+	if err != nil {
+		return reply{}, fmt.Errorf("%w: %w", adapter.ErrInvalidCommand, err)
+	}
+	return a.exchangePayload(ctx, cmd.DeviceID, correlation, encode(cmd).Op, payload, send)
+}
+
+func (a *Adapter) exchangePayload(ctx context.Context, deviceID, correlation, op string, payload []byte, send *adapter.SendGate) (reply, error) {
+	caller := ctx
+	ctx, cancel := context.WithTimeout(ctx, a.cfg.ResponseTimeout)
+	defer cancel()
 	replyTopic := a.cfg.Topics.Reply(deviceID)
 	replies, err := a.await(correlation, replyTopic)
 	if err != nil {
@@ -189,8 +217,8 @@ func (a *Adapter) exchange(ctx context.Context, deviceID, correlation string, re
 
 	var handedOff atomic.Bool
 	beforeSend := func() error {
-		if command {
-			if err := adapter.BeforeSend(ctx); err != nil {
+		if send != nil {
+			if err := send.BeforeSend(ctx); err != nil {
 				return err
 			}
 		}
@@ -202,7 +230,7 @@ func (a *Adapter) exchange(ctx context.Context, deviceID, correlation string, re
 		if handedOff.Load() && adapter.ProtocolDeadlineExceeded(caller, ctx) {
 			return reply{}, fmt.Errorf("%w: %w", adapter.ErrProtocolTimeout, err)
 		}
-		return reply{}, adapter.ContextError(fmt.Errorf("publish %s to %s: %w", req.Op, msg.Topic, err))
+		return reply{}, adapter.ContextError(fmt.Errorf("publish %s to %s: %w", op, msg.Topic, err))
 	}
 	select {
 	case got := <-replies:
@@ -263,7 +291,7 @@ func (a *Adapter) deliver(msg Message) {
 }
 
 func (a *Adapter) result(commandID string, got reply) adapter.CommandResult {
-	result := adapter.CommandResult{CommandID: commandID, AcknowledgedAt: time.UnixMilli(got.TsMs).UTC()}
+	result := adapter.CommandResult{FirmwareVersion: got.FirmwareVersion, FaultCode: got.FaultCode, CommandID: commandID, AcknowledgedAt: time.UnixMilli(got.TsMs).UTC()}
 	if got.TsMs == 0 {
 		result.AcknowledgedAt = a.now().UTC()
 	}
@@ -283,22 +311,9 @@ func (a *Adapter) result(commandID string, got reply) adapter.CommandResult {
 }
 
 func encode(cmd adapter.Command) request {
-	req := request{Device: cmd.DeviceID}
-	switch cmd.Type {
-	case adapter.CommandCredit:
-		req.Op = "credit"
-		if cmd.STSToken != "" {
-			req.Token = cmd.STSToken
-		} else {
-			req.Wh = int64(math.Round(cmd.CreditKWh * 1000))
-		}
-	case adapter.CommandDisconnect, adapter.CommandReconnect:
-		closed := cmd.Type == adapter.CommandReconnect
-		req.Op, req.Closed = "relay", &closed
-	case adapter.CommandRequestStatus:
-		req.Op = "status"
-	}
-	return req
+	payload := adapter.EncodeMeterCommand(cmd)
+	payload.Ref = "" // MQTT correlation data carries the reference.
+	return payload
 }
 
 var errUnsafeDevice = errors.New("device ID cannot be used in an MQTT topic")

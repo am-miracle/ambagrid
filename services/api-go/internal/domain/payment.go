@@ -89,6 +89,8 @@ type CreditBalance struct {
 }
 
 type MeterCommand struct {
+	Observation    *CommandObservation
+	ObservedAt     *time.Time
 	CommandID      string
 	MeterID        string
 	CommandType    MeterCommandType

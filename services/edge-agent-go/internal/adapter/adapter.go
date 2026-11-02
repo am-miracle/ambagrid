@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -12,7 +14,8 @@ import (
 )
 
 var (
-	ErrUnsupported = errors.New("adapter does not support this command or field")
+	ErrFirmwareMismatch = fmt.Errorf("firmware is missing or incompatible: %w", ErrUnsupported)
+	ErrUnsupported      = errors.New("adapter does not support this command or field")
 	// ErrTimeout may expire before the device is contacted, e.g. while queued
 	// behind another command, so it alone must not count as a device protocol timeout.
 	ErrTimeout = errors.New("adapter operation exceeded its deadline")
@@ -35,9 +38,9 @@ type TelemetryAdapter interface {
 }
 
 // CommandAdapter transports commands; Ledger provides at-most-once delivery.
-// Call BeforeSend immediately before transmitting and use Command.ID as the vendor reference where supported.
+// Call send.BeforeSend immediately before transmitting and use Command.ID as the vendor reference where supported.
 type CommandAdapter interface {
-	Execute(context.Context, Command) (CommandResult, error)
+	Execute(context.Context, Command, SendGate) (CommandResult, error)
 	Capabilities() Capabilities
 }
 
@@ -63,7 +66,6 @@ type Command struct {
 	Type      CommandType `json:"command_type"`
 	DeviceID  string      `json:"device_id"`
 	CreditKWh float64     `json:"credit_kwh,omitempty"`
-	STSToken  string      `json:"sts_token,omitempty"`
 	// RequestedAt orders relay commands for one device; zero when unknown.
 	RequestedAt time.Time `json:"requested_at,omitzero"`
 }
@@ -76,41 +78,58 @@ func (c Command) Validate() error {
 		return fmt.Errorf("%w: device ID is required", ErrInvalidCommand)
 	}
 	if c.Type == CommandCredit {
-		if c.CreditKWh <= 0 && c.STSToken == "" {
-			return fmt.Errorf("%w: credit requires a positive kWh amount or an STS token", ErrInvalidCommand)
-		}
-		if c.CreditKWh > 0 && c.STSToken != "" {
-			return fmt.Errorf("%w: credit takes either a kWh amount or an STS token, not both", ErrInvalidCommand)
+		if c.CreditKWh <= 0 || math.IsNaN(c.CreditKWh) || math.IsInf(c.CreditKWh, 0) || c.CreditKWh >= float64(math.MaxInt64)/1000 {
+			return fmt.Errorf("%w: credit requires a finite positive kWh amount within the meter range", ErrInvalidCommand)
 		}
 		return nil
 	}
-	if c.CreditKWh != 0 || c.STSToken != "" {
+	if c.CreditKWh != 0 {
 		return fmt.Errorf("%w: %s does not take credit fields", ErrInvalidCommand, c.Type)
 	}
+
 	return nil
 }
 
 type CommandResult struct {
-	CommandID      string    `json:"command_id"`
-	AcknowledgedAt time.Time `json:"acknowledged_at"`
-	RelayClosed    *bool     `json:"relay_closed,omitempty"`
-	BalanceKWh     *float64  `json:"balance_kwh,omitempty"`
-	TamperDetected *bool     `json:"tamper_detected,omitempty"`
+	FirmwareVersion string    `json:"firmware_version,omitempty"`
+	FaultCode       string    `json:"fault_code,omitempty"`
+	CommandID       string    `json:"command_id"`
+	AcknowledgedAt  time.Time `json:"acknowledged_at"`
+	RelayClosed     *bool     `json:"relay_closed,omitempty"`
+	BalanceKWh      *float64  `json:"balance_kwh,omitempty"`
+	TamperDetected  *bool     `json:"tamper_detected,omitempty"`
+}
+
+func (r CommandResult) Observation() domain.CommandObservation {
+	return domain.CommandObservation{RelayClosed: r.RelayClosed, BalanceKWh: r.BalanceKWh, TamperDetected: r.TamperDetected, FirmwareVersion: r.FirmwareVersion, FaultCode: r.FaultCode}
+}
+
+type FaultCode struct {
+	Description string `yaml:"description"`
+	Severity    string `yaml:"severity"`
 }
 
 // Capabilities mirrors the device capability declaration in docs/hardware-adapters.md.
 type Capabilities struct {
-	DeviceType   domain.AssetType `yaml:"device_type"`
-	Manufacturer string           `yaml:"manufacturer"`
-	Model        string           `yaml:"model"`
-	Capabilities CapabilitySet    `yaml:"capabilities"`
+	FirmwareVersions []string             `yaml:"firmware_versions"`
+	FaultCodes       map[string]FaultCode `yaml:"fault_codes"`
+	// CommandTemplates replaces the default request body per command type.
+	CommandTemplates map[CommandType]string `yaml:"command_templates"`
+	DeviceType       domain.AssetType       `yaml:"device_type"`
+	Manufacturer     string                 `yaml:"manufacturer"`
+	Model            string                 `yaml:"model"`
+	Capabilities     CapabilitySet          `yaml:"capabilities"`
+}
+
+// FirmwareAllowed is false only when a policy exists and version is not on it.
+func (c Capabilities) FirmwareAllowed(version string) bool {
+	return len(c.FirmwareVersions) == 0 || slices.Contains(c.FirmwareVersions, version)
 }
 
 type CapabilitySet struct {
 	Telemetry     bool `yaml:"telemetry"`
 	RelayControl  bool `yaml:"relay_control"`
 	PrepaidCredit bool `yaml:"prepaid_credit"`
-	STSToken      bool `yaml:"sts_token"`
 	// IdempotentRefs declares that the device ignores or rejects a repeated
 	// command reference, so resending after an unknown outcome is safe.
 	IdempotentRefs bool `yaml:"idempotent_refs"`
@@ -125,9 +144,6 @@ func (c Capabilities) Supports(cmd Command) error {
 	switch cmd.Type {
 	case CommandCredit:
 		supported = set.PrepaidCredit
-		if supported && cmd.STSToken != "" && !set.STSToken {
-			return fmt.Errorf("%w: %s %s does not accept STS tokens", ErrUnsupported, c.Manufacturer, c.Model)
-		}
 	case CommandDisconnect, CommandReconnect:
 		supported = set.RelayControl
 	case CommandRequestStatus:

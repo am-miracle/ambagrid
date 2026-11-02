@@ -33,7 +33,7 @@ func TestMeterCommandOutcomePayloadMatchesSharedFixtures(t *testing.T) {
 			occurredAt: time.Date(2026, 10, 1, 14, 32, 0, 0, time.UTC),
 		},
 	} {
-		payload, err := meterCommandOutcomePayload(c.cmd, "site-0101", "edge:site-0101", c.occurredAt)
+		payload, err := meterCommandOutcomePayload(domain.CommandOutcome{Command: c.cmd, SiteID: "site-0101", ReportedBy: "edge:site-0101", OccurredAt: c.occurredAt})
 		if err != nil {
 			t.Fatal(err)
 		}

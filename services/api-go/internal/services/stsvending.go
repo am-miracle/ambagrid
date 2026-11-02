@@ -83,11 +83,22 @@ func ReconcileSTSVend(ctx context.Context, store STSReconciliationStore, r domai
 	return store.Reconcile(ctx, r)
 }
 
+type STSRefundStore interface {
+	RefundUnvendedCredit(context.Context, domain.STSCreditRefund) (domain.CreditReversalPlan, error)
+}
+
+func RefundUnvendedSTSCredit(ctx context.Context, store STSRefundStore, r domain.STSCreditRefund) (domain.CreditReversalPlan, error) {
+	if err := r.Validate(); err != nil {
+		return domain.CreditReversalPlan{}, err
+	}
+	return store.RefundUnvendedCredit(ctx, r)
+}
+
 // STSVendReportStore reads reservations and reversals without contacting the provider.
 type STSVendReportStore interface {
 	ListUnresolved(context.Context) ([]domain.STSVendRecord, error)
 	ListReversalShortfalls(context.Context) ([]domain.STSReversalShortfall, error)
-	ListUnvendedCredits(context.Context) ([]domain.STSUnvendedCredit, error)
+	ListUnvendedCredits(ctx context.Context, after string) ([]domain.STSUnvendedCredit, error)
 }
 
 func ListUnresolvedSTSVends(ctx context.Context, store STSVendReportStore) ([]domain.STSVendRecord, error) {
@@ -105,6 +116,11 @@ func ListSTSReversalShortfalls(ctx context.Context, store STSVendReportStore) ([
 	return store.ListReversalShortfalls(ctx)
 }
 
-func ListUnvendedSTSCredits(ctx context.Context, store STSVendReportStore) ([]domain.STSUnvendedCredit, error) {
-	return store.ListUnvendedCredits(ctx)
+func ListUnvendedSTSCredits(ctx context.Context, store STSVendReportStore, after string) ([]domain.STSUnvendedCredit, error) {
+	if after != "" {
+		if err := domain.ValidateCommandID(after); err != nil {
+			return nil, err
+		}
+	}
+	return store.ListUnvendedCredits(ctx, after)
 }

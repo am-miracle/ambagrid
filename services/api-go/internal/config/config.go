@@ -49,7 +49,10 @@ type Config struct {
 
 	// EdgeAPIKeys maps each site's edge agent bearer key to its site ID.
 	EdgeAPIKeys     map[string]string
+	OperatorAPIKeys map[string]string
 	MeterCommandTTL time.Duration
+	// MetricsAddr serves /metrics on its own listener; empty disables it.
+	MetricsAddr string
 
 	DevMode bool
 }
@@ -136,9 +139,18 @@ func FromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	edgeAPIKeys, err := parseEdgeAPIKeys(os.Getenv("API_EDGE_API_KEYS"))
+	operatorAPIKeys, err := parseAPIKeys(os.Getenv("API_OPERATOR_KEYS"))
+	if err != nil {
+		return Config{}, fmt.Errorf("API_OPERATOR_KEYS: %w", err)
+	}
+	edgeAPIKeys, err := parseAPIKeys(os.Getenv("API_EDGE_API_KEYS"))
 	if err != nil {
 		return Config{}, err
+	}
+	for key := range operatorAPIKeys {
+		if _, exists := edgeAPIKeys[key]; exists {
+			return Config{}, fmt.Errorf("operator and edge API keys must be distinct")
+		}
 	}
 	// Must stay below the edge's EDGE_COMMAND_RETENTION, or a late retry
 	// could find its ledger record already pruned.
@@ -181,7 +193,9 @@ func FromEnv() (Config, error) {
 		SMSMonthlyBudgetMinor:      smsMonthlyBudget,
 		SMSCurrency:                strings.ToUpper(envString("API_SMS_CURRENCY", "")),
 		EdgeAPIKeys:                edgeAPIKeys,
+		OperatorAPIKeys:            operatorAPIKeys,
 		MeterCommandTTL:            meterCommandTTL,
+		MetricsAddr:                envString("API_METRICS_ADDR", ""),
 		DevMode:                    envBool("API_DEV_MODE"),
 	}
 
@@ -264,9 +278,9 @@ func parseSMSSenders(raw string) (map[string]SMSSender, error) {
 	return result, nil
 }
 
-// parseEdgeAPIKeys reads site:key pairs, the format ingestion uses for
+// parseAPIKeys reads owner:key pairs. Edge keys use the format ingestion has for
 // INGEST_HTTP_API_KEYS, so one key can serve both upload and command delivery.
-func parseEdgeAPIKeys(raw string) (map[string]string, error) {
+func parseAPIKeys(raw string) (map[string]string, error) {
 	result := make(map[string]string)
 	index := 0
 	for entry := range strings.SplitSeq(raw, ",") {

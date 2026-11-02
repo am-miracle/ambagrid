@@ -24,7 +24,7 @@ import (
 const siteKey = "key-kaji"
 
 // Keep in sync with api-go/internal/domain; this fake enforces the wire contract.
-const maxFailureReasonBytes = 500
+const maxFailureReasonBytes = commands.MaxFailureReasonBytes
 
 type wireReport struct {
 	CommandID     string
@@ -248,7 +248,7 @@ func TestRunnerDeliversCreditAmountToTheMeterOnce(t *testing.T) {
 	h.sync(t)
 	h.sync(t)
 
-	status, err := h.meter.Execute(context.Background(), adapter.Command{ID: "status", Type: adapter.CommandRequestStatus, DeviceID: "meter-01"})
+	status, err := h.meter.Execute(context.Background(), adapter.Command{ID: "status", Type: adapter.CommandRequestStatus, DeviceID: "meter-01"}, adapter.AllowSend())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -509,7 +509,7 @@ func TestRunnerFlagsCommandsThatCanOutliveLedgerRetention(t *testing.T) {
 type deadlineExecutor struct{ deadline time.Time }
 
 func (e *deadlineExecutor) Capabilities() adapter.Capabilities { return adapter.Capabilities{} }
-func (e *deadlineExecutor) Execute(ctx context.Context, _ adapter.Command) (adapter.CommandResult, error) {
+func (e *deadlineExecutor) Execute(ctx context.Context, _ adapter.Command, send adapter.SendGate) (adapter.CommandResult, error) {
 	e.deadline, _ = ctx.Deadline()
 	return adapter.CommandResult{}, nil
 }

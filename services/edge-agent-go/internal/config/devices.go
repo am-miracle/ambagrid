@@ -15,8 +15,8 @@ import (
 // platform device. MQTT transport credentials remain in environment settings.
 type DeviceConfig struct {
 	ID               string              `yaml:"id"`
-	Telemetry        string              `yaml:"telemetry"`
-	Command          string              `yaml:"command"`
+	Telemetry        AdapterKind         `yaml:"telemetry"`
+	Command          AdapterKind         `yaml:"command"`
 	CapabilitiesFile string              `yaml:"capabilities_file"`
 	Modbus           *DeviceModbusConfig `yaml:"modbus"`
 }
@@ -64,11 +64,11 @@ func loadDevices(path string) ([]DeviceConfig, error) {
 		}
 		switch d.Telemetry {
 		case "":
-		case "simulator":
+		case Simulator:
 			if d.ID != "meter-01" && d.ID != "battery-01" && d.ID != "inverter-01" {
 				return nil, fmt.Errorf("device %q: simulator telemetry IDs are meter-01, battery-01 and inverter-01", d.ID)
 			}
-		case "modbus":
+		case Modbus:
 			if d.Modbus == nil || d.Modbus.UnitID == nil || d.Modbus.MapFile == "" {
 				return nil, fmt.Errorf("device %q: modbus requires address, unit_id and map_file", d.ID)
 			}
@@ -85,16 +85,16 @@ func loadDevices(path string) ([]DeviceConfig, error) {
 		default:
 			return nil, fmt.Errorf("device %q: unknown telemetry adapter %q", d.ID, d.Telemetry)
 		}
-		if d.Telemetry != "modbus" && d.Modbus != nil {
+		if d.Telemetry != Modbus && d.Modbus != nil {
 			return nil, fmt.Errorf("device %q has modbus settings without a modbus adapter", d.ID)
 		}
 		switch d.Command {
 		case "":
-		case "simulator":
+		case Simulator:
 			if d.ID != "meter-01" {
 				return nil, fmt.Errorf("device %q: simulator commands require meter-01", d.ID)
 			}
-		case "mqtt":
+		case MQTT:
 			if d.CapabilitiesFile == "" {
 				return nil, fmt.Errorf("device %q MQTT requires capabilities_file", d.ID)
 			}
@@ -102,7 +102,7 @@ func loadDevices(path string) ([]DeviceConfig, error) {
 		default:
 			return nil, fmt.Errorf("device %q: unknown command adapter %q", d.ID, d.Command)
 		}
-		if d.Command != "mqtt" && d.CapabilitiesFile != "" {
+		if d.Command != MQTT && d.CapabilitiesFile != "" {
 			return nil, fmt.Errorf("device %q has capabilities_file without MQTT commands", d.ID)
 		}
 	}

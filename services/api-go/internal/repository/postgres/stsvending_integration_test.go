@@ -639,7 +639,7 @@ func TestUnvendedCreditsListedUntilAVendIsReserved(t *testing.T) {
 	store := NewSTSVendStore(f.pool, "test-installation")
 	listed := func() bool {
 		t.Helper()
-		credits, err := store.ListUnvendedCredits(ctx)
+		credits, err := store.ListUnvendedCredits(ctx, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -668,5 +668,79 @@ func TestUnvendedCreditsListedUntilAVendIsReserved(t *testing.T) {
 	}
 	if requestedBy != request.RequestedBy {
 		t.Fatalf("requested_by = %q, want %q", requestedBy, request.RequestedBy)
+	}
+}
+
+func TestUnvendedRefundReversesTheCreditAndBlocksVending(t *testing.T) {
+	f, request, result := fundedSTSRequest(t, "sts")
+	ctx := context.Background()
+	store := NewSTSVendStore(f.pool, "test-installation")
+	clean := cleaner(t, f.pool)
+	t.Cleanup(func() { clean(`DELETE FROM sts_credit_refunds WHERE payment_id=$1::uuid`, request.PaymentID) })
+	if _, err := f.pool.Exec(ctx, `UPDATE credit_balances SET remaining_kwh=remaining_kwh/2,remaining_money_value_minor_units=remaining_money_value_minor_units/2 WHERE assignment_id=$1::uuid`, result.Credit.AssignmentID); err != nil {
+		t.Fatal(err)
+	}
+	refund := domain.STSCreditRefund{PaymentID: request.PaymentID, Reference: "refund-" + f.siteID, Actor: "operator:test", Evidence: "provider refund confirmation"}
+	plan, err := services.RefundUnvendedSTSCredit(ctx, store, refund)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Reversed.MoneyMinor != 2500 || plan.Shortfall.MoneyMinor != 2501 {
+		t.Fatalf("plan = %+v", plan)
+	}
+	var kwh float64
+	if err := f.pool.QueryRow(ctx, `SELECT remaining_money_value_minor_units::float8 FROM credit_balances WHERE assignment_id=$1::uuid`, result.Credit.AssignmentID).Scan(&kwh); err != nil || kwh != 0 {
+		t.Fatalf("balance after refund = %v, %v", kwh, err)
+	}
+	if _, err := services.RefundUnvendedSTSCredit(ctx, store, refund); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("second refund: %v", err)
+	}
+	unvended, err := store.ListUnvendedCredits(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range unvended {
+		if c.PaymentID == request.PaymentID {
+			t.Fatal("refunded credit still listed as unvended")
+		}
+	}
+	shortfalls, err := store.ListReversalShortfalls(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, s := range shortfalls {
+		found = found || (s.CreditID == result.Credit.CreditID && s.ShortfallMoneyMinor == 2501)
+	}
+	if !found {
+		t.Fatalf("refund shortfall not listed: %+v", shortfalls)
+	}
+	provider := &vendingProvider{}
+	if _, err := services.NewSTSVendingService(store, provider).Vend(ctx, request); err == nil {
+		t.Fatal("refunded payment was vended")
+	}
+	if provider.calls.Load() != 0 {
+		t.Fatal("provider called for a refunded payment")
+	}
+}
+
+func TestRefundRefusedOnceAVendExistsOrIsActive(t *testing.T) {
+	f, request, _ := fundedSTSRequest(t, "sts")
+	ctx := context.Background()
+	store := NewSTSVendStore(f.pool, "test-installation")
+	refund := domain.STSCreditRefund{PaymentID: request.PaymentID, Reference: "refund-" + f.siteID, Actor: "operator:test", Evidence: "provider refund confirmation"}
+	session, err := store.Open(ctx, request.PaymentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := services.RefundUnvendedSTSCredit(ctx, store, refund); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("refund during an active vend: %v", err)
+	}
+	session.Close()
+	if _, err := services.NewSTSVendingService(store, &vendingProvider{fail: true}).Vend(ctx, request); !errors.Is(err, domain.ErrVendUncertain) {
+		t.Fatalf("vend: %v", err)
+	}
+	if _, err := services.RefundUnvendedSTSCredit(ctx, store, refund); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("refund after a reservation: %v", err)
 	}
 }

@@ -8,6 +8,10 @@ import (
 )
 
 type commandReconciliationDTO struct {
+	CreditKWh                *float64               `json:"credit_kwh,omitempty"`
+	CreditID                 *string                `json:"credit_id,omitempty"`
+	Case                     *reconciliationCaseDTO `json:"case,omitempty"`
+	NeedsReview              bool                   `json:"needs_review"`
 	CommandID                string                 `json:"command_id"`
 	MeterID                  string                 `json:"meter_id"`
 	SiteID                   string                 `json:"site_id"`
@@ -30,6 +34,9 @@ type commandReconciliationDTO struct {
 }
 
 func (a API) handleListCommandReconciliation(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.authenticateOperator(w, r); !ok {
+		return
+	}
 	limit, err := limitParam(r)
 	if err != nil {
 		writeError(w, r, a.logger(), err)
@@ -46,7 +53,7 @@ func (a API) handleListCommandReconciliation(w http.ResponseWriter, r *http.Requ
 func toCommandReconciliationDTO(item domain.CommandReconciliation) commandReconciliationDTO {
 	cmd := item.Command
 	dto := commandReconciliationDTO{
-		CommandID: cmd.CommandID, MeterID: cmd.MeterID, SiteID: item.SiteID,
+		CreditKWh: cmd.CreditKWh, CreditID: cmd.CreditID, Case: toReconciliationCaseDTOPtr(item.Case), NeedsReview: item.NeedsReview, CommandID: cmd.CommandID, MeterID: cmd.MeterID, SiteID: item.SiteID,
 		CommandType: string(cmd.CommandType), Status: string(cmd.Status), Reason: string(item.Reason()),
 		RequestedAt: cmd.RequestedAt, ExpiresAt: cmd.ExpiresAt, SentAt: cmd.SentAt,
 		AgeSeconds: item.Age.Seconds(), OverdueSeconds: item.Overdue.Seconds(),
@@ -57,7 +64,7 @@ func toCommandReconciliationDTO(item domain.CommandReconciliation) commandReconc
 	}
 	if item.LatestConflict != nil {
 		dto.LatestConflict = &edgeCommandReportBody{
-			Status: string(item.LatestConflict.Status), OccurredAt: item.LatestConflict.OccurredAt,
+			Observation: toCommandObservationDTO(item.LatestConflict.Observation), Status: string(item.LatestConflict.Status), OccurredAt: item.LatestConflict.OccurredAt,
 			FailureReason: item.LatestConflict.FailureReason,
 		}
 	}

@@ -126,7 +126,7 @@ func (s *EdgeCommandService) Report(ctx context.Context, siteID string, report d
 		if err := tx.SaveCommandStatus(ctx, result); err != nil {
 			return err
 		}
-		metadata := map[string]any{"occurred_at": report.OccurredAt.UTC(), "previous_status": current.Status}
+		metadata := map[string]any{"occurred_at": report.OccurredAt.UTC(), "previous_status": current.Status, "observation": report.Observation}
 		if report.FailureReason != "" {
 			metadata["failure_reason"] = report.FailureReason
 		}
@@ -134,7 +134,7 @@ func (s *EdgeCommandService) Report(ctx context.Context, siteID string, report d
 		if err := tx.InsertAuditEvent(ctx, siteID, reporter, "meter_command."+string(report.Status), "meter_command", report.CommandID, metadata); err != nil {
 			return err
 		}
-		return s.publishOutcome(ctx, tx, result, siteID, reporter, report.OccurredAt)
+		return s.publishOutcome(ctx, tx, domain.CommandOutcome{Command: result, SiteID: siteID, ReportedBy: reporter, OccurredAt: report.OccurredAt})
 	})
 	if err != nil {
 		return domain.MeterCommand{}, false, err
@@ -152,7 +152,7 @@ func (s *EdgeCommandService) recordExpiry(ctx context.Context, tx repository.Edg
 	if err := tx.InsertAuditEvent(ctx, siteID, domain.CommandExpiryActor, "meter_command.expired", "meter_command", cmd.CommandID, metadata); err != nil {
 		return err
 	}
-	return s.publishOutcome(ctx, tx, cmd, siteID, domain.CommandExpiryActor, now)
+	return s.publishOutcome(ctx, tx, domain.CommandOutcome{Command: cmd, SiteID: siteID, ReportedBy: domain.CommandExpiryActor, OccurredAt: now})
 }
 
 // ListReconciliation lists every site's commands when siteID is nil.
@@ -177,6 +177,10 @@ func (s *EdgeCommandService) ListReconciliation(ctx context.Context, siteID *str
 		item.Site.HealthStatus = siteHealthStatus(item.Site, now, s.thresholds)
 	}
 	return result, nil
+}
+
+func (s *EdgeCommandService) Backlog(ctx context.Context) (domain.ReconciliationBacklog, error) {
+	return s.repository.ReconciliationBacklog(ctx, s.now().UTC())
 }
 
 // SweepExpired settles a bounded batch that no edge has ever been offered.
@@ -223,12 +227,12 @@ func (s *EdgeCommandService) RunExpiryWorker(ctx context.Context, onError func(e
 
 // publishOutcome announces settled outcomes only; "sent" is an intermediate
 // state, and a command whose outcome is unknown stays there.
-func (s *EdgeCommandService) publishOutcome(ctx context.Context, tx repository.EdgeCommandTx, cmd domain.MeterCommand, siteID, reportedBy string, occurredAt time.Time) error {
-	switch cmd.Status {
+func (s *EdgeCommandService) publishOutcome(ctx context.Context, tx repository.EdgeCommandTx, outcome domain.CommandOutcome) error {
+	switch outcome.Command.Status {
 	case domain.CommandStatusAcknowledged:
-		return tx.PublishCommandOutcome(ctx, s.topics.Acknowledged, "meter.command.acknowledged", cmd, siteID, reportedBy, occurredAt)
+		return tx.PublishCommandOutcome(ctx, s.topics.Acknowledged, "meter.command.acknowledged", outcome)
 	case domain.CommandStatusFailed, domain.CommandStatusExpired:
-		return tx.PublishCommandOutcome(ctx, s.topics.Failed, "meter.command.failed", cmd, siteID, reportedBy, occurredAt)
+		return tx.PublishCommandOutcome(ctx, s.topics.Failed, "meter.command.failed", outcome)
 	}
 	return nil
 }

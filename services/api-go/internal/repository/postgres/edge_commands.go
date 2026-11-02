@@ -38,6 +38,15 @@ JOIN smart_meters sm ON sm.meter_id = mc.meter_id
 WHERE sm.site_id = $1
   AND mc.status IN ('requested', 'queued', 'sent')
   AND (mc.status = 'queued' OR mc.expires_at > $2)
+  -- Never dispatch an unsent replacement after any attempt gains positive or
+  -- uncertain delivery evidence. Already queued commands must still settle at the edge.
+  AND NOT (mc.status='requested' AND mc.replaces_command_id IS NOT NULL AND (
+    EXISTS(SELECT 1 FROM meter_commands applied WHERE applied.credit_id=mc.credit_id AND applied.status='acknowledged')
+    OR EXISTS(SELECT 1 FROM meter_commands prior JOIN audit_events a ON a.subject_id=prior.command_id::text
+      WHERE prior.credit_id=mc.credit_id AND ` + uncertainDeliveryAuditPredicate + `)
+    OR EXISTS(SELECT 1 FROM meter_commands prior JOIN command_reconciliation_cases c USING(command_id)
+      WHERE prior.credit_id=mc.credit_id AND c.disposition='delivered')
+  ))
 ORDER BY (mc.status = 'sent'), mc.requested_at, mc.command_id
 LIMIT $3
 FOR UPDATE OF mc`
@@ -93,6 +102,9 @@ type edgeCommandTx struct {
 }
 
 func (t edgeCommandTx) ExpireOverdueCommands(ctx context.Context, siteID string, now time.Time) ([]domain.MeterCommand, error) {
+	if err := lockSiteCommandDelivery(ctx, t.tx, siteID); err != nil {
+		return nil, err
+	}
 	rows, err := t.tx.Query(ctx, expireOverdueCommandsSQL, siteID, now)
 	if err != nil {
 		return nil, fmt.Errorf("expire overdue meter commands: %w", err)
@@ -110,6 +122,9 @@ func (t edgeCommandTx) ExpireOverdueCommands(ctx context.Context, siteID string,
 }
 
 func (t edgeCommandTx) ListPendingEdgeCommands(ctx context.Context, siteID string, now time.Time, limit int) ([]domain.EdgeCommand, error) {
+	if err := lockSiteCommandDelivery(ctx, t.tx, siteID); err != nil {
+		return nil, err
+	}
 	rows, err := t.tx.Query(ctx, listPendingEdgeCommandsSQL, siteID, now, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list pending edge commands: %w", err)
@@ -137,22 +152,43 @@ func (t edgeCommandTx) MarkCommandsQueued(ctx context.Context, commandIDs []stri
 }
 
 func (t edgeCommandTx) LockSiteCommand(ctx context.Context, siteID, commandID string) (domain.MeterCommand, error) {
+	if err := lockSiteCommandDelivery(ctx, t.tx, siteID); err != nil {
+		return domain.MeterCommand{}, err
+	}
 	cmd, err := scanMeterCommand(t.tx.QueryRow(ctx, lockSiteCommandSQL, commandID, siteID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.MeterCommand{}, fmt.Errorf("%w: meter command %s at site %s", domain.ErrNotFound, commandID, siteID)
 	}
-	return cmd, err
+	if err != nil {
+		return cmd, fmt.Errorf("lock meter command %s: %w", commandID, err)
+	}
+	if cmd.Status == domain.CommandStatusAcknowledged {
+		cmd.Observation, cmd.ObservedAt, _, err = readCommandObservation(ctx, t.tx, commandID)
+		if err != nil {
+			return cmd, err
+		}
+	}
+	return cmd, nil
 }
 
 func (t edgeCommandTx) SaveCommandStatus(ctx context.Context, cmd domain.MeterCommand) error {
+	if cmd.Observation != nil {
+		o := cmd.Observation
+		if _, err := t.tx.Exec(ctx, `INSERT INTO meter_command_observations(command_id,observed_at,relay_closed,balance_kwh,tamper_detected,firmware_version,fault_code)
+   VALUES($1::uuid,$2,$3,$4,$5,NULLIF($6,''),NULLIF($7,'')) ON CONFLICT(command_id) DO NOTHING`, cmd.CommandID, cmd.ObservedAt, o.RelayClosed, o.BalanceKWh, o.TamperDetected, o.FirmwareVersion, o.FaultCode); err != nil {
+			return fmt.Errorf("save command observation: %w", err)
+		}
+	}
+
 	if _, err := t.tx.Exec(ctx, saveCommandStatusSQL, cmd.CommandID, cmd.Status, cmd.SentAt, cmd.AcknowledgedAt, cmd.FailureReason); err != nil {
 		return fmt.Errorf("save meter command %s status: %w", cmd.CommandID, err)
 	}
 	return nil
 }
 
-func (t edgeCommandTx) PublishCommandOutcome(ctx context.Context, topic, eventType string, cmd domain.MeterCommand, siteID, reportedBy string, occurredAt time.Time) error {
-	payload, err := meterCommandOutcomePayload(cmd, siteID, reportedBy, occurredAt)
+func (t edgeCommandTx) PublishCommandOutcome(ctx context.Context, topic, eventType string, outcome domain.CommandOutcome) error {
+	cmd := outcome.Command
+	payload, err := meterCommandOutcomePayload(outcome)
 	if err != nil {
 		return err
 	}
@@ -163,16 +199,17 @@ func (t edgeCommandTx) PublishCommandOutcome(ctx context.Context, topic, eventTy
 }
 
 // meterCommandOutcomePayload matches proto/fixtures/meter_command_*_outbox_payload.json.
-func meterCommandOutcomePayload(cmd domain.MeterCommand, siteID, reportedBy string, occurredAt time.Time) ([]byte, error) {
+func meterCommandOutcomePayload(outcome domain.CommandOutcome) ([]byte, error) {
+	cmd := outcome.Command
 	payload, err := json.Marshal(map[string]any{
 		"command_id":     cmd.CommandID,
 		"meter_id":       cmd.MeterID,
-		"site_id":        siteID,
+		"site_id":        outcome.SiteID,
 		"command_type":   cmd.CommandType,
 		"status":         cmd.Status,
-		"reported_by":    reportedBy,
+		"reported_by":    outcome.ReportedBy,
 		"failure_reason": cmd.FailureReason,
-		"occurred_at":    occurredAt.UTC().Format(time.RFC3339),
+		"occurred_at":    outcome.OccurredAt.UTC().Format(time.RFC3339),
 		"credit_kwh":     cmd.CreditKWh,
 	})
 	if err != nil {

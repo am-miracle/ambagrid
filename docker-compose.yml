@@ -217,6 +217,8 @@ services:
       METER_COMMAND_ACKNOWLEDGED_TOPIC: meter.command.acknowledged
       METER_COMMAND_FAILED_TOPIC: meter.command.failed
       API_DEV_MODE: "true"
+      API_OPERATOR_KEYS: ${API_OPERATOR_KEYS:-}
+      API_METRICS_ADDR: ${API_METRICS_ADDR:-}
     ports:
       - "8081:8081"   # http://localhost:8081/v1/sites
     depends_on:

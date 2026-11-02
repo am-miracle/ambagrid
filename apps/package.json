@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "format": "biome format",
     "lint": "biome lint",
-    "check": "biome check"
+    "check": "biome check",
+    "test:meter-operations": "node --experimental-strip-types --test src/features/command/components/meter-operations-state.test.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

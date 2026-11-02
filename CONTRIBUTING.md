@@ -105,6 +105,12 @@ If you change `proto/telemetry.proto`, regenerate its Go bindings and commit the
 make proto-gen-go
 ```
 
+If you change `proto/contracts/`, regenerate the Go constants; CI runs this with `--check`:
+
+```bash
+python3 scripts/generate_command_contract.py
+```
+
 For the API service:
 
 ```bash

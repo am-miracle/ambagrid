@@ -120,6 +120,8 @@ type STSUnvendedCredit struct {
 	KWhGranted  DecimalKWh `json:"kwh_granted"`
 	AmountMinor int64      `json:"amount_minor"`
 	CreditedAt  time.Time  `json:"credited_at"`
+	// BlockedReason says what must change before this credit can be vended.
+	BlockedReason *string `json:"blocked_reason,omitempty"`
 }
 
 type STSReconciliation struct {
@@ -181,4 +183,23 @@ func (k DecimalKWh) MarshalJSON() ([]byte, error) {
 		return nil, fmt.Errorf("marshal kWh: %q is not a decimal", string(k))
 	}
 	return []byte(k), nil
+}
+
+// STSCreditRefund records a refund already paid outside this system for a credit
+// that was never vended. Reference identifies that external refund.
+type STSCreditRefund struct {
+	PaymentID string
+	Reference string
+	Actor     string
+	Evidence  string
+}
+
+func (r STSCreditRefund) Validate() error {
+	if err := validateUUID("payment_id", r.PaymentID); err != nil {
+		return err
+	}
+	if strings.TrimSpace(r.Reference) == "" || strings.TrimSpace(r.Actor) == "" || strings.TrimSpace(r.Evidence) == "" || len(r.Reference) > 200 || len(r.Actor) > 200 || len(r.Evidence) > 4000 {
+		return fmt.Errorf("STS refund requires a refund reference, actor and evidence")
+	}
+	return nil
 }

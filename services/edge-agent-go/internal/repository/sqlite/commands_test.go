@@ -525,6 +525,7 @@ func TestOpenMigratesVersionTenRelayOrdering(t *testing.T) {
 		ALTER TABLE command_ledger DROP COLUMN requested_at_subms_ns;
 		CREATE INDEX command_ledger_relay_order ON command_ledger(device_id, requested_at_ms, command_id)
 		WHERE command_type IN ('disconnect_meter', 'reconnect_meter') AND state <> 'rejected';
+		ALTER TABLE command_reports DROP COLUMN observation;
 		PRAGMA user_version = 10;`)
 	if err != nil {
 		t.Fatal(err)
@@ -603,5 +604,39 @@ func TestAcknowledgementDeliveryDoesNotWaitForDeviceClock(t *testing.T) {
 				t.Fatalf("event time = %s, want %s", ack[0].OccurredAt, wantEventAt)
 			}
 		})
+	}
+}
+
+func TestAcknowledgementObservationSurvivesRestart(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "queue.db")
+	store := openCommandStore(t, path)
+	entry := commandEntry("status-observation")
+	entry.Type = adapter.CommandRequestStatus
+	if err := store.BeginCommandAttempt(ctx, entry, commandAt); err != nil {
+		t.Fatal(err)
+	}
+	balance, relay, tamper := 12.5, true, true
+	result := adapter.CommandResult{CommandID: entry.CommandID, AcknowledgedAt: commandAt.Add(time.Second), BalanceKWh: &balance, RelayClosed: &relay, TamperDetected: &tamper, FirmwareVersion: "1.2.3", FaultCode: "E_TEST"}
+	if err := store.CompleteCommand(ctx, entry.CommandID, adapter.CommandApplied, &result, "", commandAt.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	reports, err := store.DueCommandReports(ctx, commandAt.Add(time.Minute), 10)
+	if err != nil || len(reports) != 1 || reports[0].Status != domain.ReportSent {
+		t.Fatalf("report ordering: %+v %v", reports, err)
+	}
+	if err := store.DeliveredCommandReport(ctx, reports[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	store = openCommandStore(t, path)
+	defer store.Close()
+	reports, err = store.DueCommandReports(ctx, commandAt.Add(time.Minute), 10)
+	if err != nil || len(reports) != 1 || reports[0].Observation == nil {
+		t.Fatalf("lost observation: %+v %v", reports, err)
+	}
+	got := reports[0].Observation
+	if got.FirmwareVersion != "1.2.3" || got.FaultCode != "E_TEST" || got.TamperDetected == nil || !*got.TamperDetected || got.BalanceKWh == nil || *got.BalanceKWh != balance {
+		t.Fatalf("wrong observation: %+v", got)
 	}
 }

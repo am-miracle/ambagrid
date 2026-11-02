@@ -30,9 +30,9 @@ func NewSiteKeys(keySites map[string]string) SiteKeys {
 	return SiteKeys{keys: keySites}
 }
 
-// siteFor compares every key in constant time so timing does not reveal
+// ownerOf compares every key in constant time so timing does not reveal
 // which key prefix matched.
-func (k SiteKeys) siteFor(r *http.Request) (string, bool) {
+func (k SiteKeys) ownerOf(r *http.Request) (string, bool) {
 	auth := r.Header.Get("Authorization")
 	const prefix = "Bearer "
 	if len(auth) <= len(prefix) || !strings.EqualFold(auth[:len(prefix)], prefix) {
@@ -61,9 +61,10 @@ type edgeCommandDTO struct {
 }
 
 type edgeCommandReportBody struct {
-	Status        string    `json:"status"`
-	OccurredAt    time.Time `json:"occurred_at"`
-	FailureReason string    `json:"failure_reason,omitempty"`
+	Observation   *commandObservationDTO `json:"observation,omitempty"`
+	Status        string                 `json:"status"`
+	OccurredAt    time.Time              `json:"occurred_at"`
+	FailureReason string                 `json:"failure_reason,omitempty"`
 }
 
 type edgeCommandReportDTO struct {
@@ -74,7 +75,7 @@ type edgeCommandReportDTO struct {
 }
 
 func (a API) authenticateSite(w http.ResponseWriter, r *http.Request) (string, bool) {
-	siteID, ok := a.EdgeAuth.siteFor(r)
+	siteID, ok := a.EdgeAuth.ownerOf(r)
 	if !ok {
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		writeErrorBody(w, a.logger(), http.StatusUnauthorized, codeUnauthenticated, "missing or unknown site API key", RequestIDFrom(r.Context()))
@@ -126,6 +127,7 @@ func (a API) handleReportEdgeCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cmd, changed, err := a.EdgeCommands.Report(r.Context(), siteID, domain.CommandReport{
+		Observation:   body.Observation.toDomain(),
 		CommandID:     r.PathValue("command_id"),
 		Status:        domain.MeterCommandStatus(body.Status),
 		OccurredAt:    body.OccurredAt,

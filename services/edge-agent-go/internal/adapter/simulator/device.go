@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"edge-agent-go/internal/adapter"
 	"edge-agent-go/internal/adapter/devicetest"
 )
 
@@ -43,13 +44,7 @@ const (
 	faultHard = 2
 )
 
-type vendorCommand struct {
-	Op     string `json:"op"`
-	Ref    string `json:"ref"`
-	Device string `json:"device"`
-	Wh     int64  `json:"wh,omitempty"`
-	Closed *bool  `json:"closed,omitempty"`
-}
+type vendorCommand = adapter.MeterCommandPayload
 
 type vendorResponse struct {
 	Ref       string `json:"ref"`

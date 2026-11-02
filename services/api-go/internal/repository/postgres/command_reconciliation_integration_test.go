@@ -315,3 +315,24 @@ func TestReconciliationListsCreditsThatNeverReachedTheMeter(t *testing.T) {
 		t.Fatalf("listing = %+v, want only the failed credit", listed.Items)
 	}
 }
+
+func TestBacklogCountsOnlyOpenWork(t *testing.T) {
+	f, _, result := fundedSTSRequest(t, "meter")
+	ctx := context.Background()
+	store := NewEdgeCommandStore(f.pool, 5*time.Second)
+	before, err := store.ReconciliationBacklog(ctx, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := domain.CommandReport{CommandID: result.MeterCommand.CommandID, Status: domain.CommandStatusFailed, OccurredAt: time.Now(), FailureReason: "meter refused"}
+	if _, _, err := f.service.Report(ctx, f.siteID, report); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.ReconciliationBacklog(ctx, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.OpenCases != before.OpenCases+1 || after.OldestOpenCase <= 0 {
+		t.Fatalf("backlog before=%+v after=%+v", before, after)
+	}
+}

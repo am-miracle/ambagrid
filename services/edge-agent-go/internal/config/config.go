@@ -52,9 +52,7 @@ type CommandConfig struct {
 	APIKey       string
 	PollInterval time.Duration
 	Timeout      time.Duration
-	// Adapter is "simulator" or "mqtt".
-	Adapter string
-	MQTT    MQTTConfig
+	MQTT         MQTTConfig
 }
 
 type MQTTConfig struct {
@@ -367,7 +365,6 @@ func FromEnv() (Config, error) {
 			// One site key authenticates both telemetry upload and command delivery.
 			APIKey:       envString("EDGE_COMMANDS_API_KEY", os.Getenv("EDGE_UPLOADER_API_KEY")),
 			PollInterval: commandPollInterval, Timeout: commandTimeout,
-			Adapter: envString("EDGE_COMMAND_ADAPTER", "simulator"),
 			MQTT: MQTTConfig{AllowInsecure: allowInsecureMQTT,
 				Broker:           envString("EDGE_MQTT_BROKER", ""),
 				ClientID:         envString("EDGE_MQTT_CLIENT_ID", "ambagrid-edge-"+gatewayID),
@@ -406,37 +403,33 @@ func FromEnv() (Config, error) {
 			return Config{}, err
 		}
 	}
-	if cfg.Commands.Enabled {
-		selected := []string{cfg.Commands.Adapter}
-		if cfg.DevicesFile != "" {
-			selected = nil
-			for _, d := range cfg.Devices {
-				if d.Command != "" {
-					selected = append(selected, d.Command)
-				}
-			}
-			if len(selected) == 0 {
-				return Config{}, fmt.Errorf("command delivery enabled but inventory has no command adapters")
-			}
-		}
-		for _, selection := range selected {
-			switch selection {
-			case "simulator":
-				if cfg.DevicesFile == "" && !cfg.Collector.Enabled {
-					return Config{}, fmt.Errorf("EDGE_COMMAND_ADAPTER=simulator requires EDGE_SIMULATOR_ENABLED")
-				}
-			case "mqtt":
-				if !cfg.Commands.MQTT.AllowInsecure && (!mqtt.TLSBroker(cfg.Commands.MQTT.Broker) || cfg.Commands.MQTT.Username == "" || cfg.Commands.MQTT.Password == "" || cfg.Commands.MQTT.CAFile == "") {
-					return Config{}, fmt.Errorf("production command MQTT requires a TLS broker URL (ssl://, tls://, mqtts://), credentials and a CA; EDGE_MQTT_ALLOW_INSECURE is for isolated development only")
-				}
-				if cfg.Commands.MQTT.Broker == "" || (cfg.DevicesFile == "" && cfg.Commands.MQTT.CapabilitiesFile == "") {
-					return Config{}, fmt.Errorf("EDGE_COMMAND_ADAPTER=mqtt requires EDGE_MQTT_BROKER and EDGE_MQTT_CAPABILITIES_FILE")
-				}
-			default:
-				return Config{}, fmt.Errorf("EDGE_COMMAND_ADAPTER must be simulator or mqtt, got %q", cfg.Commands.Adapter)
-			}
+	if cfg.DevicesFile == "" {
+		if err := cfg.normalizeDevices(envString("EDGE_COMMAND_ADAPTER", "simulator"), envString("EDGE_MQTT_DEVICE_ID", "")); err != nil {
+			return Config{}, err
 		}
 	}
+	if cfg.Commands.Enabled {
+		count := 0
+		for _, device := range cfg.Devices {
+			if device.Command == "" {
+				continue
+			}
+			count++
+			if device.Command == MQTT {
+				m := cfg.Commands.MQTT
+				if !m.AllowInsecure && (!mqtt.TLSBroker(m.Broker) || m.Username == "" || m.Password == "" || m.CAFile == "") {
+					return Config{}, fmt.Errorf("production command MQTT requires a TLS broker URL (ssl://, tls://, mqtts://), credentials and a CA; EDGE_MQTT_ALLOW_INSECURE is for isolated development only")
+				}
+				if m.Broker == "" {
+					return Config{}, fmt.Errorf("MQTT commands require EDGE_MQTT_BROKER")
+				}
+			}
+		}
+		if count == 0 {
+			return Config{}, fmt.Errorf("command delivery enabled but inventory has no command adapters")
+		}
+	}
+
 	if cfg.SMS.Enabled && cfg.SMS.Destination == "" {
 		return Config{}, fmt.Errorf("EDGE_SMS_DESTINATION must be set when SMS fallback is enabled")
 	}

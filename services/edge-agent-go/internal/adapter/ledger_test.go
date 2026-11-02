@@ -17,7 +17,7 @@ import (
 
 var meterCaps = adapter.Capabilities{
 	DeviceType: "smart_meter", Manufacturer: "test", Model: "meter",
-	Capabilities: adapter.CapabilitySet{Telemetry: true, RelayControl: true, PrepaidCredit: true, STSToken: true},
+	Capabilities: adapter.CapabilitySet{Telemetry: true, RelayControl: true, PrepaidCredit: true},
 }
 
 var errNoReply = errors.New("serial read: no reply")
@@ -40,7 +40,7 @@ func newMeter() *fakeMeter { return &fakeMeter{caps: meterCaps} }
 
 func (m *fakeMeter) Capabilities() adapter.Capabilities { return m.caps }
 
-func (m *fakeMeter) Execute(ctx context.Context, cmd adapter.Command) (adapter.CommandResult, error) {
+func (m *fakeMeter) Execute(ctx context.Context, cmd adapter.Command, send adapter.SendGate) (adapter.CommandResult, error) {
 	m.mu.Lock()
 	failBefore, afterApply := m.failBefore, m.afterApply
 	m.mu.Unlock()
@@ -51,7 +51,7 @@ func (m *fakeMeter) Execute(ctx context.Context, cmd adapter.Command) (adapter.C
 	skipHook := m.skipHook
 	m.mu.Unlock()
 	if !skipHook {
-		if err := adapter.BeforeSend(ctx); err != nil {
+		if err := send.BeforeSend(ctx); err != nil {
 			return adapter.CommandResult{}, err
 		}
 	}
@@ -139,11 +139,11 @@ func TestLedgerNeverResendsCreditAfterLostReply(t *testing.T) {
 	ledger := adapter.NewLedger(store, meter)
 	ctx := context.Background()
 
-	_, err := ledger.Execute(ctx, kwhCredit)
+	_, err := ledger.Execute(ctx, kwhCredit, adapter.AllowSend())
 	if !errors.Is(err, adapter.ErrOutcomeUnknown) || !errors.Is(err, errNoReply) {
 		t.Fatalf("lost reply error = %v, want ErrOutcomeUnknown wrapping the transport error", err)
 	}
-	if _, err := ledger.Execute(ctx, kwhCredit); !errors.Is(err, adapter.ErrOutcomeUnknown) {
+	if _, err := ledger.Execute(ctx, kwhCredit, adapter.AllowSend()); !errors.Is(err, adapter.ErrOutcomeUnknown) {
 		t.Fatalf("retry error = %v, want ErrOutcomeUnknown", err)
 	}
 	if n := meter.appliedCount(kwhCredit.ID); n != 1 {
@@ -163,7 +163,6 @@ func TestLedgerResendsSafeCommandsAfterLostReply(t *testing.T) {
 	}{
 		"Disconnect":        {disconnect, meterCaps},
 		"Status":            {adapter.Command{ID: "status-1", Type: adapter.CommandRequestStatus, DeviceID: "meter-01"}, meterCaps},
-		"STSToken":          {adapter.Command{ID: "sts-1", Type: adapter.CommandCredit, DeviceID: "meter-01", STSToken: "12345678901234567890"}, meterCaps},
 		"IdempotentRefsKWh": {kwhCredit, refCaps},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -171,10 +170,10 @@ func TestLedgerResendsSafeCommandsAfterLostReply(t *testing.T) {
 			meter.caps, meter.loseReplies = c.caps, 1
 			ledger := adapter.NewLedger(store, meter)
 
-			if _, err := ledger.Execute(context.Background(), c.cmd); !errors.Is(err, adapter.ErrOutcomeUnknown) {
+			if _, err := ledger.Execute(context.Background(), c.cmd, adapter.AllowSend()); !errors.Is(err, adapter.ErrOutcomeUnknown) {
 				t.Fatalf("lost reply error = %v, want ErrOutcomeUnknown", err)
 			}
-			result, err := ledger.Execute(context.Background(), c.cmd)
+			result, err := ledger.Execute(context.Background(), c.cmd, adapter.AllowSend())
 			if err != nil || result.CommandID != c.cmd.ID {
 				t.Fatalf("resend = %+v, %v", result, err)
 			}
@@ -222,7 +221,7 @@ func TestLedgerSurvivesCrashAfterDeviceApplied(t *testing.T) {
 			}
 
 			before := openStore(t, path)
-			if _, err := adapter.NewLedger(outcomeLossStore{before}, inner).Execute(context.Background(), c.cmd); err != nil {
+			if _, err := adapter.NewLedger(outcomeLossStore{before}, inner).Execute(context.Background(), c.cmd, adapter.AllowSend()); err != nil {
 				t.Fatalf("first attempt: %v", err)
 			}
 			if got := state(t, before, c.cmd.ID); got != adapter.CommandInFlight {
@@ -236,7 +235,7 @@ func TestLedgerSurvivesCrashAfterDeviceApplied(t *testing.T) {
 			if got := state(t, after, c.cmd.ID); got != adapter.CommandUnknown {
 				t.Fatalf("state after restart = %q, want unknown", got)
 			}
-			_, err := adapter.NewLedger(after, inner).Execute(context.Background(), c.cmd)
+			_, err := adapter.NewLedger(after, inner).Execute(context.Background(), c.cmd, adapter.AllowSend())
 			if c.wantErr == nil && err != nil || c.wantErr != nil && !errors.Is(err, c.wantErr) {
 				t.Fatalf("retry after restart error = %v, want %v", err, c.wantErr)
 			}
@@ -256,14 +255,14 @@ func TestLedgerResendsWhenReconcilerConfirmsNotApplied(t *testing.T) {
 	ledger := adapter.NewLedger(store, inner)
 
 	meter.loseReplies = 1
-	if _, err := ledger.Execute(context.Background(), kwhCredit); !errors.Is(err, adapter.ErrOutcomeUnknown) {
+	if _, err := ledger.Execute(context.Background(), kwhCredit, adapter.AllowSend()); !errors.Is(err, adapter.ErrOutcomeUnknown) {
 		t.Fatal(err)
 	}
 	// Forget the application so the device reports the reference as never seen.
 	meter.mu.Lock()
 	meter.applied = nil
 	meter.mu.Unlock()
-	if _, err := ledger.Execute(context.Background(), kwhCredit); err != nil {
+	if _, err := ledger.Execute(context.Background(), kwhCredit, adapter.AllowSend()); err != nil {
 		t.Fatalf("retry after reconciler reported not applied: %v", err)
 	}
 	if n := meter.appliedCount(kwhCredit.ID); n != 1 {
@@ -275,8 +274,8 @@ func TestLedgerReportsUnknownWhenReconcilerFails(t *testing.T) {
 	store, meter := tempStore(t), newMeter()
 	ledger := adapter.NewLedger(store, reconcilingMeter{fakeMeter: meter, outcomeErr: errNoReply})
 	meter.loseReplies = 1
-	_, _ = ledger.Execute(context.Background(), disconnect)
-	_, err := ledger.Execute(context.Background(), disconnect)
+	_, _ = ledger.Execute(context.Background(), disconnect, adapter.AllowSend())
+	_, err := ledger.Execute(context.Background(), disconnect, adapter.AllowSend())
 	if !errors.Is(err, adapter.ErrOutcomeUnknown) || !errors.Is(err, errNoReply) {
 		t.Fatalf("error = %v, want ErrOutcomeUnknown wrapping the reconciler failure", err)
 	}
@@ -290,13 +289,13 @@ func TestLedgerRejectionIsFinal(t *testing.T) {
 	meter.reject = true
 	ledger := adapter.NewLedger(store, meter)
 
-	if _, err := ledger.Execute(context.Background(), kwhCredit); !errors.Is(err, adapter.ErrDeviceRejected) {
+	if _, err := ledger.Execute(context.Background(), kwhCredit, adapter.AllowSend()); !errors.Is(err, adapter.ErrDeviceRejected) {
 		t.Fatalf("error = %v, want ErrDeviceRejected", err)
 	}
 	meter.mu.Lock()
 	meter.reject = false
 	meter.mu.Unlock()
-	_, err := ledger.Execute(context.Background(), kwhCredit)
+	_, err := ledger.Execute(context.Background(), kwhCredit, adapter.AllowSend())
 	if !errors.Is(err, adapter.ErrDeviceRejected) || !strings.Contains(err.Error(), "E_METER_LOCKED") {
 		t.Fatalf("retry error = %v, want the recorded rejection", err)
 	}
@@ -311,12 +310,12 @@ func TestLedgerRejectionIsFinal(t *testing.T) {
 func TestLedgerRejectsReusedIDWithDifferentParameters(t *testing.T) {
 	store, meter := tempStore(t), newMeter()
 	ledger := adapter.NewLedger(store, meter)
-	if _, err := ledger.Execute(context.Background(), kwhCredit); err != nil {
+	if _, err := ledger.Execute(context.Background(), kwhCredit, adapter.AllowSend()); err != nil {
 		t.Fatal(err)
 	}
 	larger := kwhCredit
 	larger.CreditKWh = 125
-	if _, err := ledger.Execute(context.Background(), larger); !errors.Is(err, adapter.ErrInvalidCommand) {
+	if _, err := ledger.Execute(context.Background(), larger, adapter.AllowSend()); !errors.Is(err, adapter.ErrInvalidCommand) {
 		t.Fatalf("error = %v, want ErrInvalidCommand", err)
 	}
 	if n := meter.appliedCount(kwhCredit.ID); n != 1 {
@@ -332,7 +331,7 @@ func (intentLossStore) BeginCommandAttempt(context.Context, adapter.LedgerEntry,
 
 func TestLedgerDoesNotSendWhenIntentCannotBeRecorded(t *testing.T) {
 	store, meter := tempStore(t), newMeter()
-	_, err := adapter.NewLedger(intentLossStore{store}, meter).Execute(context.Background(), kwhCredit)
+	_, err := adapter.NewLedger(intentLossStore{store}, meter).Execute(context.Background(), kwhCredit, adapter.AllowSend())
 	if err == nil || !strings.Contains(err.Error(), "disk full") {
 		t.Fatalf("error = %v, want the store failure", err)
 	}
@@ -346,7 +345,7 @@ func TestLedgerRecordsOutcomeAfterCallerGivesUp(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	meter.afterApply = cancel
-	if _, err := adapter.NewLedger(store, meter).Execute(ctx, kwhCredit); err != nil {
+	if _, err := adapter.NewLedger(store, meter).Execute(ctx, kwhCredit, adapter.AllowSend()); err != nil {
 		t.Fatal(err)
 	}
 	if got := state(t, store, kwhCredit.ID); got != adapter.CommandApplied {
@@ -360,7 +359,7 @@ func TestLedgerLeavesNoEntryWhenNothingWasSent(t *testing.T) {
 	meter.failBefore = queued
 	ledger := adapter.NewLedger(store, meter)
 
-	if _, err := ledger.Execute(context.Background(), kwhCredit); !errors.Is(err, adapter.ErrTimeout) || errors.Is(err, adapter.ErrOutcomeUnknown) {
+	if _, err := ledger.Execute(context.Background(), kwhCredit, adapter.AllowSend()); !errors.Is(err, adapter.ErrTimeout) || errors.Is(err, adapter.ErrOutcomeUnknown) {
 		t.Fatalf("error = %v, want ErrTimeout without ErrOutcomeUnknown", err)
 	}
 	if got := state(t, store, kwhCredit.ID); got != "" {
@@ -369,7 +368,7 @@ func TestLedgerLeavesNoEntryWhenNothingWasSent(t *testing.T) {
 	meter.mu.Lock()
 	meter.failBefore = nil
 	meter.mu.Unlock()
-	if _, err := ledger.Execute(context.Background(), kwhCredit); err != nil {
+	if _, err := ledger.Execute(context.Background(), kwhCredit, adapter.AllowSend()); err != nil {
 		t.Fatalf("retry of an unsent command: %v", err)
 	}
 	if n := meter.appliedCount(kwhCredit.ID); n != 1 {
@@ -382,13 +381,13 @@ func TestLedgerRecordsSuccessReportedWithoutBeforeSend(t *testing.T) {
 	meter.skipHook = true
 	ledger := adapter.NewLedger(store, meter)
 
-	if _, err := ledger.Execute(context.Background(), kwhCredit); !errors.Is(err, adapter.ErrSendHookSkipped) {
+	if _, err := ledger.Execute(context.Background(), kwhCredit, adapter.AllowSend()); !errors.Is(err, adapter.ErrSendHookSkipped) {
 		t.Fatalf("error = %v, want ErrSendHookSkipped", err)
 	}
 	if got := state(t, store, kwhCredit.ID); got != adapter.CommandApplied {
 		t.Fatalf("state = %q, want applied so a retry is not resent", got)
 	}
-	result, err := ledger.Execute(context.Background(), kwhCredit)
+	result, err := ledger.Execute(context.Background(), kwhCredit, adapter.AllowSend())
 	if err != nil || result.CommandID != kwhCredit.ID {
 		t.Fatalf("retry = %+v, %v; want the recorded result", result, err)
 	}
@@ -417,10 +416,10 @@ func TestLedgerNeverResendsAnUnhookedCommandItCouldNotRecord(t *testing.T) {
 	down.Store(true)
 	ledger := adapter.NewLedger(unavailableStore{sqlite, &down}, meter)
 
-	if _, err := ledger.Execute(context.Background(), kwhCredit); !errors.Is(err, adapter.ErrSendHookSkipped) {
+	if _, err := ledger.Execute(context.Background(), kwhCredit, adapter.AllowSend()); !errors.Is(err, adapter.ErrSendHookSkipped) {
 		t.Fatalf("error = %v, want ErrSendHookSkipped", err)
 	}
-	result, _ := ledger.Execute(context.Background(), kwhCredit)
+	result, _ := ledger.Execute(context.Background(), kwhCredit, adapter.AllowSend())
 	if result.CommandID != kwhCredit.ID {
 		t.Fatalf("retry while the store is down = %+v, want the applied result", result)
 	}
@@ -429,7 +428,7 @@ func TestLedgerNeverResendsAnUnhookedCommandItCouldNotRecord(t *testing.T) {
 	}
 
 	down.Store(false)
-	if result, err := ledger.Execute(context.Background(), kwhCredit); err != nil || result.CommandID != kwhCredit.ID {
+	if result, err := ledger.Execute(context.Background(), kwhCredit, adapter.AllowSend()); err != nil || result.CommandID != kwhCredit.ID {
 		t.Fatalf("retry after recovery = %+v, %v", result, err)
 	}
 	if got := state(t, sqlite, kwhCredit.ID); got != adapter.CommandApplied {
@@ -437,5 +436,57 @@ func TestLedgerNeverResendsAnUnhookedCommandItCouldNotRecord(t *testing.T) {
 	}
 	if n := meter.appliedCount(kwhCredit.ID); n != 1 {
 		t.Fatalf("credit applied %d times, want once", n)
+	}
+}
+
+func TestLedgerRefusesMissingExplicitSendAuthorization(t *testing.T) {
+	store, meter := tempStore(t), newMeter()
+	ledger := adapter.NewLedger(store, meter)
+	if _, err := ledger.Execute(context.Background(), kwhCredit, adapter.SendGate{}); !errors.Is(err, adapter.ErrInvalidCommand) {
+		t.Fatalf("missing authorization: %v", err)
+	}
+	if n := meter.appliedCount(kwhCredit.ID); n != 0 {
+		t.Fatalf("unauthorized credit applied %d times", n)
+	}
+	if _, found, err := store.LoadCommand(context.Background(), kwhCredit.ID); err != nil || found {
+		t.Fatalf("unauthorized command recorded send intent: found=%t err=%v", found, err)
+	}
+}
+
+// rejectsRepeatAfterLostReply applies the first attempt, loses the reply, then
+// refuses the repeated reference as a deduplicating device may.
+type rejectsRepeatAfterLostReply struct {
+	calls int
+}
+
+func (a *rejectsRepeatAfterLostReply) Capabilities() adapter.Capabilities {
+	caps := meterCaps
+	caps.Capabilities.IdempotentRefs = true
+	return caps
+}
+
+func (a *rejectsRepeatAfterLostReply) Execute(ctx context.Context, _ adapter.Command, send adapter.SendGate) (adapter.CommandResult, error) {
+	if err := send.BeforeSend(ctx); err != nil {
+		return adapter.CommandResult{}, err
+	}
+	a.calls++
+	if a.calls == 1 {
+		return adapter.CommandResult{}, adapter.ErrProtocolTimeout
+	}
+	return adapter.CommandResult{}, fmt.Errorf("%w: E_DUPLICATE: already applied", adapter.ErrDeviceRejected)
+}
+
+func TestRefusedCreditResendStaysUnknown(t *testing.T) {
+	store := tempStore(t)
+	inner := &rejectsRepeatAfterLostReply{}
+	ledger := adapter.NewLedger(store, inner)
+	for range 2 {
+		if _, err := ledger.Execute(context.Background(), kwhCredit, adapter.AllowSend()); !errors.Is(err, adapter.ErrOutcomeUnknown) {
+			t.Fatalf("error = %v, want ErrOutcomeUnknown", err)
+		}
+	}
+	entry, found, err := store.LoadCommand(context.Background(), kwhCredit.ID)
+	if err != nil || !found || entry.State != adapter.CommandUnknown {
+		t.Fatalf("entry = %+v found=%t err=%v, want unknown so the platform never sees a failed credit", entry, found, err)
 	}
 }
